@@ -3,3 +3,7 @@ MULTIAIR/config.php
 MULTIAIR/data/*.sqlite*
 MULTIAIR/import/*.json
 MULTIAIR/import/*.done
+
+# Script de rattrapage ponctuel : contient des adresses e-mail de clients
+# reprises du classeur Google. Livré directement à Cyril, jamais publié.
+MULTIAIR/rattrapage_relances.php
