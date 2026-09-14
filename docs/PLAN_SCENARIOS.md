@@ -4,7 +4,7 @@ Scénarios couverts : Répondeur IA, Chatbot Claire v11, Claire ADV (orchestrate
 équipements + maintenance), CSO devis, Prime CEE (WCF A + B).
 
 Objectif : remplacer les Google Sheets alimentés par les scénarios Make par une page
-unique `calculateurs/interne/scenarios.html` (un onglet par scénario, tableau de bord,
+unique dans `calculateurs/interne/MULTIAIR/` (un onglet par scénario, tableau de bord,
 statistiques, historique, gestion), puis supprimer les Google Sheets.
 
 ## 1. État des lieux (analyse des blueprints Make, 14/09/2026)
@@ -45,7 +45,7 @@ Google Sheet `1axsxoEsXaFjexZl2UvPk0Wo8vBdYvuKt2R9vJvyHIFI`.
 - Autres sorties : mail interne, mail visiteur, SMS Brevo, réponse `{"reply": …}` au widget.
 - Le log conversation est **avant** la réponse au widget : la latence de l'écriture s'ajoute
   au temps de réponse du chatbot. L'API doit répondre vite (< 200 ms).
-- Le lien « Voir le CRM complet » du mail interne pointe sur le Sheet → à remplacer par la page.
+- Le lien « Voir le CRM complet » du mail interne pointe sur le Sheet → à remplacer par la page MULTIAIR.
 
 ### 1.3 Claire ADV — Orchestrateur équipements + maintenance (9209946, actif)
 Mailhook `service.clients@multiairfrance.store` → filtres anti-automatique (Postmaster, Klaviyo,
@@ -103,15 +103,27 @@ Conversations WCF (A→G), Actions WCF (A→F).
 ## 2. Architecture retenue
 
 ```
-Make (HTTP module, X-Api-Key) ──►  interne/api/index.php  ──►  SQLite (hors webroot)
-                                            ▲
-Navigateur (scenarios.html) ────────────────┘   (session PHP + mot de passe)
+Make (HTTP module, X-Api-Key) ──►  interne/MULTIAIR/api.php  ──►  MULTIAIR/data/multiair.sqlite
+                                              ▲                    (dossier protégé .htaccess)
+Navigateur (interne/MULTIAIR/) ───────────────┘   (session PHP + mot de passe)
 ```
 
-- **Backend : PHP + SQLite sur l'hébergement one.com existant** (`calculateurs/interne/api/`).
-  Un seul point d'entrée `index.php`, routage par ressource, JSON in/out, clé API pour Make,
-  session par mot de passe pour la page. Fichier SQLite dans un dossier protégé (`.htaccess deny`).
-- **Frontend : `scenarios.html`** statique, même style que le portail interne, Chart.js (cdnjs),
+Arborescence sur le serveur (`calculateurs/interne/MULTIAIR/`) :
+```
+MULTIAIR/
+  index.php        page (login + 6 onglets)
+  api.php          point d'entrée unique pour Make et pour la page (JSON)
+  config.php       identifiants, clé API Make, SMTP (jamais dans Git)
+  schema.sql       création des tables
+  import.php       import ponctuel de l'historique Google Sheets
+  assets/          app.js, style.css
+  data/            multiair.sqlite + .htaccess « deny from all »
+```
+
+- **Backend : PHP + SQLite sur l'hébergement one.com existant**, tout dans le dossier
+  `MULTIAIR` (pas de dossier `api`). Un seul point d'entrée `api.php`, routage par ressource,
+  JSON in/out, clé API pour Make, session par mot de passe pour la page.
+- **Frontend : `index.php`** (HTML + JS), même style que le portail interne, Chart.js (cdnjs),
   6 onglets : Vue d'ensemble, Répondeur IA, Chatbot Claire, Claire ADV, CSO devis, Prime CEE.
 - **Supabase : non nécessaire.** Volume < 100 lignes/jour, un seul utilisateur, tout reste chez
   l'hébergeur. Bascule vers Supabase uniquement si : (a) `pdo_sqlite` indisponible sur one.com,
@@ -119,7 +131,7 @@ Navigateur (scenarios.html) ────────────────┘ 
   hébergeur. Le modèle de données ci-dessous se transpose tel quel en Postgres.
 
 Authentification de la page : identifiant `admin` + mot de passe fourni par Cyril, stockés
-dans `interne/api/config.php` sur le serveur (jamais dans le dépôt Git). Session PHP, cookie
+dans `interne/MULTIAIR/config.php` sur le serveur (jamais dans le dépôt Git). Session PHP, cookie
 30 jours. Récupération : le fichier reste lisible via FileZilla, et un lien « mot de passe
 oublié » sur la page de connexion l'envoie à cyril.mortier@airwco.com via le SMTP
 service.clients@multiairfrance.store (mêmes identifiants que la connexion Make, à saisir dans
@@ -180,7 +192,7 @@ CSO devis
 
 ## 4. API (contrat pour Make)
 
-Toutes les routes sous `interne/api/index.php?r=…`, header `X-Api-Key`, JSON.
+Toutes les routes sous `interne/MULTIAIR/api.php?r=…`, header `X-Api-Key`, JSON.
 
 | Route | Méthode | Remplace |
 |---|---|---|
@@ -209,7 +221,7 @@ Toutes les routes sous `interne/api/index.php?r=…`, header `X-Api-Key`, JSON.
 Le POST `cso/devis` fait tout le traitement nouveau/révision/empreinte/version côté API :
 7 modules Sheets remplacés par 1 appel HTTP.
 
-## 5. Page `scenarios.html`
+## 5. Page `MULTIAIR/index.php`
 
 Commun à chaque onglet : 4 à 6 cartes KPI, 1 graphique (volume/jour sur 30 j), tableau
 filtrable (recherche, statut, période), panneau de détail au clic, export CSV, journal des
@@ -237,8 +249,8 @@ exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 | Phase | Contenu | Livrable |
 |---|---|---|
 | 0 | Vérif hébergement (PHP, pdo_sqlite, .htaccess), choix mot de passe page | go/no-go PHP vs Supabase |
-| 1 | API PHP + schéma SQLite + script d'import CSV des Sheets existants | `interne/api/` |
-| 2 | Page `scenarios.html` (5 onglets) branchée sur l'API, données importées | page en ligne |
+| 1 | API PHP + schéma SQLite + script d'import des Sheets existants | `interne/MULTIAIR/` |
+| 2 | Page `MULTIAIR/index.php` (6 onglets) branchée sur l'API, données importées | page en ligne |
 | 3 | Bascule Chatbot Claire (3 modules → 3 HTTP) en double écriture Sheets + API | scénario 9295374 |
 | 4 | Bascule CSO (9775498 + 9776471) | 2 scénarios |
 | 5 | Bascule Répondeur IA (V2, V3, Aiguilleur, Relance 10 min) + suppression du sleep de V2 | 4 scénarios |
@@ -258,4 +270,4 @@ Accès Google Drive (compte cyrilmortierpro@gmail.com) vérifié le 14/09 :
 - Leads WCF (`1PjI44AI…`) : **à partager** en lecture avec cyrilmortierpro@gmail.com.
 
 Décisions prises : page protégée par login `admin` ; Prime CEE intégré ; import de l'historique
-via Google Drive une fois les partages faits. Nom de page proposé : `scenarios.html`.
+via Google Drive une fois les partages faits. Emplacement : `interne/MULTIAIR/`.
