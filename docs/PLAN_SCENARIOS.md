@@ -1,7 +1,7 @@
 # Plan — Page « Scénarios Make » dans le portail interne Multiair France
 
 Scénarios couverts : Répondeur IA, Chatbot Claire v11, Claire ADV (orchestrateur
-équipements + maintenance), CSO devis.
+équipements + maintenance), CSO devis, Prime CEE (WCF A + B).
 
 Objectif : remplacer les Google Sheets alimentés par les scénarios Make par une page
 unique `calculateurs/interne/scenarios.html` (un onglet par scénario, tableau de bord,
@@ -79,6 +79,27 @@ Google Sheet `1paxA-HmDmXV1HM8SgiOHcL1m7tgkRrn11xwceRoHZLI`, onglets Devis (28 c
   → deviennent des champs éditables dans la page.
 - Anomalie : Version « 1 » interprétée en date par Sheets ; contact_interne extrait mais non stocké.
 
+### 1.5 Prime CEE — WCF A + B (9324836 + 9339470, actifs)
+Google Sheet `1PjI44AIhzefHnrGRAXlod76VqVJxfvc1SYAse2dGoTQ`, onglets Leads WCF (A→V),
+Conversations WCF (A→G), Actions WCF (A→F).
+- WCF A : webhook du calculateur d'économies d'énergie (site) → addRow Leads WCF
+  (Telephone_intl, Date, Prenom, Nom, Societe, Email, Telephone_brut, Message_initial, Profil,
+  Statut, Page_url, Eco_an, Eco_5ans, CEE_min, CEE_max, ROI_avec_CEE, Regime, Usage,
+  Nb_compresseurs, Solutions, CO2_tonnes, Nb_simulations) → mail interne + accusé de réception
+  prospect → template WhatsApp `wcf_accueil_formulaire` si téléphone.
+  Statut : « WhatsApp accueil envoye » ou « Sans tel - relance email manuelle ».
+- WCF B : webhook Meta WhatsApp → lookup du lead par Telephone_intl + comptage des simulations
+  → Claire (JSON : reply, profil, projet, urgence, decideur, infos, qualifie, action) →
+  réponse WhatsApp → addRow Conversations WCF (tel, date, message, réponse, profil, infos,
+  qualifie) → si qualifié, addRow Actions WCF (date, type INDUSTRIEL/INSTALLATEUR/DISTRIBUTEUR,
+  société, tel, détail, action à mener).
+- Le statut du lead n'est jamais mis à jour par WCF B : la qualification n'est visible que
+  dans Conversations/Actions. La page le corrigera (statut du lead recalculé).
+- L'aiguilleur du Répondeur IA (9583010) lit aussi Leads WCF pour router les WhatsApp entrants :
+  il passera par la même API.
+- Token Meta WhatsApp en clair dans les deux modules HTTP.
+- Volume : 1 exécution A et 8 exécutions B depuis le 02/09 (tests).
+
 ## 2. Architecture retenue
 
 ```
@@ -91,11 +112,18 @@ Navigateur (scenarios.html) ────────────────┘ 
   Un seul point d'entrée `index.php`, routage par ressource, JSON in/out, clé API pour Make,
   session par mot de passe pour la page. Fichier SQLite dans un dossier protégé (`.htaccess deny`).
 - **Frontend : `scenarios.html`** statique, même style que le portail interne, Chart.js (cdnjs),
-  5 onglets : Vue d'ensemble, Répondeur IA, Chatbot Claire, Claire ADV, CSO devis.
+  6 onglets : Vue d'ensemble, Répondeur IA, Chatbot Claire, Claire ADV, CSO devis, Prime CEE.
 - **Supabase : non nécessaire.** Volume < 100 lignes/jour, un seul utilisateur, tout reste chez
   l'hébergeur. Bascule vers Supabase uniquement si : (a) `pdo_sqlite` indisponible sur one.com,
   (b) besoin de plusieurs utilisateurs avec comptes distincts, (c) souhait d'une API hors
   hébergeur. Le modèle de données ci-dessous se transpose tel quel en Postgres.
+
+Authentification de la page : identifiant `admin` + mot de passe fourni par Cyril, stockés
+dans `interne/api/config.php` sur le serveur (jamais dans le dépôt Git). Session PHP, cookie
+30 jours. Récupération : le fichier reste lisible via FileZilla, et un lien « mot de passe
+oublié » sur la page de connexion l'envoie à cyril.mortier@airwco.com via le SMTP
+service.clients@multiairfrance.store (mêmes identifiants que la connexion Make, à saisir dans
+config.php).
 
 Prérequis à vérifier avant de coder (5 min) : déposer un `phpinfo.php` dans `interne/` et
 confirmer PHP ≥ 8.0 et `pdo_sqlite` ; confirmer que `.htaccess` est honoré.
@@ -103,7 +131,7 @@ confirmer PHP ≥ 8.0 et `pdo_sqlite` ; confirmer que `.htaccess` est honoré.
 ## 3. Modèle de données (SQLite)
 
 Tables transverses
-- `executions_log` : id, scenario (repondeur|chatbot|wcf|cso), date, statut (ok|erreur),
+- `executions_log` : id, scenario (repondeur|chatbot|adv|cso|cee), date, statut (ok|erreur),
   type_evenement, resume, payload_json — historique brut par scénario, alimente les stats
   et l'onglet « Historique » de chaque scénario.
 - `parametres` : cle, valeur (ex. délai relance, destinataires alertes).
@@ -119,8 +147,7 @@ Répondeur IA
   (vapi_direct|whatsapp_qualifie|sans_reponse_10min), created_at.
 - `distributeurs` (= DISTRIBUTEUR) : id, societe, commercial, compte, extra — éditable dans la page.
 - `SUIVI_WHATSAPP` : abandonné (legacy, remplacé par `rep_fiches.statut`).
-- `Leads WCF` (Prime CEE, autre projet) : reste dans son Sheet pour l'instant ; l'aiguilleur
-  garde ce module. Migration possible dans un 2e temps.
+- `Leads WCF` : migré dans `cee_leads` (voir Prime CEE) ; l'aiguilleur interroge l'API.
 
 Chatbot Claire
 - `chat_messages` : id, session_id, date, message, reponse, page_url.
@@ -134,6 +161,16 @@ Claire ADV
   (equipements|maintenance), cas (DEVIS DIRECT|STANDARD|LEAD|ESCALADE), techno, critere,
   pression, configuration, options_retenues, tag (AUTO|ESCALADE|ERREUR), reponse_ia,
   mail_envoye, envoye_at, statut_suivi (envoye|a_valider|valide|traite), traite_par.
+
+Prime CEE
+- `cee_leads` (= Leads WCF) : id, telephone_intl, date, prenom, nom, societe, email,
+  telephone_brut, message_initial, profil, statut, page_url, eco_an, eco_5ans, cee_min, cee_max,
+  roi_avec_cee, regime, usage, nb_compresseurs, solutions, co2_tonnes, nb_simulations,
+  suivi (nouveau|qualifie|rappel_planifie|converti|perdu), commentaire.
+- `cee_conversations` (= Conversations WCF) : id, lead_id, telephone, date, message, reponse,
+  profil, infos, qualifie.
+- `cee_actions` (= Actions WCF) : id, lead_id, date, type_profil, societe, telephone, projet,
+  urgence, decideur, infos, action, fait (0|1), fait_par, fait_at.
 
 CSO devis
 - `cso_devis` : mêmes 28 champs que l'onglet Devis (clé unique n_offre) + id + contact_interne.
@@ -159,6 +196,11 @@ Toutes les routes sous `interne/api/index.php?r=…`, header `X-Api-Key`, JSON.
 | `chat/routage?categorie=…` | GET | filterRows Routage |
 | `adv/demandes` | POST | — (nouveau, après l'agent) |
 | `adv/demandes/{id}` | PATCH | — (validation manuelle des escalades) |
+| `cee/leads` | POST | addRow Leads WCF (A/4, A/6) |
+| `cee/leads?tel=…` | GET → `{lead, nb_simulations}` | filterRows + count (B/7, B/15, B/16) et lookup aiguilleur (9583010) |
+| `cee/conversations` | POST | addRow Conversations WCF |
+| `cee/actions` | POST | addRow Actions WCF (B/12, B/13, B/14) |
+| `cee/leads/{id}` | PATCH | — (nouveau : suivi commercial dans la page) |
 | `cso/devis?n_offre=…` | GET | makeAPICall B2:B + filterRows Devis |
 | `cso/devis` | POST (upsert + lignes) | addRow Devis + Lignes, updateRow, batchUpdate delete |
 | `cso/devis?relance_due=1` | GET | filterRows Devis (Statut ∈ …) |
@@ -173,7 +215,7 @@ Commun à chaque onglet : 4 à 6 cartes KPI, 1 graphique (volume/jour sur 30 j),
 filtrable (recherche, statut, période), panneau de détail au clic, export CSV, journal des
 exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 
-- Vue d'ensemble : état des 4 scénarios (dernière exécution, erreurs 7 j, volume 7 j).
+- Vue d'ensemble : état des 5 scénarios (dernière exécution, erreurs 7 j, volume 7 j).
 - Répondeur IA : KPI appels / en attente / urgents / transmis / taux de réponse WhatsApp ;
   tableau fiches avec changement de statut ; sous-onglets SAV / Commercial / Finance ;
   gestion de la table Distributeurs.
@@ -186,6 +228,9 @@ exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 - CSO devis : KPI devis du mois / montant HT / en attente / relancés / gagnés / perdus /
   taux de transformation ; tableau devis (statut éditable, réponse client, relances) ;
   détail = lignes du devis + historique versions + relances envoyées.
+- Prime CEE : KPI leads / avec téléphone / qualifiés / par profil / prime CEE moyenne /
+  économies estimées cumulées ; tableau leads (statut, suivi commercial éditable) ; détail =
+  estimation complète + fil WhatsApp + actions à mener (cochables).
 
 ## 6. Phasage
 
@@ -197,15 +242,20 @@ exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 | 3 | Bascule Chatbot Claire (3 modules → 3 HTTP) en double écriture Sheets + API | scénario 9295374 |
 | 4 | Bascule CSO (9775498 + 9776471) | 2 scénarios |
 | 5 | Bascule Répondeur IA (V2, V3, Aiguilleur, Relance 10 min) + suppression du sleep de V2 | 4 scénarios |
+| 5b | Bascule Prime CEE (WCF A + B) | 2 scénarios |
 | 6 | Claire ADV : ajout du log API après l'agent, router AUTO/ESCALADE, suppression du clone 9771233 | scénario 9209946 |
 | 7 | 1 à 2 semaines en double écriture, contrôle, puis retrait des modules Sheets et archivage des Sheets | fin |
 
 Les modifications de scénarios se font via l'API Make (blueprints), module par module,
 avec sauvegarde du blueprint avant chaque changement.
 
-## 7. Questions à valider
+## 7. Import de l'historique et points restants
 
-1. Mot de passe unique sur la page (session PHP) ou aucune protection comme les autres pages `interne/` ?
-2. Import de l'historique des Sheets (oui recommandé) : export CSV à me fournir ou accès Google Drive.
-3. La table `Leads WCF` (Prime CEE) reste dans Google Sheets pour l'instant ?
-4. Nom de la page : `scenarios.html` (proposé).
+Accès Google Drive (compte cyrilmortierpro@gmail.com) vérifié le 14/09 :
+- Suivi devis CSO : accessible.
+- CRM Multiair France chatbot : accessible (partagé).
+- Répondeur IA (`1pIDgoA02…`) : **à partager** en lecture avec cyrilmortierpro@gmail.com.
+- Leads WCF (`1PjI44AI…`) : **à partager** en lecture avec cyrilmortierpro@gmail.com.
+
+Décisions prises : page protégée par login `admin` ; Prime CEE intégré ; import de l'historique
+via Google Drive une fois les partages faits. Nom de page proposé : `scenarios.html`.
