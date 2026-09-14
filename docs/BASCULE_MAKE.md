@@ -31,6 +31,19 @@ Tous les mails de transmission lisent désormais la table de routage de la page 
 (onglets Répondeur IA, Chatbot Claire, Claire ADV). Repli automatique sur
 cyril.mortier@airwco.com si la clé est inconnue. Plus aucune adresse en dur à modifier dans Make.
 
+## Point de vigilance immédiat — relances CSO
+
+Les 18 devis importés du Google Sheet sont tous au statut « En attente » avec une date de
+relance 1 déjà dépassée (12/09 ou 14/09). Au prochain passage du scénario de relances
+(mardi 15/09 à 08:00), **18 mails de relance partiront aux clients réels**, en copie de leur
+commercial. Ce comportement existait déjà avant la bascule : l'ancien scénario lisait les mêmes
+dates dans le Sheet et aurait envoyé les mêmes mails. Trois options avant demain matin :
+
+1. Laisser partir, si ces relances sont effectivement dues.
+2. Repousser les dates ou passer certains devis en « Gagne » / « Perdu » / « Sans suite »
+   directement dans l'onglet CSO de la page (le scénario ignore ces trois statuts).
+3. Mettre le scénario 9776471 en pause dans Make le temps de trier.
+
 ## Reste à faire
 
 1. Contrôler une à deux semaines que la page et les Google Sheets affichent la même chose.
