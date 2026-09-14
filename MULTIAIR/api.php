@@ -547,6 +547,7 @@ try {
                         'mail_envoye' => ma_str($body['mail_envoye'] ?? null) ?? $mailClean,
                         'envoye_at' => ma_bool($body['envoye'] ?? ($tag === 'AUTO')) ? $now : null,
                         'statut_suivi' => $tag === 'AUTO' ? 'envoye' : 'a_valider',
+                        'commentaire' => ma_str($body['commentaire'] ?? null),
                     ];
                     $id = insert($db, 'adv_demandes', $d);
                     logEvent($db, 'adv', $tag === 'ERREUR' ? 'erreur' : 'ok', 'mail_traite', ($d['from_email'] ?? '') . ' - ' . ($d['sujet'] ?? '') . ' [' . $tag . ']', ['id' => $id]);
