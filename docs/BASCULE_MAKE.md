@@ -44,6 +44,17 @@ dates dans le Sheet et aurait envoyé les mêmes mails. Trois options avant dema
    directement dans l'onglet CSO de la page (le scénario ignore ces trois statuts).
 3. Mettre le scénario 9776471 en pause dans Make le temps de trier.
 
+## Comportement en cas de panne de l'API
+
+Les modules HTTP sont réglés sur « ne pas traiter les codes d'erreur comme des erreurs ».
+Conséquence : si l'API répond 404, 401 ou 500 (mauvaise URL, mauvaise clé, bug), le scénario
+continue normalement — les Google Sheets sont écrits et les mails partent comme avant, seule
+la remontée vers MULTIAIR est perdue. C'est le mode de défaillance le plus probable et il est
+sans danger. En revanche, si le serveur est totalement injoignable (panne d'hébergement,
+délai de 40 s dépassé), le gestionnaire « Ignore » arrête le traitement de ce message : la
+ligne concernée ne sera écrite ni dans MULTIAIR ni dans le Sheet. Risque faible, à surveiller
+pendant la période de double écriture en comparant les deux sources.
+
 ## Reste à faire
 
 1. Contrôler une à deux semaines que la page et les Google Sheets affichent la même chose.
