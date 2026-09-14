@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-14h';
+const MA_VERSION = '2026-09-14i';
 
 function ma_config(): array
 {
@@ -482,6 +482,115 @@ function ma_destinataires_relance(array $devis, ?string $boiteCso = null): array
         unset($cc[$k]);
     }
     return ['to' => implode(';', array_values($to)), 'cc' => implode(';', array_values($cc))];
+}
+
+/**
+ * Modèles des mails de relance CSO. Stockés dans la table parametres
+ * (relance_1_objet / relance_1_texte, …) pour être lisibles et modifiables
+ * depuis la page ; le scénario Make se contente d'envoyer ce que l'API rend.
+ * Champs disponibles : {contact} {client} {n_offre} {date_offre}
+ * {validite_offre} {montant_ht} {commercial}
+ */
+function ma_relance_modeles(PDO $db): array
+{
+    $signature = "\n\nBien cordialement,\n\n{commercial}\nService Commercial MultiAir France\n"
+        . "Worthington Creyssensac - Mauguière - Pneumatech - ABAC\n01 34 32 95 00";
+    $entete = "Bonjour {contact},\n\nOffre n° {n_offre} du {date_offre} - {montant_ht} € HT"
+        . " - valable jusqu'au {validite_offre}.\n\n";
+    $defauts = [
+        1 => ['objet' => "Votre offre de prix n° {n_offre}",
+            'texte' => $entete . "Je me permets de m'assurer que cette offre vous est bien parvenue et qu'elle "
+                . "correspond à votre demande. Si un point mérite d'être ajusté, référence, quantité ou délai, "
+                . "dites-le nous et nous la reprendrons." . $signature],
+        2 => ['objet' => "Suivi de votre offre n° {n_offre}",
+            'texte' => $entete . "Avez-vous pu l'examiner ? Si le délai d'approvisionnement ou le montant posent "
+                . "question, nous pouvons regarder ensemble les alternatives possibles sur certaines références." . $signature],
+        3 => ['objet' => "Validité de votre offre n° {n_offre}",
+            'texte' => $entete . "Passé la date de validité, les tarifs devront être reconsidérés. Si le projet est "
+                . "toujours d'actualité, un simple retour de votre part suffit pour enclencher la commande. S'il ne "
+                . "l'est plus, dites-le nous également : nous clôturerons le dossier sans vous relancer davantage." . $signature],
+    ];
+    $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
+    foreach ($defauts as $n => $d) {
+        foreach (['objet', 'texte'] as $champ) {
+            $v = $params["relance_{$n}_{$champ}"] ?? '';
+            if (trim((string) $v) !== '') {
+                $defauts[$n][$champ] = (string) $v;
+            }
+        }
+    }
+    return $defauts;
+}
+
+/**
+ * Remplace les champs d'un modèle de relance par les valeurs du devis.
+ */
+function ma_relance_rendu(array $devis, array $modele): array
+{
+    $date = fn(?string $d) => $d ? date('d/m/Y', strtotime($d)) : '';
+    $nom = $devis['commercial'] ? ucwords(str_replace('.', ' ', explode('@', (string) $devis['commercial'])[0])) : '';
+    // « AR DE COMMANDE », « SERVICE ACHATS »… ne sont pas des noms : on écrit simplement « Bonjour, »
+    $contact = trim((string) ($devis['contact_client'] ?? ''));
+    if (preg_match('/^(ar de commande|service achats?|achats?|adv|commande|contact)$/i', $contact)) {
+        $contact = '';
+    }
+    $champs = [
+        '{contact}' => $contact,
+        '{client}' => (string) ($devis['client'] ?? ''),
+        '{n_offre}' => (string) ($devis['n_offre'] ?? ''),
+        '{date_offre}' => $date($devis['date_offre'] ?? null),
+        '{validite_offre}' => $date($devis['validite_offre'] ?? null),
+        '{montant_ht}' => number_format((float) ($devis['montant_ht'] ?? 0), 2, ',', ' '),
+        '{commercial}' => $nom,
+    ];
+    $propre = fn(string $t) => str_replace(['Bonjour ,', 'Bonjour  ,'], 'Bonjour,', strtr($t, $champs));
+    return ['objet' => $propre($modele['objet']), 'texte' => $propre($modele['texte'])];
+}
+
+/**
+ * Relances programmées : pour chaque devis encore ouvert, la prochaine relance
+ * à envoyer, sa date, ses destinataires et le mail tel qu'il partira.
+ * $seulementDues limite aux relances dont la date est atteinte (le scénario Make).
+ */
+function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclureEcart = false): array
+{
+    $today = date('Y-m-d');
+    $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'cso_boite'");
+    $st->execute();
+    $boiteCso = (string) ($st->fetchColumn() ?: 'cso@multiairfrance.store');
+    $modeles = ma_relance_modeles($db);
+    $colonnes = [1 => 'relance_1_j3', 2 => 'relance_2_j7', 3 => 'relance_3_j15'];
+    $out = [];
+    $rows = $db->query("SELECT * FROM cso_devis WHERE statut IN ('En attente','Relance 1','Relance 2')
+        ORDER BY date_traitement")->fetchAll();
+    foreach ($rows as $r) {
+        $num = (int) $r['relances_envoyees'] + 1;
+        if ($num > 3 || empty($r[$colonnes[$num]])) {
+            continue;
+        }
+        $datePrevue = (string) $r[$colonnes[$num]];
+        $due = $datePrevue <= $today;
+        if ($seulementDues && !$due) {
+            continue;
+        }
+        if (($r['controle_coherence'] ?? '') === 'ECART' && !$inclureEcart) {
+            continue;
+        }
+        $dest = ma_destinataires_relance($r, $boiteCso);
+        $mail = ma_relance_rendu($r, $modeles[$num]);
+        $r['relance_due'] = $num;
+        $r['date_prevue'] = $datePrevue;
+        $r['due'] = $due ? 1 : 0;
+        $r['email_relance'] = $dest['to'];
+        $r['cc_relance'] = $dest['cc'];
+        $r['repondre_a'] = (string) ($r['commercial'] ?? '');
+        $r['objet_relance'] = $mail['objet'];
+        $r['texte_relance'] = $mail['texte'];
+        $r['commercial_nom'] = $r['commercial'] ? ucwords(str_replace('.', ' ', explode('@', (string) $r['commercial'])[0])) : '';
+        $out[] = $r;
+    }
+    usort($out, fn($a, $b) => [$a['date_prevue'], $a['n_offre']] <=> [$b['date_prevue'], $b['n_offre']]);
+    return $out;
 }
 
 function ma_chat_meme_lead(array $a, array $b, int $windowMin): bool

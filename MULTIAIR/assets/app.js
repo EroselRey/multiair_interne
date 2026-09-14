@@ -576,7 +576,10 @@
   // ================================================================== CSO DEVIS
   const CSO_STATUTS = ['En attente', 'Relance 1', 'Relance 2', 'Relance 3', 'Gagne', 'Perdu', 'Sans suite'];
   tabs.cso = async () => {
-    const [s, devis, relances, logs] = await Promise.all([api('stats/cso'), api('cso/devis'), api('cso/relances'), api('log', {query: {scenario: 'cso', limit: 50}})]);
+    const [s, devis, relances, prevues, modeles, logs] = await Promise.all([
+      api('stats/cso'), api('cso/devis'), api('cso/relances'), api('cso/devis/relances_prevues'),
+      api('cso/devis/modeles_relance'), api('log', {query: {scenario: 'cso', limit: 50}}),
+    ]);
     const k = s.kpi;
     main.innerHTML = `
       <div class="section-title"><h2>CSO — analyse des devis et suivi commercial</h2><span class="hint">scénarios Make 9775498 · 9776471 · boîte cso@multiairfrance.store</span></div>
@@ -600,6 +603,10 @@
       </div>
       <div class="section-title"><h2>Devis</h2><div class="tools"><span class="hint">Statut modifiable directement dans la liste</span> ${exportBtn('cso_devis')} ${exportBtn('cso_lignes')}</div></div>
       <div id="cso_tbl"></div>
+      <div class="section-title"><h2>Relances programmées (${prevues.rows.length})</h2><div class="tools">
+        <span class="hint">Cliquez une ligne pour lire le mail qui partira</span>
+        <button class="btn small" id="editModeles">✎ Modifier les textes</button></div></div>
+      <div id="cso_prev"></div>
       <div class="section-title"><h2>Relances envoyées au client</h2><div class="tools"><span class="hint">Envoyées automatiquement à J+3, J+7 et J+15 par le scénario 9776471</span> ${exportBtn('cso_relances')}</div></div>
       <div id="cso_rel"></div>
       <div class="section-title"><h2>Journal</h2></div>${journal(logs.rows)}`;
@@ -648,6 +655,41 @@
       afterRender: (el) => $$('[data-devis]', el).forEach((sel) => sel.addEventListener('change', async () => {
         await patch('cso/devis/' + sel.dataset.devis, {statut: sel.value}); toast('Statut mis à jour'); const d = devis.rows.find((x) => x.id == sel.dataset.devis); if (d) d.statut = sel.value; refreshBadges();
       }))});
+    const apercu = (r) => openDrawer(`Relance ${r.relance_due} — devis n° ${h(r.n_offre)}`, `
+      ${kv([['Date prévue', fmtDate(r.date_prevue, false) + (r.due ? ' <span class="pill danger">à envoyer</span>' : '')],
+        ['Client', h(r.client)], ['Montant HT', eur(r.montant_ht)],
+        ['Envoyée à', (r.email_relance || '').split(';').map((e) => h(e)).join('<br>') || '<span class="hint">—</span>'],
+        ['En copie', (r.cc_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>') || '<span class="hint">aucune</span>'],
+        ['Réponse du client vers', h(r.repondre_a)], ['Objet', h(r.objet_relance)]])}
+      <h4>Mail qui sera envoyé</h4><pre class="raw">${h(r.texte_relance)}</pre>`);
+    table('#cso_prev', prevues.rows, [
+      {key: 'date_prevue', label: 'Date prévue', render: (r) => fmtDate(r.date_prevue, false) + (r.due ? ' ' + pill('à envoyer', 'danger') : '')},
+      {key: 'relance_due', label: 'Relance', num: true, render: (r) => pill('n° ' + r.relance_due, r.relance_due >= 3 ? 'danger' : (r.relance_due === 2 ? 'warn' : 'info'))},
+      {key: 'n_offre', label: 'N° offre'},
+      {key: 'client', label: 'Client', render: (r) => clip(r.client)},
+      {key: 'contact_client', label: 'Contact'},
+      {key: 'email_relance', label: 'Sera envoyée à', render: (r) => (r.email_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>')},
+      {key: 'cc_relance', label: 'En copie', render: (r) => (r.cc_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>') || '<span class="hint">aucune</span>'},
+      {key: 'montant_ht', label: 'Montant HT', num: true, render: (r) => eur(r.montant_ht), sortVal: (r) => Number(r.montant_ht || 0)},
+    ], {sort: 'date_prevue', asc: true, filters: [{key: 'relance_due', label: 'Relance'}, {key: 'commercial', label: 'Commercial'}], onRow: apercu});
+    $('#editModeles').onclick = () => {
+      const champs = [];
+      [1, 2, 3].forEach((n) => {
+        champs.push({key: `relance_${n}_objet`, label: `Relance ${n} — objet`});
+        champs.push({key: `relance_${n}_texte`, label: `Relance ${n} — texte`, type: 'textarea'});
+      });
+      const vals = {};
+      [1, 2, 3].forEach((n) => { vals[`relance_${n}_objet`] = modeles.modeles[n].objet; vals[`relance_${n}_texte`] = modeles.modeles[n].texte; });
+      openDrawer('Textes des relances', `
+        <p class="hint">Champs remplacés automatiquement : <code>{contact}</code> <code>{client}</code>
+        <code>{n_offre}</code> <code>{date_offre}</code> <code>{validite_offre}</code>
+        <code>{montant_ht}</code> <code>{commercial}</code>. Les relances déjà envoyées ne sont pas modifiées.</p>
+        ${editForm(champs, vals)}`, saveBtn());
+      $('#drawerSave').onclick = async () => {
+        await api('parametres', {method: 'POST', body: readForm($('#drawerBody'), champs)});
+        toast('Textes enregistrés'); closeDrawer(); show('cso');
+      };
+    };
     table('#cso_rel', relances.rows, [
       {key: 'date_envoi', label: 'Envoyée le', render: (r) => fmtDate(r.date_envoi)},
       {key: 'numero', label: 'Relance', num: true, render: (r) => pill('n° ' + r.numero, r.numero >= 3 ? 'danger' : (r.numero === 2 ? 'warn' : 'info'))},
