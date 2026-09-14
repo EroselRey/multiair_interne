@@ -249,6 +249,28 @@
     return {html, bind: (root) => $$('[data-sub]', root).forEach((b) => b.addEventListener('click', () => onChange(b.dataset.sub)))};
   };
 
+  // ------------------------------------------------------------------ table de routage (commune aux 3 scénarios)
+  async function routageUI(root, scenario, opts) {
+    const rows = (await api('routage', {query: {scenario}})).rows;
+    const row = (r) => `<tr style="cursor:default"><td><input class="inline" name="cle" value="${h(r.cle)}" placeholder="${h(opts.placeholder || 'nouvelle clé')}" style="width:150px" ${r.cle ? 'readonly' : ''}></td>
+      <td><input class="inline" name="dest_to" value="${h(r.dest_to)}" style="width:100%" placeholder="email1;email2"></td><td><input class="inline" name="dest_cc" value="${h(r.dest_cc)}" style="width:100%"></td>
+      <td><input class="inline" name="libelle" value="${h(r.libelle)}" style="width:100%"></td>
+      <td style="white-space:nowrap"><button class="btn small primary" data-rsave>Enregistrer</button> ${r.cle ? `<button class="btn small danger" data-rdel="${h(r.cle)}" title="Supprimer">✕</button>` : ''}</td></tr>`;
+    root.innerHTML = `<p class="hint">${opts.hint}</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>${h(opts.keyLabel)}</th><th>Destinataires (TO, séparés par ;)</th><th>Copie (CC)</th><th>Libellé</th><th></th></tr></thead><tbody>
+      ${rows.map(row).join('')}${row({})}</tbody></table></div>
+      <p class="hint">Repli si la clé est inconnue : ${h(opts.fallback || 'cyril.mortier@airwco.com')} (paramètre routage_fallback_email).</p>`;
+    $$('[data-rsave]', root).forEach((b) => b.addEventListener('click', async () => {
+      const tr = b.closest('tr');
+      const body = {cle: $('[name=cle]', tr).value.trim(), dest_to: $('[name=dest_to]', tr).value.trim(), dest_cc: $('[name=dest_cc]', tr).value.trim(), libelle: $('[name=libelle]', tr).value.trim()};
+      if (!body.cle) return toast(`${opts.keyLabel} requis`, true);
+      await api('routage', {method: 'POST', query: {scenario}, body}); toast('Routage enregistré'); routageUI(root, scenario, opts);
+    }));
+    $$('[data-rdel]', root).forEach((b) => b.addEventListener('click', async () => {
+      if (confirm(`Supprimer la ligne « ${b.dataset.rdel} » ?`)) { await api('routage', {method: 'DELETE', query: {scenario}, body: {cle: b.dataset.rdel}}); routageUI(root, scenario, opts); }
+    }));
+  }
+
   // ================================================================== VUE D'ENSEMBLE
   tabs.overview = async () => {
     const s = await api('stats/overview');
@@ -290,7 +312,7 @@
       api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('distributeurs', {query: {limit: 5000}}), api('log', {query: {scenario: 'repondeur', limit: 50}}),
     ]);
     const k = s.kpi;
-    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['demandes', `Demandes SAV / Commercial / Finance (${demandes.rows.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
+    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['demandes', `Demandes SAV / Commercial / Finance (${demandes.rows.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['routage', 'Routage des mails'], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
     main.innerHTML = `
       <div class="section-title"><h2>Répondeur IA — appels VAPI et suivi WhatsApp</h2><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
       <div class="kpis">
@@ -388,6 +410,9 @@
           {key: 'nom', label: 'Nom'}, {key: 'prenom', label: 'Prénom'}, {key: 'email', label: 'Email'}, {key: 'telephone', label: 'Téléphone'},
         ], {sort: 'raison_sociale', asc: true, filters: [{key: 'marque', label: 'Marque'}, {key: 'vendeur', label: 'Commercial'}], onRow: distrib,
           tools: `<button class="btn small primary" id="addDist">+ Ajouter</button>`, afterRender: (el) => $('#addDist', el).addEventListener('click', () => distrib({}))});
+      } else if (repSub.v === 'routage') {
+        routageUI(root, 'repondeur', {keyLabel: 'Service', placeholder: 'technique, commercial, finance…',
+          hint: "Service pressenti par l'IA (technique / commercial / finance / autre) → destinataires du mail de transmission SAV, Commercial ou Finance. La clé « aiguilleur » sert aux WhatsApp non identifiés."});
       } else {
         root.innerHTML = journal(logs.rows);
       }
@@ -398,8 +423,8 @@
   // ================================================================== CHATBOT CLAIRE
   const chatSub = {v: 'leads'};
   tabs.chatbot = async () => {
-    const [s, leads, sessions, routage, logs] = await Promise.all([
-      api('stats/chatbot'), api('chat/leads'), api('chat/sessions'), api('chat/routage'), api('log', {query: {scenario: 'chatbot', limit: 50}}),
+    const [s, leads, sessions, logs] = await Promise.all([
+      api('stats/chatbot'), api('chat/leads'), api('chat/sessions'), api('log', {query: {scenario: 'chatbot', limit: 50}}),
     ]);
     const k = s.kpi;
     const st = subtabs([['leads', `Leads (${leads.rows.length})`], ['conversations', `Conversations (${sessions.rows.length})`], ['routage', 'Table de routage'], ['journal', 'Journal']], chatSub.v, (v) => { chatSub.v = v; renderSub(); });
@@ -430,7 +455,7 @@
         {key: 'commentaire', label: 'Commentaire', type: 'textarea'},
       ];
       openDrawer(`Lead — ${h([l.prenom, l.nom].filter(Boolean).join(' ') || l.societe || '')}`, `
-        ${kv([['Date', fmtDate(l.date)], ['Société', h(l.societe)], ['Email', l.email ? `<a href="mailto:${h(l.email)}">${h(l.email)}</a>` : ''], ['Téléphone', h(l.telephone)],
+        ${kv([['Premier contact', fmtDate(l.date)], ['Dernière mise à jour', l.nb_mises_a_jour ? `${fmtDate(l.updated_at)} <span class="hint">(${l.nb_mises_a_jour} mise${l.nb_mises_a_jour > 1 ? 's' : ''} à jour regroupée${l.nb_mises_a_jour > 1 ? 's' : ''})</span>` : ''], ['Société', h(l.societe)], ['Email', l.email ? `<a href="mailto:${h(l.email)}">${h(l.email)}</a>` : ''], ['Téléphone', h(l.telephone)],
           ['Département', h(l.departement)], ['Type interlocuteur', h(l.type_interlocuteur)], ['Marque orientée', h(l.marque_orientee)], ['Statut IA', pill(l.statut, cls(l.statut))],
           ['Catégorie', h(l.categorie)], ['Service destinataire', h(l.dest_libelle)], ['Envoyé à', h(l.dest_to)], ['À vérifier', h(l.a_verifier)],
           ['Besoin résumé', h(l.besoin_resume)], ['Produits proposés', h(l.produits_proposes)], ['Session', l.session_id ? `<button class="link" id="goSess">${h(l.session_id)}</button>` : '']])}
@@ -471,26 +496,12 @@
           {key: 'session_id', label: 'Session'},
         ], {sort: 'fin', onRow: conversation});
       } else if (chatSub.v === 'routage') {
-        root.innerHTML = `<p class="hint">Catégorie détectée par Claire → destinataires du mail interne. Le scénario Make interroge cette table. Si la catégorie n'existe pas, repli sur cyril.mortier@airwco.com.</p>
-          <div class="tbl-wrap"><table class="tbl" id="routTbl"><thead><tr><th>Catégorie</th><th>Destinataires (TO, séparés par ;)</th><th>Copie (CC)</th><th>Libellé du service</th><th></th></tr></thead><tbody>
-          ${routage.rows.map((r) => routRow(r)).join('')}${routRow({})}</tbody></table></div>`;
-        $$('[data-rsave]', root).forEach((b) => b.addEventListener('click', async () => {
-          const tr = b.closest('tr');
-          const body = {categorie: $('[name=categorie]', tr).value, dest_to: $('[name=dest_to]', tr).value, dest_cc: $('[name=dest_cc]', tr).value, libelle: $('[name=libelle]', tr).value};
-          if (!body.categorie) return toast('Catégorie requise', true);
-          await api('chat/routage', {method: 'POST', body}); toast('Routage enregistré'); show('chatbot');
-        }));
-        $$('[data-rdel]', root).forEach((b) => b.addEventListener('click', async () => {
-          if (confirm('Supprimer cette ligne de routage ?')) { await api('chat/routage', {method: 'DELETE', body: {categorie: b.dataset.rdel}}); show('chatbot'); }
-        }));
+        routageUI(root, 'chatbot', {keyLabel: 'Catégorie', placeholder: 'equipement, pieces, sav…',
+          hint: "Catégorie détectée par Claire (equipement / pieces / sav / finance / autre) → destinataires du mail interne « Nouveau lead ». Le scénario Make lit cette table à chaque lead."});
       } else {
         root.innerHTML = journal(logs.rows);
       }
     }
-    const routRow = (r) => `<tr style="cursor:default"><td><input class="inline" name="categorie" value="${h(r.categorie)}" placeholder="nouvelle catégorie" style="width:130px"></td>
-      <td><input class="inline" name="dest_to" value="${h(r.dest_to)}" style="width:100%"></td><td><input class="inline" name="dest_cc" value="${h(r.dest_cc)}" style="width:100%"></td>
-      <td><input class="inline" name="libelle" value="${h(r.libelle)}" style="width:100%"></td>
-      <td style="white-space:nowrap"><button class="btn small primary" data-rsave>Enregistrer</button> ${r.categorie ? `<button class="btn small danger" data-rdel="${h(r.categorie)}">✕</button>` : ''}</td></tr>`;
     renderSub();
   };
 
@@ -516,8 +527,12 @@
       </div>
       <div class="section-title"><h2>Demandes traitées</h2><div class="tools">${exportBtn('adv_demandes')}</div></div>
       <div id="adv_tbl"></div>
+      <div class="section-title"><h2>Routage des mails</h2></div>
+      <div id="adv_routage"></div>
       <div class="section-title"><h2>Journal</h2></div>${journal(logs.rows)}`;
     barLine('c_adv', [{label: 'Mails', data: s.serie}]);
+    routageUI($('#adv_routage'), 'adv', {keyLabel: 'Cas', placeholder: 'DEVIS DIRECT, LEAD…',
+      hint: "Cas détecté par Claire (DEVIS DIRECT / STANDARD / LEAD / MAINTENANCE) → destinataires en copie de la réponse. ESCALADE et ERREUR → personnes qui reçoivent la demande à valider au lieu du client."});
     const detail = (d) => {
       const fields = [
         {key: 'statut_suivi', label: 'Suivi', type: 'select', options: [['envoye', 'Envoyé au client'], ['a_valider', 'À valider'], ['valide', 'Validé'], ['traite', 'Traité']]},

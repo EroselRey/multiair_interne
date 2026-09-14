@@ -224,6 +224,31 @@ function param(array $body, array $get, string $key, $default = null)
     return $body[$key] ?? ($get[$key] ?? $default);
 }
 
+/** Routes de routage communes : find / liste / création / suppression. */
+function routageRoutes(PDO $db, string $scenario, ?string $sub2, string $method, array $body): never
+{
+    if ($sub2 === 'find' || isset($_GET['cle'])) {
+        out(['ok' => true] + ma_routage($db, $scenario, (string) ($_GET['cle'] ?? '')));
+    }
+    if ($method === 'POST' || $method === 'PATCH') {
+        $cle = trim((string) ($body['cle'] ?? ''));
+        if ($cle === '') {
+            fail('cle requise');
+        }
+        if ($scenario === 'chatbot') {
+            $cle = strtolower($cle);
+        }
+        $db->prepare('INSERT OR REPLACE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES (?,?,?,?,?)')
+            ->execute([$scenario, $cle, ma_str($body['dest_to'] ?? null), ma_str($body['dest_cc'] ?? null) ?? '', ma_str($body['libelle'] ?? null)]);
+    }
+    if ($method === 'DELETE') {
+        $db->prepare('DELETE FROM routage WHERE scenario = ? AND cle = ?')->execute([$scenario, trim((string) ($body['cle'] ?? $sub2 ?? ''))]);
+    }
+    $st = $db->prepare('SELECT * FROM routage WHERE scenario = ? ORDER BY cle');
+    $st->execute([$scenario]);
+    out(['ok' => true, 'scenario' => $scenario, 'rows' => $st->fetchAll()]);
+}
+
 $res = $parts[0] ?? '';
 $sub = $parts[1] ?? null;
 $sub2 = $parts[2] ?? null;
@@ -346,7 +371,9 @@ try {
                         $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, $d['fiche_id']]);
                     }
                     logEvent($db, 'repondeur', 'ok', 'demande_' . strtolower($d['service']), ($d['societe'] ?? '') . ' - ' . $d['priorite'] . ' (' . ($d['source'] ?? '') . ')', ['id' => $id]);
-                    out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite']]);
+                    $rt = ma_routage($db, 'repondeur', ['SAV' => 'technique', 'COMMERCIAL' => 'commercial', 'FINANCE' => 'finance'][$d['service']]);
+                    out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'],
+                        'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
@@ -365,6 +392,9 @@ try {
                     out(['ok' => true, 'demande' => getOne($db, 'rep_demandes', $id)]);
                 }
                 out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $_GET, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'])]);
+            }
+            if ($sub === 'routage') {
+                routageRoutes($db, 'repondeur', $sub2, $method, $body);
             }
             fail('Route rep inconnue', 404);
 
@@ -431,12 +461,17 @@ try {
             }
             if ($sub === 'leads') {
                 if ($method === 'POST' && $sub2 === null) {
+                    // Regroupement : un lead identique (session, société+nom, email ou téléphone) reçu dans la
+                    // fenêtre paramétrée (chat_lead_fenetre_min, 60 min par défaut) met à jour le lead existant.
                     $d = $body;
                     $d['date'] = ma_date($d['date'] ?? null) ?? $now;
                     $d['marque_orientee'] = $d['marque_orientee'] ?? ($d['marque'] ?? null);
-                    $id = insert($db, 'chat_leads', $d);
-                    logEvent($db, 'chatbot', 'ok', 'lead', ($d['societe'] ?? '') . ' - ' . ($d['prenom'] ?? '') . ' ' . ($d['nom'] ?? '') . ' [' . ($d['categorie'] ?? '') . ']', ['id' => $id]);
-                    out(['ok' => true, 'id' => $id]);
+                    $r = ma_chat_lead_upsert($db, $d);
+                    logEvent($db, 'chatbot', 'ok', $r['action'] === 'created' ? 'lead' : 'lead_maj',
+                        ($d['societe'] ?? '') . ' - ' . ($d['prenom'] ?? '') . ' ' . ($d['nom'] ?? '') . ' [' . ($d['categorie'] ?? '') . ']' . ($r['action'] === 'merged' ? ' (mise à jour n°' . $r['nb_mises_a_jour'] . ')' : ''), ['id' => $r['id']]);
+                    $rt = ma_routage($db, 'chatbot', strtolower((string) ($d['categorie'] ?? '')));
+                    out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $r['action'] === 'created', 'nb_mises_a_jour' => $r['nb_mises_a_jour'],
+                        'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
@@ -453,34 +488,9 @@ try {
                 out(['ok' => true, 'rows' => listRows($db, 'chat_leads', 'date', $_GET, ['societe', 'nom', 'prenom', 'email', 'telephone', 'besoin_resume', 'departement'])]);
             }
             if ($sub === 'routage') {
-                if ($sub2 === 'find' || isset($_GET['categorie'])) {
-                    // Remplace filterRows Routage : renvoie toujours dest_to / dest_cc / libelle (avec repli)
-                    $cat = strtolower(trim((string) ($_GET['categorie'] ?? '')));
-                    $st = $db->prepare('SELECT * FROM chat_routage WHERE categorie = ? COLLATE NOCASE');
-                    $st->execute([$cat]);
-                    $r = $st->fetch();
-                    $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
-                    $fb = $params['routage_fallback_email'] ?? 'cyril.mortier@airwco.com';
-                    out([
-                        'ok' => true, 'trouve' => (bool) $r,
-                        'categorie' => $cat,
-                        'dest_to' => ($r && $r['dest_to']) ? $r['dest_to'] : $fb,
-                        'dest_cc' => ($r && $r['dest_cc']) ? $r['dest_cc'] : $fb,
-                        'dest_libelle' => ($r && $r['libelle']) ? $r['libelle'] : ($params['routage_fallback_libelle'] ?? 'Non classe'),
-                    ]);
-                }
-                if ($method === 'POST' || $method === 'PATCH') {
-                    $cat = strtolower(trim((string) ($body['categorie'] ?? '')));
-                    if ($cat === '') {
-                        fail('categorie requise');
-                    }
-                    $db->prepare('INSERT OR REPLACE INTO chat_routage(categorie, dest_to, dest_cc, libelle) VALUES (?,?,?,?)')
-                        ->execute([$cat, ma_str($body['dest_to'] ?? null), ma_str($body['dest_cc'] ?? null), ma_str($body['libelle'] ?? null)]);
-                }
-                if ($method === 'DELETE') {
-                    $db->prepare('DELETE FROM chat_routage WHERE categorie = ?')->execute([strtolower(trim((string) ($body['categorie'] ?? $sub2 ?? '')))]);
-                }
-                out(['ok' => true, 'rows' => $db->query('SELECT * FROM chat_routage ORDER BY categorie')->fetchAll()]);
+                $_GET['cle'] = $_GET['cle'] ?? ($_GET['categorie'] ?? null);
+                $body['cle'] = $body['cle'] ?? ($body['categorie'] ?? null);
+                routageRoutes($db, 'chatbot', $sub2, $method, $body);
             }
             fail('Route chat inconnue', 404);
 
@@ -540,7 +550,10 @@ try {
                     ];
                     $id = insert($db, 'adv_demandes', $d);
                     logEvent($db, 'adv', $tag === 'ERREUR' ? 'erreur' : 'ok', 'mail_traite', ($d['from_email'] ?? '') . ' - ' . ($d['sujet'] ?? '') . ' [' . $tag . ']', ['id' => $id]);
-                    out(['ok' => true, 'id' => $id, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'], 'mail' => $mailClean, 'statut_suivi' => $d['statut_suivi']]);
+                    $cleRoutage = in_array($tag, ['ESCALADE', 'ERREUR'], true) ? $tag : ($famille === 'maintenance' ? 'MAINTENANCE' : ($d['cas'] ?? 'STANDARD'));
+                    $rt = ma_routage($db, 'adv', $cleRoutage);
+                    out(['ok' => true, 'id' => $id, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'], 'mail' => $mailClean, 'statut_suivi' => $d['statut_suivi'],
+                        'envoyer_au_client' => $tag === 'AUTO', 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
@@ -559,6 +572,9 @@ try {
                     out(['ok' => true, 'demande' => getOne($db, 'adv_demandes', $id)]);
                 }
                 out(['ok' => true, 'rows' => listRows($db, 'adv_demandes', 'date', $_GET, ['from_email', 'from_nom', 'sujet', 'message', 'techno', 'critere'])]);
+            }
+            if ($sub === 'routage') {
+                routageRoutes($db, 'adv', $sub2, $method, $body);
             }
             fail('Route adv inconnue', 404);
 
@@ -848,6 +864,13 @@ try {
                 out(['ok' => true, 'rows' => listRows($db, 'cee_actions', 'date', $_GET, ['societe', 'telephone', 'detail', 'action'])]);
             }
             fail('Route cee inconnue', 404);
+
+        case 'routage':
+            $scenario = (string) ($_GET['scenario'] ?? $body['scenario'] ?? '');
+            if (!in_array($scenario, ['chatbot', 'repondeur', 'adv'], true)) {
+                fail('scenario requis (chatbot | repondeur | adv)');
+            }
+            routageRoutes($db, $scenario, $sub, $method, $body);
 
         // ============================================================ Statistiques
         case 'stats':

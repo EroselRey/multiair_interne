@@ -29,15 +29,26 @@ if ((PHP_SAPI === 'cli' || ($_POST['go'] ?? '') === '1') && $files) {
                     continue;
                 }
                 $st = $db->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?");
-                $st->execute([$table]);
+                $st->execute([$table === 'chat_routage' ? 'routage' : $table]);
                 if (!$st->fetchColumn()) {
                     $rapport[] = [basename($file), "table inconnue : $table", 0];
                     continue;
                 }
-                $colsT = array_column($db->query("PRAGMA table_info($table)")->fetchAll(), 'name');
+                $colsT = array_column($db->query('PRAGMA table_info(' . ($table === 'chat_routage' ? 'routage' : $table) . ')')->fetchAll(), 'name');
                 $n = 0;
+                if ($table === 'chat_leads') {
+                    usort($rows, fn($a, $b) => strcmp((string) ma_date($a['date'] ?? null), (string) ma_date($b['date'] ?? null)));
+                }
                 foreach ($rows as $r) {
                     if (!is_array($r)) {
+                        continue;
+                    }
+                    if ($table === 'chat_leads') {
+                        $r['date'] = ma_date($r['date'] ?? null) ?? ma_now();
+                        $res = ma_chat_lead_upsert($db, $r);
+                        if ($res['action'] === 'created') {
+                            $n++;
+                        }
                         continue;
                     }
                     // Normalisations spécifiques
@@ -74,9 +85,9 @@ if ((PHP_SAPI === 'cli' || ($_POST['go'] ?? '') === '1') && $files) {
                         $r['version'] = ma_int($r['version'] ?? 1) ?: 1;
                         $r['date_traitement'] = ma_date($r['date_traitement'] ?? null);
                     }
-                    if ($table === 'chat_routage') {
-                        $db->prepare('INSERT OR REPLACE INTO chat_routage(categorie, dest_to, dest_cc, libelle) VALUES (?,?,?,?)')
-                            ->execute([strtolower((string) $r['categorie']), $r['dest_to'] ?? null, $r['dest_cc'] ?? null, $r['libelle'] ?? null]);
+                    if ($table === 'chat_routage' || $table === 'routage') {
+                        $db->prepare('INSERT OR REPLACE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES (?,?,?,?,?)')
+                            ->execute([$r['scenario'] ?? 'chatbot', $table === 'chat_routage' ? strtolower((string) $r['categorie']) : (string) $r['cle'], $r['dest_to'] ?? null, $r['dest_cc'] ?? '', $r['libelle'] ?? null]);
                         $n++;
                         continue;
                     }

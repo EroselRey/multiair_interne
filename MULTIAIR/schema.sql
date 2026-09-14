@@ -75,12 +75,17 @@ CREATE TABLE IF NOT EXISTS chat_leads (
   statut TEXT, marque_orientee TEXT, type_interlocuteur TEXT, departement TEXT,
   a_verifier TEXT, categorie TEXT, dest_libelle TEXT, dest_to TEXT,
   suivi TEXT NOT NULL DEFAULT 'nouveau',  -- nouveau | contacte | converti | perdu
-  commentaire TEXT
+  commentaire TEXT,
+  updated_at TEXT,
+  nb_mises_a_jour INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS chat_routage (
-  categorie TEXT PRIMARY KEY,
-  dest_to TEXT, dest_cc TEXT, libelle TEXT
+-- Table de routage commune (chatbot : catégorie ; repondeur : service ; adv : cas / famille / tag)
+CREATE TABLE IF NOT EXISTS routage (
+  scenario TEXT NOT NULL,                 -- chatbot | repondeur | adv
+  cle TEXT NOT NULL,
+  dest_to TEXT, dest_cc TEXT, libelle TEXT,
+  PRIMARY KEY (scenario, cle)
 );
 
 -- ---------------------------------------------------------------- Claire ADV
@@ -179,3 +184,17 @@ CREATE TABLE IF NOT EXISTS cee_actions (
 
 INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('routage_fallback_email', 'cyril.mortier@airwco.com');
 INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('routage_fallback_libelle', 'Non classe');
+INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('chat_lead_fenetre_min', '60');
+-- Routage par défaut Répondeur IA (service pressenti -> destinataires du mail)
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'technique', 'cyril.mortier@airwco.com', '', 'SAV / intervention technique');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'commercial', 'cyril.mortier@airwco.com', '', 'Demande commerciale');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'finance', 'cyril.mortier@airwco.com', '', 'Finance / comptabilite');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'autre', 'cyril.mortier@airwco.com', '', 'Service non reconnu');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'aiguilleur', 'cyril.mortier@airwco.com', '', 'WhatsApp non identifie');
+-- Routage par défaut Claire ADV (cas detecte -> destinataires en copie / a valider)
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'DEVIS DIRECT', 'cyril.mortier@airwco.com', '', 'Equipement - devis direct');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'STANDARD', 'cyril.mortier@airwco.com', '', 'Equipement - reponse standard');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'LEAD', 'cyril.mortier@airwco.com', '', 'Equipement - lead (>= 75 ch)');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'MAINTENANCE', 'cyril.mortier@airwco.com', '', 'Plan de maintenance');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'ESCALADE', 'cyril.mortier@airwco.com', '', 'Escalade - a valider par un humain');
+INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('adv', 'ERREUR', 'cyril.mortier@airwco.com', '', 'Echec de traitement');

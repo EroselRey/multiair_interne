@@ -290,3 +290,119 @@ function ma_send_smtp(array $s, string $from, string $to, string $subject, strin
     fclose($fp);
     return str_starts_with($r, '250');
 }
+
+/**
+ * Crée un lead chatbot ou met à jour le lead équivalent créé dans la fenêtre de regroupement
+ * (même session, ou même société + nom, ou même email, ou même téléphone, à moins de N minutes).
+ * Retourne ['action' => 'created'|'merged', 'id' => int, 'nb_mises_a_jour' => int].
+ */
+function ma_chat_lead_upsert(PDO $db, array $d, ?int $windowMin = null): array
+{
+    if ($windowMin === null) {
+        $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'chat_lead_fenetre_min'");
+        $st->execute();
+        $windowMin = (int) ($st->fetchColumn() ?: 60);
+    }
+    $norm = fn($v) => mb_strtolower(trim((string) ($v ?? '')));
+    $bad = ['', 'non communiqué', 'non communique', 'non renseigné', 'non renseigne', 'nc', 'n/a', '-', 'inconnu'];
+    $date = $d['date'] ?? ma_now();
+    $societe = $norm($d['societe'] ?? '');
+    $nom = $norm($d['nom'] ?? '');
+    $email = $norm($d['email'] ?? '');
+    $tel = ma_tel((string) ($d['telephone'] ?? ''));
+    $session = trim((string) ($d['session_id'] ?? ''));
+    $since = date('Y-m-d H:i:s', strtotime($date) - $windowMin * 60);
+    $until = date('Y-m-d H:i:s', strtotime($date) + $windowMin * 60);
+    $conds = [];
+    $args = [];
+    if ($session !== '') {
+        $conds[] = 'session_id = ?';
+        $args[] = $session;
+    }
+    if (!in_array($societe, $bad, true) && !in_array($nom, $bad, true)) {
+        $conds[] = '(lower(societe) = ? AND lower(nom) = ?)';
+        array_push($args, $societe, $nom);
+    } elseif (!in_array($societe, $bad, true)) {
+        $conds[] = 'lower(societe) = ?';
+        $args[] = $societe;
+    }
+    if (!in_array($email, $bad, true) && str_contains($email, '@')) {
+        $conds[] = 'lower(email) = ?';
+        $args[] = $email;
+    }
+    if ($tel !== null && strlen($tel) >= 9) {
+        $conds[] = 'telephone = ?';
+        $args[] = $tel;
+    }
+    $existing = null;
+    if ($conds) {
+        $sql = 'SELECT * FROM chat_leads WHERE (' . implode(' OR ', $conds) . ') AND COALESCE(updated_at, date) >= ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 1';
+        $st = $db->prepare($sql);
+        $st->execute(array_merge($args, [$since, $until]));
+        $existing = $st->fetch() ?: null;
+    }
+    $cols = array_column($db->query('PRAGMA table_info(chat_leads)')->fetchAll(), 'name');
+    $row = [];
+    foreach ($cols as $c) {
+        if ($c !== 'id' && array_key_exists($c, $d)) {
+            $row[$c] = is_string($d[$c]) ? trim($d[$c]) : $d[$c];
+        }
+    }
+    if ($tel !== null) {
+        $row['telephone'] = $tel;
+    }
+    if ($existing) {
+        // Fusion : on garde la date du premier contact, on prend les nouvelles valeurs non vides
+        $upd = [];
+        foreach ($row as $c => $v) {
+            if (in_array($c, ['date', 'suivi', 'commentaire', 'nb_mises_a_jour', 'updated_at'], true)) {
+                continue;
+            }
+            $vs = $norm($v);
+            if ($vs === '' || (in_array($vs, $bad, true) && !in_array($norm($existing[$c] ?? ''), $bad, true))) {
+                continue;
+            }
+            if ((string) $v !== (string) ($existing[$c] ?? '')) {
+                $upd[$c] = $v;
+            }
+        }
+        $upd['updated_at'] = max((string) $date, (string) ($existing['updated_at'] ?? ''));
+        $upd['nb_mises_a_jour'] = (int) $existing['nb_mises_a_jour'] + 1;
+        $set = implode(',', array_map(fn($k) => "$k = ?", array_keys($upd)));
+        $vals = array_values($upd);
+        $vals[] = $existing['id'];
+        $db->prepare("UPDATE chat_leads SET $set WHERE id = ?")->execute($vals);
+        return ['action' => 'merged', 'id' => (int) $existing['id'], 'nb_mises_a_jour' => $upd['nb_mises_a_jour']];
+    }
+    $row['date'] = $date;
+    $row['nb_mises_a_jour'] = 0;
+    $keys = array_keys($row);
+    $db->prepare('INSERT INTO chat_leads (' . implode(',', $keys) . ') VALUES (' . implode(',', array_fill(0, count($keys), '?')) . ')')->execute(array_values($row));
+    return ['action' => 'created', 'id' => (int) $db->lastInsertId(), 'nb_mises_a_jour' => 0];
+}
+
+/** Résout les destinataires d'un scénario pour une clé (avec repli paramétré). */
+function ma_routage(PDO $db, string $scenario, ?string $cle): array
+{
+    $cle = trim((string) $cle);
+    $r = null;
+    if ($cle !== '') {
+        $st = $db->prepare('SELECT * FROM routage WHERE scenario = ? AND cle = ? COLLATE NOCASE');
+        $st->execute([$scenario, $cle]);
+        $r = $st->fetch() ?: null;
+    }
+    if (!$r) {
+        $st = $db->prepare("SELECT * FROM routage WHERE scenario = ? AND cle IN ('autre', 'AUTRE', 'defaut', 'DEFAUT') LIMIT 1");
+        $st->execute([$scenario]);
+        $r = $st->fetch() ?: null;
+    }
+    $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $fb = $params['routage_fallback_email'] ?? 'cyril.mortier@airwco.com';
+    return [
+        'trouve' => (bool) $r && strcasecmp((string) $r['cle'], $cle) === 0,
+        'cle' => $cle,
+        'dest_to' => ($r && $r['dest_to']) ? $r['dest_to'] : $fb,
+        'dest_cc' => ($r && $r['dest_cc'] !== null && $r['dest_cc'] !== '') ? $r['dest_cc'] : ($scenario === 'chatbot' ? $fb : ''),
+        'dest_libelle' => ($r && $r['libelle']) ? $r['libelle'] : ($params['routage_fallback_libelle'] ?? 'Non classe'),
+    ];
+}
