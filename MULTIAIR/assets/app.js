@@ -197,13 +197,14 @@
   const cls = (s) => {
     s = String(s || '').toLowerCase();
     if (/urgent|escalade|erreur|ecart|perdu|a_valider|a_traiter|à traiter/.test(s)) return 'danger';
-    if (/attente|relance|nouveau|draft|en_cours|sans|recu/.test(s)) return 'warn';
+    if (/attente|relance|nouveau|draft|en_cours|sans|recu|reponse/.test(s)) return 'warn';
     if (/trait|gagn|auto|valide|converti|ok|envoye|qualifi|accueil/.test(s)) return 'ok';
     return 'muted';
   };
   const lbl = {
     a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traité', nouveau: 'Nouveau', contacte: 'Contacté', converti: 'Converti', perdu: 'Perdu',
     qualifie: 'Qualifié', rappel_planifie: 'Rappel planifié', envoye: 'Envoyé', a_valider: 'À valider', valide: 'Validé', recu: 'Reçu, sans réponse',
+    'Reponse recue': 'Réponse reçue', Gagne: 'Gagné',
     vapi_direct: 'Appel direct', whatsapp_qualifie: 'Qualifié WhatsApp', sans_reponse_10min: 'Sans réponse WhatsApp', import: 'Import Sheets',
   };
   const L = (v) => lbl[v] || v || '—';
@@ -574,7 +575,7 @@
   };
 
   // ================================================================== CSO DEVIS
-  const CSO_STATUTS = ['En attente', 'Relance 1', 'Relance 2', 'Relance 3', 'Gagne', 'Perdu', 'Sans suite'];
+  const CSO_STATUTS = ['En attente', 'Relance 1', 'Relance 2', 'Relance 3', 'Reponse recue', 'Gagne', 'Perdu', 'Sans suite'];
   tabs.cso = async () => {
     const [s, devis, relances, prevues, modeles, logs] = await Promise.all([
       api('stats/cso'), api('cso/devis'), api('cso/relances'), api('cso/devis/relances_prevues'),
@@ -594,6 +595,7 @@
         ${kpi(pct(k.taux_transformation), 'Taux de transformation', 'info')}
         ${kpi(num(k.relances), 'Relances envoyées')}
         ${kpi(eur0(k.panier_moyen), 'Panier moyen HT')}
+        ${kpi(num(k.reponses), 'Réponses client à traiter', k.reponses ? 'danger' : 'ok')}
         ${kpi(num(k.ecarts), 'Écarts de cohérence', k.ecarts ? 'danger' : 'ok')}
         ${kpi(num(k.devis_total), 'Devis au total')}
       </div>
@@ -634,6 +636,7 @@
           ${cur.map((l) => `<tr style="cursor:default"><td>${h(l.poste)}</td><td>${h(l.reference)}</td><td>${h(l.designation)}</td><td class="num">${num(l.quantite)}</td><td class="num">${eur(l.prix_unitaire)}</td><td class="num">${eur(l.prix_total_ht)}</td><td>${h(l.pays_origine)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Aucune ligne</td></tr>'}
         </tbody></table></div>
         ${old.length ? `<h4>Versions précédentes (${old.length} lignes)</h4><div class="hint">${old.map((l) => `v${l.version} · ${h(l.reference)} · ${h(l.designation)} · ${eur(l.prix_total_ht)}`).join('<br>')}</div>` : ''}
+        ${d.reponse_client ? `<h4>Réponses du client</h4><pre class="raw">${h(d.reponse_client)}</pre>` : ''}
         <h4>Relances envoyées (${d.relances.length})</h4>${d.relances.length ? d.relances.map((r) => `<div>Relance ${r.numero} · ${fmtDate(r.date_envoi)} · à ${h(r.destinataire) || '—'}${r.cc ? ` · copie : ${h(r.cc)}` : ''}</div>`).join('') : '<span class="hint">Aucune</span>'}
         <h4>Suivi commercial</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('cso/devis/' + d.id, readForm($('#drawerBody'), fields)); toast('Devis enregistré'); closeDrawer(); show('cso'); refreshBadges(); };

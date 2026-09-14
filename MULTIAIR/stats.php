@@ -69,7 +69,7 @@ function ma_stats(PDO $db, string $scenario, array $q): array
                 'rep_fiches_en_attente' => ma_count($db, "SELECT COUNT(*) FROM rep_fiches WHERE statut IN ('En attente','Urgent')"),
                 'rep_demandes_a_traiter' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE statut = 'a_traiter'"),
                 'adv_a_valider' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE statut_suivi = 'a_valider'"),
-                'cso_en_cours' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE statut IN ('En attente','Relance 1','Relance 2','Relance 3')"),
+                'cso_en_cours' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE statut IN ('En attente','Relance 1','Relance 2','Relance 3','Reponse recue')"),
                 'cso_ecart' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE controle_coherence = 'ECART' AND statut NOT IN ('Gagne','Perdu','Sans suite')"),
                 'chat_leads_nouveaux' => ma_count($db, "SELECT COUNT(*) FROM chat_leads WHERE suivi = 'nouveau'"),
                 'cee_actions_a_faire' => ma_count($db, "SELECT COUNT(*) FROM cee_actions WHERE fait = 0"),
@@ -144,7 +144,7 @@ function ma_stats(PDO $db, string $scenario, array $q): array
             ];
 
         case 'cso':
-            $enCours = "statut IN ('En attente','Relance 1','Relance 2','Relance 3')";
+            $enCours = "statut IN ('En attente','Relance 1','Relance 2','Relance 3','Reponse recue')";
             $sumMois = $db->prepare("SELECT COALESCE(SUM(montant_ht),0) FROM cso_devis WHERE substr(date_traitement,1,7) = ?");
             $sumMois->execute([$mois]);
             $sumGagne = $db->query("SELECT COALESCE(SUM(montant_ht),0) FROM cso_devis WHERE statut = 'Gagne'")->fetchColumn();
@@ -158,6 +158,7 @@ function ma_stats(PDO $db, string $scenario, array $q): array
                     'montant_en_cours' => round((float) $db->query("SELECT COALESCE(SUM(montant_ht),0) FROM cso_devis WHERE $enCours")->fetchColumn(), 2),
                     'en_cours' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE $enCours"),
                     'relances' => ma_count($db, 'SELECT COUNT(*) FROM cso_relances'),
+                    'reponses' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE statut = 'Reponse recue'"),
                     'gagnes' => $gagne,
                     'perdus' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE statut = 'Perdu'"),
                     'montant_gagne' => round((float) $sumGagne, 2),

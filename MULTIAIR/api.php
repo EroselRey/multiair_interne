@@ -680,6 +680,61 @@ try {
                 logEvent($db, 'cso', 'ok', "relance_$num", 'Devis ' . $dv['n_offre'] . ' - ' . ($dv['client'] ?? '') . ' -> ' . ($body['destinataire'] ?? ''), ['id' => $id]);
                 out(['ok' => true, 'devis_id' => $id, 'statut' => "Relance $num", 'relances_envoyees' => $num]);
             }
+            if ($sub === 'reponse' && $method === 'POST') {
+                // Réponse d'un client à un devis ou à une relance, classée par l'agent IA du scénario.
+                // Rattachement : en-tête In-Reply-To / References (Message-ID du mail d'origine),
+                // à défaut le numéro d'offre trouvé dans l'objet.
+                $sujet = ma_str($body['sujet'] ?? null) ?? '';
+                $refs = trim((string) ($body['in_reply_to'] ?? '') . ' ' . (string) ($body['references'] ?? ''));
+                $classement = strtolower(ma_str($body['classement'] ?? null) ?? 'autre');
+                $texte = ma_str($body['texte'] ?? $body['message'] ?? null);
+                $de = ma_str($body['from_email'] ?? null);
+                $devis = null;
+                if ($refs !== '') {
+                    foreach ($db->query("SELECT * FROM cso_devis WHERE message_id IS NOT NULL AND message_id != ''
+                        ORDER BY id DESC") as $d) {
+                        if (str_contains($refs, trim((string) $d['message_id'], '<> '))) {
+                            $devis = $d;
+                            break;
+                        }
+                    }
+                }
+                if (!$devis && preg_match_all('/\b(\d{8,10})\b/', $sujet, $m)) {
+                    $st = $db->prepare('SELECT * FROM cso_devis WHERE n_offre = ? ORDER BY id DESC LIMIT 1');
+                    foreach ($m[1] as $n) {
+                        $st->execute([$n]);
+                        if ($row = $st->fetch()) {
+                            $devis = $row;
+                            break;
+                        }
+                    }
+                }
+                if (!$devis) {
+                    logEvent($db, 'cso', 'erreur', 'reponse_non_rattachee',
+                        ($de ?? '') . ' - ' . $sujet . ' : aucun devis correspondant',
+                        ['classement' => $classement, 'texte' => $texte]);
+                    out(['ok' => true, 'trouve' => false]);
+                }
+                // Un statut déjà tranché à la main n'est pas écrasé ; on ajoute seulement la réponse.
+                $fige = in_array($devis['statut'], ['Gagne', 'Perdu', 'Sans suite'], true);
+                $nouveau = ['commande' => 'Gagne', 'refus' => 'Perdu'][$classement] ?? 'Reponse recue';
+                if ($classement === 'sans_objet') {
+                    $nouveau = null;
+                }
+                $maj = ['updated_at' => $now];
+                $maj['reponse_client'] = trim(((string) ($devis['reponse_client'] ?? '')) . "\n\n"
+                    . '[' . $now . ' — ' . ($de ?? '') . ' — ' . $classement . ']' . "\n" . (string) $texte);
+                if ($nouveau !== null && !$fige) {
+                    $maj['statut'] = $nouveau;
+                }
+                update($db, 'cso_devis', (int) $devis['id'], $maj);
+                logEvent($db, 'cso', 'ok', 'reponse_client',
+                    'Devis ' . $devis['n_offre'] . ' - ' . ($devis['client'] ?? '') . ' : ' . $classement
+                        . ($maj['statut'] ?? null ? ' -> ' . $maj['statut'] : ($fige ? ' (statut conservé)' : ' (statut inchangé)')),
+                    ['id' => $devis['id'], 'de' => $de]);
+                out(['ok' => true, 'trouve' => true, 'devis_id' => (int) $devis['id'], 'n_offre' => $devis['n_offre'],
+                    'classement' => $classement, 'statut' => $maj['statut'] ?? $devis['statut'], 'statut_fige' => $fige]);
+            }
             if ($sub === 'lignes') {
                 out(['ok' => true, 'rows' => listRows($db, 'cso_lignes', 'date_traitement', $_GET, ['reference', 'designation', 'n_offre'])]);
             }
