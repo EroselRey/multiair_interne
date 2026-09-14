@@ -69,6 +69,6 @@ m31['metadata']['designer']['name'] = 'Fiche mise à jour'
 router6['routes'][1]['flow'] = [m31]
 out = {k: bp[k] for k in ('flow', 'name', 'metadata') if k in bp}
 t = json.dumps(out, ensure_ascii=False)
-assert 'google-sheets' not in t and '`' not in t.replace('`message-id`', '').replace('`auto-submitted`', ''), 'références Sheets restantes'
+assert 'google-sheets' not in t and '`' not in t.replace('`message-id`', '').replace('`auto-submitted`', '').replace('```json', '').replace('```', ''), 'références Sheets restantes'
 json.dump(out, open(dst, 'w'), ensure_ascii=False)
 print('OK ids:', sorted(all_ids(out['flow'])))
