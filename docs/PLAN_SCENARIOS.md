@@ -1,5 +1,8 @@
 # Plan — Page « Scénarios Make » dans le portail interne Multiair France
 
+Scénarios couverts : Répondeur IA, Chatbot Claire v11, Claire ADV (orchestrateur
+équipements + maintenance), CSO devis.
+
 Objectif : remplacer les Google Sheets alimentés par les scénarios Make par une page
 unique `calculateurs/interne/scenarios.html` (un onglet par scénario, tableau de bord,
 statistiques, historique, gestion), puis supprimer les Google Sheets.
@@ -44,15 +47,25 @@ Google Sheet `1axsxoEsXaFjexZl2UvPk0Wo8vBdYvuKt2R9vJvyHIFI`.
   au temps de réponse du chatbot. L'API doit répondre vite (< 200 ms).
 - Le lien « Voir le CRM complet » du mail interne pointe sur le Sheet → à remplacer par la page.
 
-### 1.3 Prix distributeur Worthington Creyssensac + CTS (9771233, INACTIF)
-- Mailhook → agent « Claire » (GPT) + Knowledge → réponse mail à l'expéditeur + Cyril.
-- **N'écrit dans aucun Google Sheet.** Aucun historique aujourd'hui.
-- Bug bloquant : le message envoyé à l'agent est un texte de test en dur
-  (« peux tu me faire un plan de maintenance pour le RLR 125 VPM pour 10000 h ») et le
-  `threadId` est fixe : le contenu réel du mail n'est jamais transmis.
-- Pas de séparation [AUTO]/[ESCALADE] : la réponse part au client même en escalade.
-- Pour cet onglet il faut **ajouter** un log (mail reçu, réponse IA, statut AUTO/ESCALADE)
-  et idéalement passer l'agent en sortie structurée.
+### 1.3 Claire ADV — Orchestrateur équipements + maintenance (9209946, actif)
+Mailhook `service.clients@multiairfrance.store` → filtres anti-automatique (Postmaster, Klaviyo,
+Brevo, auto-réponses, mails internes) → agent « Claire » (GPT, sortie texte, 2 outils
+Knowledge : catalogue équipements/prix et plans de maintenance) → mail de réponse à
+l'expéditeur + copie Cyril. Alerte mail à Cyril en cas d'échec de l'agent.
+- **N'écrit dans aucun Google Sheet.** Aucun historique aujourd'hui en dehors des logs Make.
+- La réponse IA contient un bloc `[ANALYSE]` (Techno, Critère, Pression, Configuration,
+  Cas = DEVIS DIRECT / STANDARD / LEAD / ESCALADE, Options retenues) puis `---` puis le tag
+  `[AUTO]` ou `[ESCALADE]` et le mail client. Seul le mail est envoyé ; l'analyse et le tag
+  sont perdus après l'exécution.
+- Pas de séparation [AUTO]/[ESCALADE] dans le flux : la réponse part au client même en escalade.
+- Environ 3 exécutions/heure mais 100 % s'arrêtent au filtre (1 opération) : le trafic réel
+  traité est faible (dernier traitement complet visible le 08/09).
+- Pour cet onglet il faut **ajouter** un appel HTTP après l'agent (pas en remplacer un) :
+  from, sujet, date, message, bloc ANALYSE parsé, tag, mail envoyé, message-id. Recommandé :
+  router sur le tag pour ne pas envoyer les [ESCALADE] au client et les mettre « à valider »
+  dans la page.
+- Le scénario « Prix distributeur Worthington Creyssensac +CTS » (9771233) est un clone
+  inactif de celui-ci avec un message de test en dur : à supprimer.
 
 ### 1.4 CSO — Analyse des devis et suivi commercial (9775498 + 9776471, actifs)
 Google Sheet `1paxA-HmDmXV1HM8SgiOHcL1m7tgkRrn11xwceRoHZLI`, onglets Devis (28 col.) et Lignes (11 col.).
@@ -78,7 +91,7 @@ Navigateur (scenarios.html) ────────────────┘ 
   Un seul point d'entrée `index.php`, routage par ressource, JSON in/out, clé API pour Make,
   session par mot de passe pour la page. Fichier SQLite dans un dossier protégé (`.htaccess deny`).
 - **Frontend : `scenarios.html`** statique, même style que le portail interne, Chart.js (cdnjs),
-  5 onglets : Vue d'ensemble, Répondeur IA, Chatbot Claire, Prix distributeur WCF, CSO devis.
+  5 onglets : Vue d'ensemble, Répondeur IA, Chatbot Claire, Claire ADV, CSO devis.
 - **Supabase : non nécessaire.** Volume < 100 lignes/jour, un seul utilisateur, tout reste chez
   l'hébergeur. Bascule vers Supabase uniquement si : (a) `pdo_sqlite` indisponible sur one.com,
   (b) besoin de plusieurs utilisateurs avec comptes distincts, (c) souhait d'une API hors
@@ -116,9 +129,11 @@ Chatbot Claire
   dest_libelle, dest_to, suivi (nouveau|contacte|converti|perdu), commentaire.
 - `chat_routage` : categorie, dest_to, dest_cc, libelle — éditable dans la page.
 
-Prix distributeur WCF + CTS
-- `wcf_demandes` : id, date, from_email, from_nom, sujet, message, reponse_ia, statut
-  (AUTO|ESCALADE|ERREUR), modele, palier, pieces_json, envoye_at, traite_par.
+Claire ADV
+- `adv_demandes` : id, date, message_id, from_email, from_nom, sujet, message, famille
+  (equipements|maintenance), cas (DEVIS DIRECT|STANDARD|LEAD|ESCALADE), techno, critere,
+  pression, configuration, options_retenues, tag (AUTO|ESCALADE|ERREUR), reponse_ia,
+  mail_envoye, envoye_at, statut_suivi (envoye|a_valider|valide|traite), traite_par.
 
 CSO devis
 - `cso_devis` : mêmes 28 champs que l'onglet Devis (clé unique n_offre) + id + contact_interne.
@@ -142,7 +157,8 @@ Toutes les routes sous `interne/api/index.php?r=…`, header `X-Api-Key`, JSON.
 | `chat/messages` | POST | addRow Feuille 2 |
 | `chat/leads` | POST | addRow Feuille 1 |
 | `chat/routage?categorie=…` | GET | filterRows Routage |
-| `wcf/demandes` | POST | — (nouveau) |
+| `adv/demandes` | POST | — (nouveau, après l'agent) |
+| `adv/demandes/{id}` | PATCH | — (validation manuelle des escalades) |
 | `cso/devis?n_offre=…` | GET | makeAPICall B2:B + filterRows Devis |
 | `cso/devis` | POST (upsert + lignes) | addRow Devis + Lignes, updateRow, batchUpdate delete |
 | `cso/devis?relance_due=1` | GET | filterRows Devis (Statut ∈ …) |
@@ -164,8 +180,9 @@ exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 - Chatbot Claire : KPI conversations / leads / taux de conversion / répartition catégories ;
   liste des conversations (fil complet par session) ; leads avec suivi commercial ;
   gestion de la table de routage.
-- Prix distributeur WCF : KPI mails traités / AUTO / ESCALADE / erreurs ; liste des demandes
-  avec la réponse IA ; marquage « traité ».
+- Claire ADV : KPI mails traités / famille équipements vs maintenance / AUTO vs ESCALADE /
+  cas DEVIS DIRECT-STANDARD-LEAD / erreurs ; liste des demandes avec analyse et réponse IA ;
+  file « à valider » pour les escalades ; marquage « traité ».
 - CSO devis : KPI devis du mois / montant HT / en attente / relancés / gagnés / perdus /
   taux de transformation ; tableau devis (statut éditable, réponse client, relances) ;
   détail = lignes du devis + historique versions + relances envoyées.
@@ -180,7 +197,7 @@ exécutions (succès/erreurs) du scénario, bouton « ouvrir dans Make ».
 | 3 | Bascule Chatbot Claire (3 modules → 3 HTTP) en double écriture Sheets + API | scénario 9295374 |
 | 4 | Bascule CSO (9775498 + 9776471) | 2 scénarios |
 | 5 | Bascule Répondeur IA (V2, V3, Aiguilleur, Relance 10 min) + suppression du sleep de V2 | 4 scénarios |
-| 6 | Prix distributeur WCF : correction du message en dur, sortie structurée, log API | scénario 9771233 |
+| 6 | Claire ADV : ajout du log API après l'agent, router AUTO/ESCALADE, suppression du clone 9771233 | scénario 9209946 |
 | 7 | 1 à 2 semaines en double écriture, contrôle, puis retrait des modules Sheets et archivage des Sheets | fin |
 
 Les modifications de scénarios se font via l'API Make (blueprints), module par module,
