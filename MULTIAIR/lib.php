@@ -36,25 +36,60 @@ function ma_db(): PDO
         ]);
         $pdo->exec('PRAGMA foreign_keys = ON');
         $pdo->exec('PRAGMA busy_timeout = 5000');
-        // Le schéma est idempotent (CREATE IF NOT EXISTS) : on l'applique à chaque démarrage
-        // si la base est neuve ou si la version de schéma a changé.
-        $schemaFile = __DIR__ . '/schema.sql';
-        $version = (string) filemtime($schemaFile);
-        $applied = null;
-        if (!$fresh) {
-            try {
-                $applied = $pdo->query("SELECT valeur FROM parametres WHERE cle='schema_version'")->fetchColumn();
-            } catch (Throwable $e) {
-                $applied = null;
-            }
-        }
-        if ($fresh || $applied !== $version) {
-            $pdo->exec(file_get_contents($schemaFile));
-            $st = $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)");
-            $st->execute([$version]);
-        }
+        ma_migrate($pdo, $fresh);
     }
     return $pdo;
+}
+
+/**
+ * Met la base à niveau. On ne se fie pas à un numéro de version (la date du fichier change
+ * selon le mode de transfert FTP) : on regarde réellement ce qui manque dans la base.
+ */
+function ma_migrate(PDO $pdo, bool $fresh): void
+{
+    // Tables et colonnes attendues par le code. Toute absence déclenche la mise à niveau.
+    $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'distributeurs',
+        'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
+        'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
+    $colonnes = [
+        'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0'],
+        'adv_demandes' => ['commentaire' => 'TEXT'],
+        'cso_devis' => ['commentaire' => 'TEXT', 'contact_interne' => 'TEXT'],
+        'cee_leads' => ['commentaire' => 'TEXT'],
+        'rep_demandes' => ['commentaire' => 'TEXT', 'email' => 'TEXT', 'departement' => 'TEXT'],
+    ];
+
+    $present = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
+    $manquantes = array_diff($tables, $present);
+
+    // Le schéma n'utilise que des CREATE ... IF NOT EXISTS : le rejouer est sans risque.
+    if ($fresh || $manquantes) {
+        $pdo->exec(file_get_contents(__DIR__ . '/schema.sql'));
+        $present = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
+    }
+
+    // Colonnes ajoutées après la première mise en service : CREATE IF NOT EXISTS ne les pose pas.
+    foreach ($colonnes as $table => $defs) {
+        if (!in_array($table, $present, true)) {
+            continue;
+        }
+        $existantes = array_column($pdo->query("PRAGMA table_info($table)")->fetchAll(), 'name');
+        foreach ($defs as $col => $type) {
+            if (!in_array($col, $existantes, true)) {
+                $pdo->exec("ALTER TABLE $table ADD COLUMN $col $type");
+            }
+        }
+    }
+
+    // Reprise de l'ancienne table de routage du chatbot vers la table commune.
+    if (in_array('chat_routage', $present, true) && in_array('routage', $present, true)) {
+        $pdo->exec("INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle)
+                    SELECT 'chatbot', lower(categorie), dest_to, COALESCE(dest_cc, ''), libelle
+                    FROM chat_routage WHERE categorie IS NOT NULL AND categorie != ''");
+    }
+
+    $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
+        ->execute([date('Y-m-d H:i:s')]);
 }
 
 function ma_session_start(): void

@@ -42,6 +42,31 @@ if (function_exists('curl_init')) {
     $htOk = in_array($code, [403, 404], true);
     $checks[] = ['Protection data/ (.htaccess)', $htOk, "HTTP $code sur data/.htaccess (403 ou 404 attendu)"];
 }
+// État de la base : tables et colonnes attendues par le code
+if (is_file(__DIR__ . '/config.php') && extension_loaded('pdo_sqlite')) {
+    try {
+        require_once __DIR__ . '/lib.php';
+        $db = ma_db();
+        $attendues = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'distributeurs',
+            'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
+            'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
+        $presentes = $db->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
+        $manque = array_diff($attendues, $presentes);
+        $checks[] = ['Tables de la base', !$manque, $manque ? 'MANQUANTES : ' . implode(', ', $manque) : count($attendues) . ' tables présentes'];
+        $colsLeads = array_column($db->query('PRAGMA table_info(chat_leads)')->fetchAll(), 'name');
+        $okCols = in_array('nb_mises_a_jour', $colsLeads, true) && in_array('updated_at', $colsLeads, true);
+        $checks[] = ['Regroupement des leads chatbot', $okCols, $okCols ? 'colonnes présentes' : 'colonnes de fusion absentes'];
+        $nbRoutage = in_array('routage', $presentes, true) ? (int) $db->query('SELECT COUNT(*) FROM routage')->fetchColumn() : 0;
+        $checks[] = ['Table de routage remplie', $nbRoutage > 0, $nbRoutage . ' ligne(s)'];
+        foreach (['chat_leads' => 'leads chatbot', 'cso_devis' => 'devis CSO', 'rep_demandes' => 'demandes Répondeur'] as $t => $lib) {
+            if (in_array($t, $presentes, true)) {
+                $checks[] = ['Données : ' . $lib, true, $db->query("SELECT COUNT(*) FROM $t")->fetchColumn() . ' ligne(s)'];
+            }
+        }
+    } catch (Throwable $e) {
+        $checks[] = ['État de la base', false, $e->getMessage()];
+    }
+}
 if (is_file(__DIR__ . '/config.php')) {
     $cfg = require __DIR__ . '/config.php';
     $checks[] = ['Mot de passe modifié', ($cfg['password'] ?? '') !== 'CHANGER_MOI', ''];

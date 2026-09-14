@@ -44,6 +44,24 @@ dates dans le Sheet et aurait envoyé les mêmes mails. Trois options avant dema
    directement dans l'onglet CSO de la page (le scénario ignore ces trois statuts).
 3. Mettre le scénario 9776471 en pause dans Make le temps de trier.
 
+## Incidents du 14/09 et corrections
+
+**Table `routage` absente en production.** La page affichait « no such table: routage » et l'API
+répondait en erreur sur les leads du chatbot. La base déposée était restée dans sa version
+initiale : la mise à niveau se déclenchait sur la date du fichier `schema.sql`, qui change selon
+le mode de transfert FTP. `ma_migrate()` vérifie désormais réellement les tables et colonnes
+présentes, crée ce qui manque et reprend l'ancienne table `chat_routage`. Les contrôles
+correspondants ont été ajoutés à `check.php`.
+
+**Adresses de routage invalides dans le chatbot.** Les deux premiers leads du 14/09 ont écrit
+la valeur `14` dans les colonnes « Service destinataire » et « Envoyé à » du Sheet, et les mails
+internes ont échoué (« Invalid email address in parameter to / cc »). En cause, l'expression
+`get(14; "1")` des modules 14 et 16 qui renvoyait le nombre 14 au lieu du contenu de la ligne
+de routage. Ce défaut datait des modifications du 10/09 et n'avait jamais été déclenché faute
+de lead depuis. Correction : les modules 14 et 16 sont supprimés, le routage vient maintenant
+de la réponse de `chat/leads`, avec repli sur cyril.mortier@airwco.com si l'API ne répond pas.
+Le filtre « Lead exploitable » a été déplacé sur l'appel API.
+
 ## Comportement en cas de panne de l'API
 
 Les modules HTTP sont réglés sur « ne pas traiter les codes d'erreur comme des erreurs ».
