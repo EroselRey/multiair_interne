@@ -758,6 +758,14 @@ try {
                 }
                 out(['ok' => true, 'rows' => listRows($db, 'cso_devis', 'date_traitement', $_GET, ['n_offre', 'client', 'contact_client', 'email_client', 'commercial', 'ref_demande_client', 'n_client'])]);
             }
+            if ($sub === 'relances' && $method === 'GET') {
+                // Historique des relances envoyées au client (avec la copie interne)
+                $rows = $db->query("SELECT r.id, r.date_envoi, r.numero, r.n_offre, r.destinataire, r.cc, r.devis_id,
+                        d.client, d.contact_client, d.commercial, d.montant_ht, d.statut, d.date_offre
+                    FROM cso_relances r LEFT JOIN cso_devis d ON d.id = r.devis_id
+                    ORDER BY r.date_envoi DESC, r.id DESC LIMIT 2000")->fetchAll();
+                out(['ok' => true, 'rows' => $rows]);
+            }
             if ($sub === 'relances' && $method === 'POST') {
                 // Enregistre une relance envoyée et met à jour le devis (remplace updateRow Statut / Relances_envoyees)
                 $id = (int) ($body['devis_id'] ?? 0);

@@ -576,7 +576,7 @@
   // ================================================================== CSO DEVIS
   const CSO_STATUTS = ['En attente', 'Relance 1', 'Relance 2', 'Relance 3', 'Gagne', 'Perdu', 'Sans suite'];
   tabs.cso = async () => {
-    const [s, devis, logs] = await Promise.all([api('stats/cso'), api('cso/devis'), api('log', {query: {scenario: 'cso', limit: 50}})]);
+    const [s, devis, relances, logs] = await Promise.all([api('stats/cso'), api('cso/devis'), api('cso/relances'), api('log', {query: {scenario: 'cso', limit: 50}})]);
     const k = s.kpi;
     main.innerHTML = `
       <div class="section-title"><h2>CSO — analyse des devis et suivi commercial</h2><span class="hint">scénarios Make 9775498 · 9776471 · boîte cso@multiairfrance.store</span></div>
@@ -600,6 +600,8 @@
       </div>
       <div class="section-title"><h2>Devis</h2><div class="tools"><span class="hint">Statut modifiable directement dans la liste</span> ${exportBtn('cso_devis')} ${exportBtn('cso_lignes')}</div></div>
       <div id="cso_tbl"></div>
+      <div class="section-title"><h2>Relances envoyées au client</h2><div class="tools"><span class="hint">Envoyées automatiquement à J+3, J+7 et J+15 par le scénario 9776471</span> ${exportBtn('cso_relances')}</div></div>
+      <div id="cso_rel"></div>
       <div class="section-title"><h2>Journal</h2></div>${journal(logs.rows)}`;
     barLine('c_cso', [{label: 'Devis', data: s.serie}, {label: 'Montant HT (€)', data: s.serie_montant, type: 'line', axis: 'y2'}],
       {scales: {y2: {position: 'right', beginAtZero: true, grid: {display: false}}}});
@@ -625,7 +627,7 @@
           ${cur.map((l) => `<tr style="cursor:default"><td>${h(l.poste)}</td><td>${h(l.reference)}</td><td>${h(l.designation)}</td><td class="num">${num(l.quantite)}</td><td class="num">${eur(l.prix_unitaire)}</td><td class="num">${eur(l.prix_total_ht)}</td><td>${h(l.pays_origine)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Aucune ligne</td></tr>'}
         </tbody></table></div>
         ${old.length ? `<h4>Versions précédentes (${old.length} lignes)</h4><div class="hint">${old.map((l) => `v${l.version} · ${h(l.reference)} · ${h(l.designation)} · ${eur(l.prix_total_ht)}`).join('<br>')}</div>` : ''}
-        <h4>Relances envoyées (${d.relances.length})</h4>${d.relances.length ? d.relances.map((r) => `<div>Relance ${r.numero} · ${fmtDate(r.date_envoi)} · ${h(r.destinataire)}</div>`).join('') : '<span class="hint">Aucune</span>'}
+        <h4>Relances envoyées (${d.relances.length})</h4>${d.relances.length ? d.relances.map((r) => `<div>Relance ${r.numero} · ${fmtDate(r.date_envoi)} · à ${h(r.destinataire) || '—'}${r.cc ? ` · copie : ${h(r.cc)}` : ''}</div>`).join('') : '<span class="hint">Aucune</span>'}
         <h4>Suivi commercial</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('cso/devis/' + d.id, readForm($('#drawerBody'), fields)); toast('Devis enregistré'); closeDrawer(); show('cso'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer ce devis et ses lignes ?')) { await api('cso/devis/' + d.id, {method: 'DELETE'}); closeDrawer(); show('cso'); } };
@@ -646,6 +648,18 @@
       afterRender: (el) => $$('[data-devis]', el).forEach((sel) => sel.addEventListener('change', async () => {
         await patch('cso/devis/' + sel.dataset.devis, {statut: sel.value}); toast('Statut mis à jour'); const d = devis.rows.find((x) => x.id == sel.dataset.devis); if (d) d.statut = sel.value; refreshBadges();
       }))});
+    table('#cso_rel', relances.rows, [
+      {key: 'date_envoi', label: 'Envoyée le', render: (r) => fmtDate(r.date_envoi)},
+      {key: 'numero', label: 'Relance', num: true, render: (r) => pill('n° ' + r.numero, r.numero >= 3 ? 'danger' : (r.numero === 2 ? 'warn' : 'info'))},
+      {key: 'n_offre', label: 'N° offre'},
+      {key: 'client', label: 'Client', render: (r) => clip(r.client)},
+      {key: 'destinataire', label: 'Envoyée à', render: (r) => r.destinataire ? `<a href="mailto:${h(r.destinataire)}">${h(r.destinataire)}</a>` : '<span class="hint">—</span>'},
+      {key: 'cc', label: 'En copie', render: (r) => r.cc ? clip(r.cc) : '<span class="hint">aucune</span>'},
+      {key: 'commercial', label: 'Commercial', render: (r) => clip((r.commercial || '').split('@')[0])},
+      {key: 'montant_ht', label: 'Montant HT', num: true, render: (r) => eur(r.montant_ht), sortVal: (r) => Number(r.montant_ht || 0)},
+      {key: 'statut', label: 'Statut du devis', render: (r) => pill(r.statut, cls(r.statut))},
+    ], {sort: 'date_envoi', filters: [{key: 'numero', label: 'Relance'}, {key: 'commercial', label: 'Commercial'}, {key: 'statut', label: 'Statut'}],
+      onRow: (r) => { const d = devis.rows.find((x) => x.id == r.devis_id); if (d) detail(d); }});
   };
 
   // ================================================================== PRIME CEE

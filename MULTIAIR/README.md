@@ -64,7 +64,7 @@ Pour PATCH/DELETE depuis Make, envoyer un POST avec `"_method": "PATCH"` dans le
 | `adv/demandes` | POST `{response, from_email, from_nom, sujet, message, message_id, tag}` | nouveau : journal Claire ADV (le bloc [ANALYSE] et le tag sont extraits côté API). Deux appels de même `message_id` = une seule ligne : `tag=RECU` (sans `response`) enregistre l'e-mail reçu, l'appel suivant la complète avec la réponse de Claire |
 | `cso/devis` | POST (sortie IA + `lignes[]`, `commercial`, `fichier_source`, `message_id`, `destinataire_email`, `copies_email`) → `{action: created/updated/unchanged/ignore}` | B2:B + addRow/updateRow Devis + addRow/delete Lignes |
 | `cso/devis/relances_dues` | GET → `{rows: [{…, relance_due: 1/2/3, email_relance, commercial_nom}]}` | filterRows Devis du scénario de relance |
-| `cso/relances` | POST `{n_offre, numero, destinataire, cc}` | updateRow Statut + Relances_envoyees |
+| `cso/relances` | POST `{n_offre, numero, destinataire, cc}` · GET (liste) | updateRow Statut + Relances_envoyees ; le GET alimente la section « Relances envoyées au client » (destinataire + copie) |
 | `cee/leads` | POST (champs du formulaire) | addRow Leads WCF |
 | `cee/leads/find&tel=…` | GET → `{trouve, lead, nb_simulations}` | filterRows Leads WCF + comptage |
 | `cee/conversations` | POST `{telephone, message, reply, profil, infos, qualifie, projet, urgence, decideur, action}` | addRow Conversations WCF |
