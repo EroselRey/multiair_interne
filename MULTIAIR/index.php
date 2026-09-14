@@ -45,7 +45,7 @@ document.getElementById('recoverBtn').addEventListener('click', async () => {
 </script>
 <?php else: ?>
 <header class="topbar">
-  <div class="brand">MULTIAIR <span>Scénarios Make · portail interne</span></div>
+  <div class="brand">MULTIAIR <span>Scénarios Make · portail interne · v<?= MA_VERSION ?></span></div>
   <div class="spacer"></div>
   <span class="user">Connecté : <?= htmlspecialchars((string) $login) ?></span>
   <button class="btn small" id="refreshBtn" title="Recharger les données">↻ Actualiser</button>

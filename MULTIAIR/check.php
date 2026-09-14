@@ -2,6 +2,8 @@
 // MULTIAIR — diagnostic de l'hébergement (à ouvrir une fois après dépôt, puis à supprimer)
 header('Content-Type: text/html; charset=utf-8');
 $checks = [];
+require_once __DIR__ . '/lib.php';
+$checks[] = ['Version du code déposé', true, MA_VERSION];
 $checks[] = ['Version PHP >= 8.0', version_compare(PHP_VERSION, '8.0.0', '>='), PHP_VERSION];
 $checks[] = ['Extension pdo_sqlite', extension_loaded('pdo_sqlite'), extension_loaded('pdo_sqlite') ? 'présente' : 'ABSENTE : basculer sur Supabase'];
 $checks[] = ['Extension json', extension_loaded('json'), ''];
@@ -45,7 +47,6 @@ if (function_exists('curl_init')) {
 // État de la base : tables et colonnes attendues par le code
 if (is_file(__DIR__ . '/config.php') && extension_loaded('pdo_sqlite')) {
     try {
-        require_once __DIR__ . '/lib.php';
         $db = ma_db();
         $attendues = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'distributeurs',
             'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',

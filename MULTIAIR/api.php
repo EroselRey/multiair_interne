@@ -88,7 +88,7 @@ if ($parts === ['auth', 'me']) {
     out(['ok' => true, 'connecte' => $viaSession, 'login' => $viaSession ? ($_SESSION['ma_login'] ?? 'admin') : null]);
 }
 if ($parts === ['ping']) {
-    out(['ok' => true, 'auth' => $viaApiKey ? 'api_key' : ($viaSession ? 'session' : 'aucune'), 'date' => ma_now()]);
+    out(['ok' => true, 'version' => MA_VERSION, 'auth' => $viaApiKey ? 'api_key' : ($viaSession ? 'session' : 'aucune'), 'date' => ma_now()]);
 }
 
 if (!$viaApiKey && !$viaSession) {
@@ -930,7 +930,12 @@ try {
     if ($db->inTransaction()) {
         $db->rollBack();
     }
-    fail('Erreur base de données : ' . $e->getMessage(), 500);
+    $msg = $e->getMessage();
+    if (str_contains($msg, 'no such table') || str_contains($msg, 'no such column')) {
+        fail("Base de données pas à jour (version du code : " . MA_VERSION . "). Déposez le dernier "
+            . "correctif MULTIAIR en écrasant les fichiers, puis rechargez la page. Détail : " . $msg, 500);
+    }
+    fail('Erreur base de données : ' . $msg, 500);
 } catch (Throwable $e) {
     fail('Erreur : ' . $e->getMessage(), 500);
 }

@@ -2,6 +2,9 @@
 // MULTIAIR — fonctions communes (config, base, session, utilitaires)
 declare(strict_types=1);
 
+// Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
+const MA_VERSION = '2026-09-14c';
+
 function ma_config(): array
 {
     static $cfg = null;
