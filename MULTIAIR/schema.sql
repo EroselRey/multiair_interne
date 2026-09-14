@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS cee_actions (
 
 INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('routage_fallback_email', 'cyril.mortier@airwco.com');
 INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('routage_fallback_libelle', 'Non classe');
+INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store');
 INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('chat_lead_fenetre_min', '60');
 -- Routage par défaut Répondeur IA (service pressenti -> destinataires du mail)
 INSERT OR IGNORE INTO routage(scenario, cle, dest_to, dest_cc, libelle) VALUES ('repondeur', 'technique', 'cyril.mortier@airwco.com', '', 'SAV / intervention technique');

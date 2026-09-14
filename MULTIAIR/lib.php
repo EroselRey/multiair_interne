@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-14f';
+const MA_VERSION = '2026-09-14g';
 
 function ma_config(): array
 {
@@ -91,6 +91,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
                     FROM chat_routage WHERE categorie IS NOT NULL AND categorie != ''");
     }
 
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store')");
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
         ->execute([date('Y-m-d H:i:s')]);
 }
@@ -446,6 +447,38 @@ function ma_routage(PDO $db, string $scenario, ?string $cle): array
 }
 
 /** Deux leads désignent-ils le même contact, à l'intérieur de la fenêtre de regroupement ? */
+/**
+ * Découpe une liste d'adresses (séparées par ; ou ,) en tableau [minuscule => adresse].
+ */
+function ma_liste_emails(?string $brut): array
+{
+    $out = [];
+    foreach (preg_split('/[;,]+/', (string) $brut) ?: [] as $p) {
+        $p = trim($p);
+        if ($p !== '' && filter_var($p, FILTER_VALIDATE_EMAIL)) {
+            $out[strtolower($p)] = $p;
+        }
+    }
+    return $out;
+}
+
+/**
+ * Destinataires d'une relance : la relance repart vers les mêmes personnes que
+ * le mail d'origine — le destinataire en « à », l'expéditeur (le commercial) et
+ * les copies du mail d'origine en « copie ». La boîte CSO elle-même est retirée
+ * pour ne pas se renvoyer le mail, et le destinataire n'est pas remis en copie.
+ */
+function ma_destinataires_relance(array $devis, ?string $boiteCso = null): array
+{
+    $to = trim((string) ($devis['destinataire_email'] ?: ($devis['email_client'] ?? '')));
+    $cc = ma_liste_emails($devis['commercial'] ?? null) + ma_liste_emails($devis['copies_email'] ?? null);
+    unset($cc[strtolower($to)]);
+    foreach (ma_liste_emails($boiteCso) as $k => $_) {
+        unset($cc[$k]);
+    }
+    return ['to' => $to, 'cc' => implode(';', array_values($cc))];
+}
+
 function ma_chat_meme_lead(array $a, array $b, int $windowMin): bool
 {
     $norm = fn($v) => mb_strtolower(trim((string) ($v ?? '')));

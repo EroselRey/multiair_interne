@@ -624,6 +624,9 @@ try {
                 if ($sub2 === 'relances_dues') {
                     // Remplace filterRows Devis du scénario de relance : renvoie les devis avec la relance à envoyer
                     $today = date('Y-m-d');
+                    $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'cso_boite'");
+                    $st->execute();
+                    $boiteCso = (string) ($st->fetchColumn() ?: 'cso@multiairfrance.store');
                     $rows = $db->query("SELECT * FROM cso_devis WHERE statut IN ('En attente','Relance 1','Relance 2') ORDER BY date_traitement")->fetchAll();
                     $due = [];
                     foreach ($rows as $r) {
@@ -643,7 +646,9 @@ try {
                             continue;
                         }
                         $r['relance_due'] = $num;
-                        $r['email_relance'] = $r['destinataire_email'] ?: $r['email_client'];
+                        $dest = ma_destinataires_relance($r, $boiteCso);
+                        $r['email_relance'] = $dest['to'];
+                        $r['cc_relance'] = $dest['cc'];
                         $r['commercial_nom'] = $r['commercial'] ? ucwords(str_replace('.', ' ', explode('@', $r['commercial'])[0])) : '';
                         $due[] = $r;
                     }
