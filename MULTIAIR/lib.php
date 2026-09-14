@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-14i';
+const MA_VERSION = '2026-09-14j';
 
 function ma_config(): array
 {
@@ -463,12 +463,10 @@ function ma_liste_emails(?string $brut): array
 }
 
 /**
- * Destinataires d'une relance : elle repart vers les mêmes personnes que le mail
- * d'origine. En « à » : le destinataire du devis et la boîte CSO (qui était en
- * copie du mail d'origine et garde ainsi la trace de l'échange). En « copie » :
- * l'expéditeur du devis (le commercial) et les autres copies du mail d'origine,
- * pour qu'il voie la relance partir. La réponse du client lui revient
- * directement grâce au Répondre-à positionné sur son adresse.
+ * Destinataires d'une relance : elle reprend la distribution du mail d'origine.
+ * En « à » : le destinataire du devis (le client). En « copie » : la boîte CSO,
+ * le commercial qui a fait le devis et les autres copies du mail d'origine.
+ * La réponse du client revient au commercial grâce au Répondre-à.
  */
 function ma_destinataires_relance(array $devis, ?string $boiteCso = null): array
 {
@@ -476,8 +474,9 @@ function ma_destinataires_relance(array $devis, ?string $boiteCso = null): array
     if (!$to) {
         $to = ma_liste_emails($devis['email_client'] ?? null);
     }
-    $to += ma_liste_emails($boiteCso);
-    $cc = ma_liste_emails($devis['commercial'] ?? null) + ma_liste_emails($devis['copies_email'] ?? null);
+    $cc = ma_liste_emails($devis['commercial'] ?? null)
+        + ma_liste_emails($devis['copies_email'] ?? null)
+        + ma_liste_emails($boiteCso);
     foreach ($to as $k => $_) {
         unset($cc[$k]);
     }
