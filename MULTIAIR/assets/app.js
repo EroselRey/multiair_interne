@@ -197,13 +197,13 @@
   const cls = (s) => {
     s = String(s || '').toLowerCase();
     if (/urgent|escalade|erreur|ecart|perdu|a_valider|a_traiter|à traiter/.test(s)) return 'danger';
-    if (/attente|relance|nouveau|draft|en_cours|sans/.test(s)) return 'warn';
+    if (/attente|relance|nouveau|draft|en_cours|sans|recu/.test(s)) return 'warn';
     if (/trait|gagn|auto|valide|converti|ok|envoye|qualifi|accueil/.test(s)) return 'ok';
     return 'muted';
   };
   const lbl = {
     a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traité', nouveau: 'Nouveau', contacte: 'Contacté', converti: 'Converti', perdu: 'Perdu',
-    qualifie: 'Qualifié', rappel_planifie: 'Rappel planifié', envoye: 'Envoyé', a_valider: 'À valider', valide: 'Validé',
+    qualifie: 'Qualifié', rappel_planifie: 'Rappel planifié', envoye: 'Envoyé', a_valider: 'À valider', valide: 'Validé', recu: 'Reçu, sans réponse',
     vapi_direct: 'Appel direct', whatsapp_qualifie: 'Qualifié WhatsApp', sans_reponse_10min: 'Sans réponse WhatsApp', import: 'Import Sheets',
   };
   const L = (v) => lbl[v] || v || '—';
@@ -444,10 +444,21 @@
         <div class="card"><h3>Messages et leads par jour (30 j)</h3><div class="chart-wrap"><canvas id="c_chat"></canvas></div></div>
         <div class="grid3" style="grid-template-columns:1fr">${distCard('Leads par catégorie', s.par_categorie)}${distCard('Leads par marque orientée', s.par_marque)}</div>
       </div>
-      <div class="section-title"><h2>Données</h2><div class="tools">${exportBtn('chat_leads')} ${exportBtn('chat_messages')}</div></div>
+      <div class="section-title"><h2>Données</h2><div class="tools"><button class="btn small" id="dedupLeads" title="Regroupe les leads identiques reçus à quelques minutes d'intervalle">⧉ Fusionner les doublons</button> ${exportBtn('chat_leads')} ${exportBtn('chat_messages')}</div></div>
       ${st.html}<div id="chat_sub"></div>`;
     barLine('c_chat', [{label: 'Messages', data: s.serie}, {label: 'Leads', data: s.serie_leads, type: 'line'}]);
     st.bind(main);
+    $('#dedupLeads').onclick = async (e) => {
+      if (!confirm("Regrouper les leads identiques reçus dans la même fenêtre de temps ?\n\nLes doublons sont fusionnés dans le lead le plus ancien (suivi et commentaire conservés). Action définitive.")) return;
+      const b = e.currentTarget; b.disabled = true; b.textContent = 'Fusion en cours…';
+      try {
+        const r = await api('chat/leads/dedup', {method: 'POST'});
+        toast(r.fusionnes ? `${r.fusionnes} doublon(s) fusionné(s) — ${r.restants} lead(s)` : 'Aucun doublon à fusionner');
+        if (r.fusionnes) { show('chatbot'); refreshBadges(); } else { b.disabled = false; b.textContent = '⧉ Fusionner les doublons'; }
+      } catch (err) {
+        toast(err.message, true); b.disabled = false; b.textContent = '⧉ Fusionner les doublons';
+      }
+    };
 
     const lead = (l) => {
       const fields = [
@@ -510,10 +521,12 @@
     const [s, dem, logs] = await Promise.all([api('stats/adv'), api('adv/demandes'), api('log', {query: {scenario: 'adv', limit: 50}})]);
     const k = s.kpi;
     main.innerHTML = `
-      <div class="section-title"><h2>Claire ADV — orchestrateur équipements + maintenance</h2><span class="hint">scénario Make 9209946 · boîte service.clients@multiairfrance.store</span></div>
+      <div class="section-title"><h2>Claire ADV — e-mails équipements et maintenance</h2><span class="hint">scénario Make 9209946 · boîte service.clients@multiairfrance.store</span></div>
       <div class="kpis">
-        ${kpi(num(k.mails_j30), 'Mails traités sur 30 jours')}
-        ${kpi(num(k.mails_total), 'Mails traités au total')}
+        ${kpi(num(k.mails_recus), 'E-mails reçus au total')}
+        ${kpi(num(k.mails_j30), 'E-mails traités sur 30 jours')}
+        ${kpi(num(k.mails_total), 'E-mails traités au total')}
+        ${kpi(num(k.non_traites), 'Reçus sans réponse', k.non_traites ? 'warn' : 'ok')}
         ${kpi(num(k.auto), 'Réponses automatiques [AUTO]', 'ok')}
         ${kpi(num(k.escalade), 'Escalades', k.escalade ? 'warn' : '')}
         ${kpi(num(k.a_valider), 'À valider', k.a_valider ? 'danger' : 'ok')}
@@ -522,10 +535,10 @@
         ${kpi(num(k.erreurs), 'Erreurs agent', k.erreurs ? 'danger' : '')}
       </div>
       <div class="grid2" style="margin-top:12px">
-        <div class="card"><h3>Mails traités par jour (30 j)</h3><div class="chart-wrap"><canvas id="c_adv"></canvas></div></div>
+        <div class="card"><h3>E-mails reçus par jour (30 j)</h3><div class="chart-wrap"><canvas id="c_adv"></canvas></div></div>
         <div class="grid3" style="grid-template-columns:1fr">${distCard('Par cas', s.par_cas)}${distCard('Par technologie', s.par_techno)}</div>
       </div>
-      <div class="section-title"><h2>Demandes traitées</h2><div class="tools">${exportBtn('adv_demandes')}</div></div>
+      <div class="section-title"><h2>E-mails reçus et réponses</h2><div class="tools">${exportBtn('adv_demandes')}</div></div>
       <div id="adv_tbl"></div>
       <div class="section-title"><h2>Routage des mails</h2></div>
       <div id="adv_routage"></div>
@@ -535,15 +548,15 @@
       hint: "Cas détecté par Claire (DEVIS DIRECT / STANDARD / LEAD / MAINTENANCE) → destinataires en copie de la réponse. ESCALADE et ERREUR → personnes qui reçoivent la demande à valider au lieu du client."});
     const detail = (d) => {
       const fields = [
-        {key: 'statut_suivi', label: 'Suivi', type: 'select', options: [['envoye', 'Envoyé au client'], ['a_valider', 'À valider'], ['valide', 'Validé'], ['traite', 'Traité']]},
+        {key: 'statut_suivi', label: 'Suivi', type: 'select', options: [['recu', 'Reçu, sans réponse'], ['envoye', 'Envoyé au client'], ['a_valider', 'À valider'], ['valide', 'Validé'], ['traite', 'Traité']]},
         {key: 'traite_par', label: 'Traité par'}, {key: 'commentaire', label: 'Commentaire', type: 'textarea'},
       ];
       openDrawer(`${h(d.sujet || '(sans objet)')}`, `
         ${kv([['Date', fmtDate(d.date)], ['Expéditeur', h([d.from_nom, d.from_email].filter(Boolean).join(' — '))], ['Tag', pill(d.tag, cls(d.tag))], ['Famille', h(d.famille)], ['Cas', pill(d.cas, cls(d.cas))],
           ['Techno', h(d.techno)], ['Critère', h(d.critere)], ['Pression', h(d.pression)], ['Configuration', h(d.configuration)], ['Options retenues', h(d.options_retenues)],
           ['Envoyé le', fmtDate(d.envoye_at)], ['Message-ID', h(d.message_id)]])}
-        <h4>Message du client</h4><pre class="raw">${h(d.message || '—')}</pre>
-        <h4>Mail envoyé / proposé par Claire</h4><pre class="raw">${h(d.mail_envoye || '—')}</pre>
+        <h4>Question du client</h4><pre class="raw">${h(d.message || '—')}</pre>
+        <h4>Réponse de Claire ${d.tag === 'RECU' ? '<span class="hint">(aucune : e-mail écarté par les filtres)</span>' : ''}</h4><pre class="raw">${h(d.mail_envoye || '—')}</pre>
         ${d.analyse_brute ? `<h4>Bloc d'analyse</h4><pre class="raw">${h(d.analyse_brute)}</pre>` : ''}
         <h4>Suivi</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('adv/demandes/' + d.id, readForm($('#drawerBody'), fields)); toast('Enregistré'); closeDrawer(); show('adv'); refreshBadges(); };

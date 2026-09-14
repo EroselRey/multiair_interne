@@ -460,6 +460,12 @@ try {
                 out(['ok' => true, 'rows' => $rows]);
             }
             if ($sub === 'leads') {
+                if ($sub2 === 'dedup') {
+                    // Regroupement des doublons déjà enregistrés (import historique)
+                    $r = ma_chat_dedup($db);
+                    logEvent($db, 'chatbot', 'ok', 'dedup', $r['fusionnes'] . ' doublon(s) fusionné(s), ' . $r['restants'] . ' lead(s) restant(s)', $r);
+                    out(['ok' => true] + $r);
+                }
                 if ($method === 'POST' && $sub2 === null) {
                     // Regroupement : un lead identique (session, société+nom, email ou téléphone) reçu dans la
                     // fenêtre paramétrée (chat_lead_fenetre_min, 60 min par défaut) met à jour le lead existant.
@@ -514,7 +520,7 @@ try {
                             break;
                         }
                     }
-                    $tag = ma_str($body['tag'] ?? null) ?? $tag ?? 'AUTO';
+                    $tag = ma_str($body['tag'] ?? null) ?? $tag ?? ($resp === '' ? 'RECU' : 'AUTO');
                     $mailClean = trim(str_ireplace(['[AUTO]', '[DRAFT]', '[ESCALADE]'], '', $mail));
                     $champ = function (string $label) use ($analyse): ?string {
                         if ($analyse === null) {
@@ -525,8 +531,9 @@ try {
                         }
                         return null;
                     };
-                    $famille = ma_str($body['famille'] ?? null) ?? (($analyse !== null && stripos($analyse, '[ANALYSE]') !== false) ? 'equipements'
-                        : ((stripos($resp, 'maintenance') !== false || stripos($resp, 'Cadence des visites') !== false) ? 'maintenance' : 'equipements'));
+                    $famille = ma_str($body['famille'] ?? null) ?? ($resp === '' ? null
+                        : ((($analyse !== null && stripos($analyse, '[ANALYSE]') !== false) ? 'equipements'
+                            : ((stripos($resp, 'maintenance') !== false || stripos($resp, 'Cadence des visites') !== false) ? 'maintenance' : 'equipements'))));
                     $d = [
                         'date' => ma_date($body['date'] ?? null) ?? $now,
                         'message_id' => ma_str($body['message_id'] ?? null),
@@ -546,14 +553,39 @@ try {
                         'reponse_ia' => $resp,
                         'mail_envoye' => ma_str($body['mail_envoye'] ?? null) ?? $mailClean,
                         'envoye_at' => ma_bool($body['envoye'] ?? ($tag === 'AUTO')) ? $now : null,
-                        'statut_suivi' => $tag === 'AUTO' ? 'envoye' : 'a_valider',
+                        'statut_suivi' => $tag === 'RECU' ? 'recu' : ($tag === 'AUTO' ? 'envoye' : 'a_valider'),
                         'commentaire' => ma_str($body['commentaire'] ?? null),
                     ];
-                    $id = insert($db, 'adv_demandes', $d);
-                    logEvent($db, 'adv', $tag === 'ERREUR' ? 'erreur' : 'ok', 'mail_traite', ($d['from_email'] ?? '') . ' - ' . ($d['sujet'] ?? '') . ' [' . $tag . ']', ['id' => $id]);
+                    // Le scénario écrit deux fois : à la réception du mail (tag RECU) puis après
+                    // la réponse de Claire. Même Message-ID = même demande, on complète la ligne.
+                    $existant = null;
+                    if ($d['message_id'] !== null && $d['message_id'] !== '') {
+                        $st = $db->prepare('SELECT * FROM adv_demandes WHERE message_id = ? ORDER BY id DESC LIMIT 1');
+                        $st->execute([$d['message_id']]);
+                        $existant = $st->fetch() ?: null;
+                    }
+                    $action = 'created';
+                    if ($existant) {
+                        $action = 'updated';
+                        $id = (int) $existant['id'];
+                        if ($tag === 'RECU') {
+                            // Le mail est déjà journalisé (rejeu du webhook) : on ne touche à rien.
+                            $maj = [];
+                        } else {
+                            $maj = array_filter($d, fn($v) => $v !== null && $v !== '');
+                            unset($maj['date'], $maj['message_id'], $maj['commentaire']);
+                        }
+                        if ($maj) {
+                            update($db, 'adv_demandes', $id, $maj);
+                        }
+                    } else {
+                        $id = insert($db, 'adv_demandes', $d);
+                    }
+                    logEvent($db, 'adv', $tag === 'ERREUR' ? 'erreur' : 'ok', $tag === 'RECU' ? 'mail_recu' : 'mail_traite',
+                        ($d['from_email'] ?? '') . ' - ' . ($d['sujet'] ?? '') . ' [' . $tag . ']', ['id' => $id]);
                     $cleRoutage = in_array($tag, ['ESCALADE', 'ERREUR'], true) ? $tag : ($famille === 'maintenance' ? 'MAINTENANCE' : ($d['cas'] ?? 'STANDARD'));
                     $rt = ma_routage($db, 'adv', $cleRoutage);
-                    out(['ok' => true, 'id' => $id, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'], 'mail' => $mailClean, 'statut_suivi' => $d['statut_suivi'],
+                    out(['ok' => true, 'id' => $id, 'action' => $action, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'], 'mail' => $mailClean, 'statut_suivi' => $d['statut_suivi'],
                         'envoyer_au_client' => $tag === 'AUTO', 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {

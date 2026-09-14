@@ -56,11 +56,12 @@ Pour PATCH/DELETE depuis Make, envoyer un POST avec `"_method": "PATCH"` dans le
 | `distributeurs/find&societe=…` | GET → `{trouve, commercial, compte, extra}` | filterRows DISTRIBUTEUR |
 | `chat/messages` | POST `{session_id, message, reply, page_url}` | addRow Feuille 2 |
 | `chat/leads` | POST (champs du bloc lead) → `{action: created/merged, nouveau, dest_to, dest_cc, dest_libelle}` | addRow Feuille 1 — un lead identique (session, société+nom, email ou téléphone) reçu dans les 60 min (paramètre `chat_lead_fenetre_min`) met à jour le lead existant ; n'envoyer mail interne / SMS que si `nouveau = true` |
+| `chat/leads/dedup` | POST → `{fusionnes, restants}` | bouton « Fusionner les doublons » de l'onglet Chatbot : regroupe les leads identiques déjà enregistrés (import historique) |
 | `chat/routage/find&categorie=…` | GET → `{dest_to, dest_cc, dest_libelle}` | filterRows Routage (repli automatique) |
 | `rep/routage/find&cle=technique` | GET → `{dest_to, dest_cc, dest_libelle}` | nouveau : destinataires des mails SAV / Commercial / Finance (aussi renvoyés par `POST rep/demandes`) |
 | `adv/routage/find&cle=…` | GET → `{dest_to, dest_cc, dest_libelle}` | nouveau : destinataires par cas (DEVIS DIRECT, STANDARD, LEAD, MAINTENANCE, ESCALADE, ERREUR), aussi renvoyés par `POST adv/demandes` avec `envoyer_au_client` |
 | `routage&scenario=chatbot|repondeur|adv` | GET / POST `{cle, dest_to, dest_cc, libelle}` / DELETE | gestion de la table de routage (éditable dans la page) |
-| `adv/demandes` | POST `{response, from_email, from_nom, sujet, message, message_id}` | nouveau : journal Claire ADV (le bloc [ANALYSE] et le tag sont extraits côté API) |
+| `adv/demandes` | POST `{response, from_email, from_nom, sujet, message, message_id, tag}` | nouveau : journal Claire ADV (le bloc [ANALYSE] et le tag sont extraits côté API). Deux appels de même `message_id` = une seule ligne : `tag=RECU` (sans `response`) enregistre l'e-mail reçu, l'appel suivant la complète avec la réponse de Claire |
 | `cso/devis` | POST (sortie IA + `lignes[]`, `commercial`, `fichier_source`, `message_id`, `destinataire_email`, `copies_email`) → `{action: created/updated/unchanged/ignore}` | B2:B + addRow/updateRow Devis + addRow/delete Lignes |
 | `cso/devis/relances_dues` | GET → `{rows: [{…, relance_due: 1/2/3, email_relance, commercial_nom}]}` | filterRows Devis du scénario de relance |
 | `cso/relances` | POST `{n_offre, numero, destinataire, cc}` | updateRow Statut + Relances_envoyees |

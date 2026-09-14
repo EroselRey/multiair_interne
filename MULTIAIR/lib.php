@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-14c';
+const MA_VERSION = '2026-09-14e';
 
 function ma_config(): array
 {
@@ -443,4 +443,116 @@ function ma_routage(PDO $db, string $scenario, ?string $cle): array
         'dest_cc' => ($r && $r['dest_cc'] !== null && $r['dest_cc'] !== '') ? $r['dest_cc'] : ($scenario === 'chatbot' ? $fb : ''),
         'dest_libelle' => ($r && $r['libelle']) ? $r['libelle'] : ($params['routage_fallback_libelle'] ?? 'Non classe'),
     ];
+}
+
+/** Deux leads désignent-ils le même contact, à l'intérieur de la fenêtre de regroupement ? */
+function ma_chat_meme_lead(array $a, array $b, int $windowMin): bool
+{
+    $norm = fn($v) => mb_strtolower(trim((string) ($v ?? '')));
+    $bad = ['', 'non communiqué', 'non communique', 'non renseigné', 'non renseigne', 'nc', 'n/a', '-', 'inconnu'];
+    // Fenêtre : on compare la date du candidat à la dernière activité du lead conservé.
+    $ref = max((string) $a['date'], (string) ($a['updated_at'] ?? ''));
+    if (abs(strtotime((string) $b['date']) - strtotime($ref)) > $windowMin * 60) {
+        return false;
+    }
+    $sa = trim((string) ($a['session_id'] ?? ''));
+    $sb = trim((string) ($b['session_id'] ?? ''));
+    if ($sa !== '' && $sa === $sb) {
+        return true;
+    }
+    $ea = $norm($a['email'] ?? ''); $eb = $norm($b['email'] ?? '');
+    if (!in_array($ea, $bad, true) && str_contains($ea, '@') && $ea === $eb) {
+        return true;
+    }
+    $ta = ma_tel((string) ($a['telephone'] ?? '')); $tb = ma_tel((string) ($b['telephone'] ?? ''));
+    if ($ta !== null && strlen($ta) >= 9 && $ta === $tb) {
+        return true;
+    }
+    $ca = $norm($a['societe'] ?? ''); $cb = $norm($b['societe'] ?? '');
+    $na = $norm($a['nom'] ?? ''); $nb = $norm($b['nom'] ?? '');
+    if (!in_array($ca, $bad, true) && $ca === $cb) {
+        if (!in_array($na, $bad, true) && $na === $nb) {
+            return true;
+        }
+        if (in_array($na, $bad, true) && in_array($nb, $bad, true)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Regroupe les doublons déjà présents dans la table (import historique, ou leads reçus
+ * avant la mise en place du regroupement). Conserve le lead le plus ancien et son suivi
+ * commercial, complète ses champs vides avec ceux des doublons, puis supprime ces derniers.
+ */
+function ma_chat_dedup(PDO $db, ?int $windowMin = null): array
+{
+    if ($windowMin === null) {
+        $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'chat_lead_fenetre_min'");
+        $st->execute();
+        $windowMin = (int) ($st->fetchColumn() ?: 60);
+    }
+    $norm = fn($v) => mb_strtolower(trim((string) ($v ?? '')));
+    $bad = ['', 'non communiqué', 'non communique', 'non renseigné', 'non renseigne', 'nc', 'n/a', '-', 'inconnu'];
+    $rows = $db->query('SELECT * FROM chat_leads ORDER BY date, id')->fetchAll();
+    $gardes = [];
+    $aSupprimer = [];
+    $fusions = [];
+    foreach ($rows as $r) {
+        $cible = null;
+        foreach ($gardes as $i => $g) {
+            if (ma_chat_meme_lead($g, $r, $windowMin)) {
+                $cible = $i;
+                break;
+            }
+        }
+        if ($cible === null) {
+            $gardes[] = $r;
+            continue;
+        }
+        $g = $gardes[$cible];
+        foreach ($r as $c => $v) {
+            if (in_array($c, ['id', 'date', 'suivi', 'commentaire', 'nb_mises_a_jour', 'updated_at'], true)) {
+                continue;
+            }
+            $vs = $norm($v);
+            if ($vs === '' || in_array($vs, $bad, true)) {
+                continue;
+            }
+            // Le doublon, plus récent, porte l'information la plus à jour.
+            $g[$c] = $v;
+        }
+        if (($g['suivi'] ?? 'nouveau') === 'nouveau' && ($r['suivi'] ?? 'nouveau') !== 'nouveau') {
+            $g['suivi'] = $r['suivi'];
+        }
+        if (empty($g['commentaire']) && !empty($r['commentaire'])) {
+            $g['commentaire'] = $r['commentaire'];
+        }
+        $g['updated_at'] = max((string) $r['date'], (string) ($g['updated_at'] ?? ''));
+        $g['nb_mises_a_jour'] = (int) ($g['nb_mises_a_jour'] ?? 0) + 1;
+        $gardes[$cible] = $g;
+        $aSupprimer[] = (int) $r['id'];
+        $fusions[(int) $g['id']] = true;
+    }
+    if (!$aSupprimer) {
+        return ['fusionnes' => 0, 'restants' => count($rows), 'leads_touches' => 0];
+    }
+    $db->beginTransaction();
+    foreach ($gardes as $g) {
+        if (!isset($fusions[(int) $g['id']])) {
+            continue;
+        }
+        $data = $g;
+        $id = (int) $data['id'];
+        unset($data['id']);
+        $set = implode(',', array_map(fn($k) => "$k = ?", array_keys($data)));
+        $vals = array_values($data);
+        $vals[] = $id;
+        $db->prepare("UPDATE chat_leads SET $set WHERE id = ?")->execute($vals);
+    }
+    $db->prepare('DELETE FROM chat_leads WHERE id IN (' . implode(',', array_fill(0, count($aSupprimer), '?')) . ')')
+        ->execute($aSupprimer);
+    $db->commit();
+    return ['fusionnes' => count($aSupprimer), 'restants' => count($rows) - count($aSupprimer), 'leads_touches' => count($fusions)];
 }

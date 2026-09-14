@@ -126,8 +126,10 @@ function ma_stats(PDO $db, string $scenario, array $q): array
         case 'adv':
             return [
                 'kpi' => [
-                    'mails_total' => ma_count($db, 'SELECT COUNT(*) FROM adv_demandes'),
-                    'mails_j30' => ma_count($db, 'SELECT COUNT(*) FROM adv_demandes WHERE substr(date,1,10) >= ?', [$d30]),
+                    'mails_recus' => ma_count($db, 'SELECT COUNT(*) FROM adv_demandes'),
+                    'mails_total' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE tag IS NOT NULL AND tag != 'RECU'"),
+                    'mails_j30' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE tag IS NOT NULL AND tag != 'RECU' AND substr(date,1,10) >= ?", [$d30]),
+                    'non_traites' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE tag = 'RECU'"),
                     'auto' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE tag = 'AUTO'"),
                     'escalade' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE tag = 'ESCALADE'"),
                     'a_valider' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE statut_suivi = 'a_valider'"),

@@ -55,7 +55,7 @@ document.getElementById('recoverBtn').addEventListener('click', async () => {
   <button data-tab="overview" class="active">Vue d'ensemble</button>
   <button data-tab="repondeur">Répondeur IA <span class="badge zero" data-badge="repondeur">0</span></button>
   <button data-tab="chatbot">Chatbot Claire <span class="badge zero" data-badge="chatbot">0</span></button>
-  <button data-tab="adv">Claire ADV <span class="badge zero" data-badge="adv">0</span></button>
+  <button data-tab="adv">Claire ADV (e-mails) <span class="badge zero" data-badge="adv">0</span></button>
   <button data-tab="cso">CSO devis <span class="badge zero" data-badge="cso">0</span></button>
   <button data-tab="cee">Prime CEE <span class="badge zero" data-badge="cee">0</span></button>
 </nav>
