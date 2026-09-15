@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-14k';
+const MA_VERSION = '2026-09-15a';
 
 function ma_config(): array
 {
@@ -92,6 +92,19 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     }
 
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store')");
+    // Les leads importés du Google Sheet n'étaient pas regroupés : on le fait une
+    // seule fois, automatiquement, au premier chargement après le dépôt.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'dedup_initial'");
+    $st->execute();
+    if (!$st->fetchColumn()) {
+        $r = ma_chat_dedup($pdo);
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('dedup_initial', ?)")
+            ->execute([ma_now() . ' : ' . $r['fusionnes'] . ' fusionné(s), ' . $r['restants'] . ' restant(s)']);
+        $pdo->prepare('INSERT INTO executions_log(date, scenario, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
+            ->execute([ma_now(), 'chatbot', 'ok', 'dedup_automatique',
+                $r['fusionnes'] . ' doublon(s) regroupé(s) automatiquement, ' . $r['restants'] . ' lead(s) restant(s)',
+                json_encode($r, JSON_UNESCAPED_UNICODE)]);
+    }
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
         ->execute([date('Y-m-d H:i:s')]);
 }

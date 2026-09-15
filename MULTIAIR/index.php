@@ -11,7 +11,7 @@ $login = $logged ? ($_SESSION['ma_login'] ?? 'admin') : null;
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>MULTIAIR — Scénarios</title>
-<link rel="stylesheet" href="assets/style.css?v=<?= filemtime(__DIR__ . '/assets/style.css') ?>">
+<link rel="stylesheet" href="assets/style.css?v=<?= MA_VERSION ?>">
 </head>
 <body class="<?= $logged ? '' : 'page-simple' ?>">
 <?php if (!$logged): ?>
@@ -68,7 +68,7 @@ document.getElementById('recoverBtn').addEventListener('click', async () => {
 </aside>
 <div class="toast" id="toast"></div>
 <script src="assets/chart.umd.js?v=4.4.1"></script>
-<script src="assets/app.js?v=<?= filemtime(__DIR__ . '/assets/app.js') ?>"></script>
+<script src="assets/app.js?v=<?= MA_VERSION ?>"></script>
 <?php endif; ?>
 </body>
 </html>
