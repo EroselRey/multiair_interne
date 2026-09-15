@@ -309,11 +309,23 @@
   // ================================================================== RÉPONDEUR IA
   const repSub = {v: 'fiches'};
   tabs.repondeur = async () => {
-    const [s, fiches, demandes, dist, logs] = await Promise.all([
-      api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('distributeurs', {query: {limit: 5000}}), api('log', {query: {scenario: 'repondeur', limit: 50}}),
+    const [s, fiches, demandes, conv, dist, logs] = await Promise.all([
+      api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('rep/messages', {query: {limit: 2000}}),
+      api('distributeurs', {query: {limit: 5000}}), api('log', {query: {scenario: 'repondeur', limit: 50}}),
     ]);
+    // une ligne par numéro : le fil complet des échanges avec Claire
+    const fils = [...conv.rows.reduce((m, r) => {
+      const cle = r.tel_norm || ('fiche-' + r.fiche_id);
+      const f = m.get(cle) || {cle, tel_norm: r.tel_norm, fiche_id: r.fiche_id, societe: r.societe, contact: r.contact,
+        service: r.service, fiche_statut: r.fiche_statut, canal: r.canal, nb: 0, debut: r.date, fin: r.date, echanges: []};
+      f.nb++; f.echanges.push(r);
+      if (r.date < f.debut) f.debut = r.date;
+      if (r.date > f.fin) f.fin = r.date;
+      f.societe = f.societe || r.societe; f.contact = f.contact || r.contact;
+      return m.set(cle, f);
+    }, new Map()).values()];
     const k = s.kpi;
-    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['demandes', `Demandes SAV / Commercial / Finance (${demandes.rows.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['routage', 'Routage des mails'], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
+    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['demandes', `Demandes SAV / Commercial / Finance (${demandes.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['routage', 'Routage des mails'], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
     main.innerHTML = `
       <div class="section-title"><h2>Répondeur IA — appels VAPI et suivi WhatsApp</h2><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
       <div class="kpis">
@@ -330,11 +342,25 @@
         <div class="card"><h3>Appels et demandes par jour (30 j)</h3><div class="chart-wrap"><canvas id="c_rep"></canvas></div></div>
         <div class="grid3" style="grid-template-columns:1fr">${distCard('Demandes par service', s.par_service)}${distCard('Fiches par statut', s.par_statut)}</div>
       </div>
-      <div class="section-title"><h2>Données</h2><div class="tools">${exportBtn('rep_fiches')} ${exportBtn('rep_demandes')}</div></div>
+      <div class="section-title"><h2>Données</h2><div class="tools">${exportBtn('rep_fiches')} ${exportBtn('rep_demandes')} ${exportBtn('rep_messages')}</div></div>
       ${st.html}<div id="rep_sub"></div>`;
     barLine('c_rep', [{label: 'Appels (fiches)', data: s.serie}, {label: 'Demandes transmises', data: s.serie_demandes, type: 'line'}]);
     st.bind(main);
 
+    const bulles = (echanges) => `<div class="chat">${echanges.map((m) => `
+      ${m.message ? `<div class="bubble u"><span class="t">Client · ${fmtDate(m.date)}${m.canal ? ' · ' + h(m.canal) : ''}</span>${h(m.message)}</div>` : ''}
+      ${m.reponse ? `<div class="bubble a"><span class="t">Claire</span>${h(m.reponse)}</div>` : ''}`).join('')}</div>`;
+    const conversation = (f) => {
+      const e = [...f.echanges].sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id - b.id));
+      openDrawer(`Conversation — ${h(f.societe || f.contact || f.tel_norm || '')}`, `
+        ${kv([['Téléphone', h(f.tel_norm)], ['Société', h(f.societe)], ['Contact', h(f.contact)],
+          ['Service', h(f.service)], ['Statut de la fiche', pill(f.fiche_statut, cls(f.fiche_statut))],
+          ['Premier échange', fmtDate(f.debut)], ['Dernier échange', fmtDate(f.fin)], ['Échanges', f.nb],
+          ['Fiche d\'appel', f.fiche_id ? `<button class="link" id="goFiche">#${f.fiche_id}</button>` : '<span class="hint">aucune</span>']])}
+        ${bulles(e)}`);
+      const g = $('#goFiche');
+      if (g) g.onclick = () => { const x = fiches.rows.find((r) => r.id === f.fiche_id); if (x) fiche(x); };
+    };
     const fiche = (f) => {
       const fields = [
         {key: 'statut', label: 'Statut', type: 'select', options: ['En attente', 'Urgent', 'Transmis', 'Traite', 'Transmis (sans réponse WhatsApp)']},
@@ -349,7 +375,11 @@
           ['Besoin commercial', h(f.besoin_commercial)], ['Réf. facture', h(f.reference_facture)], ['Justification urgence', h(f.justification_urgence)],
           ['Dernière réponse IA', h(f.derniere_reponse_ia)], ['Mis à jour', fmtDate(f.updated_at)], ['Transmis le', fmtDate(f.transmis_at)]])}
         <h4>Modifier</h4>${editForm(fields, f)}
-        <h4>Demandes transmises (${dems.length})</h4>${dems.length ? dems.map((d) => `<div>${pill(d.service, 'info')} ${pill(d.priorite, cls(d.priorite))} ${fmtDate(d.created_at)} — ${h(d.resume || '')} <span class="hint">(${L(d.source)})</span></div>`).join('') : '<span class="hint">Aucune</span>'}`,
+        <h4>Demandes transmises (${dems.length})</h4>${dems.length ? dems.map((d) => `<div>${pill(d.service, 'info')} ${pill(d.priorite, cls(d.priorite))} ${fmtDate(d.created_at)} — ${h(d.resume || '')} <span class="hint">(${L(d.source)})</span></div>`).join('') : '<span class="hint">Aucune</span>'}
+        <h4>Conversation avec Claire (${conv.rows.filter((m) => m.fiche_id === f.id).length})</h4>${(() => {
+          const e = conv.rows.filter((m) => m.fiche_id === f.id).sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id - b.id));
+          return e.length ? bulles(e) : '<span class="hint">Aucun échange enregistré pour cette fiche</span>';
+        })()}`,
         saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('rep/fiches/' + f.id, readForm($('#drawerBody'), fields)); toast('Fiche enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette fiche ?')) { await api('rep/fiches/' + f.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
@@ -405,6 +435,19 @@
           afterRender: (el) => $$('[data-dem]', el).forEach((sel) => sel.addEventListener('change', async () => {
             await patch('rep/demandes/' + sel.dataset.dem, {statut: sel.value}); toast('Suivi mis à jour'); const d = demandes.rows.find((x) => x.id == sel.dataset.dem); if (d) d.statut = sel.value; refreshBadges();
           }))});
+      } else if (repSub.v === 'conversations') {
+        table(root, fils, [
+          {key: 'fin', label: 'Dernier échange', render: (r) => fmtDate(r.fin)},
+          {key: 'tel_norm', label: 'Téléphone'},
+          {key: 'societe', label: 'Société', render: (r) => clip(r.societe)},
+          {key: 'contact', label: 'Contact'},
+          {key: 'service', label: 'Service', render: (r) => r.service ? pill(r.service, 'info') : ''},
+          {key: 'fiche_statut', label: 'Statut fiche', render: (r) => pill(r.fiche_statut, cls(r.fiche_statut))},
+          {key: 'nb', label: 'Échanges', num: true},
+          {key: 'debut', label: 'Premier échange', render: (r) => fmtDate(r.debut)},
+          {key: 'apercu', label: 'Dernier message', search: (r) => r.echanges.map((e) => `${e.message || ''} ${e.reponse || ''}`).join(' '),
+            render: (r) => { const d = [...r.echanges].sort((a, b) => String(b.date).localeCompare(String(a.date)) || (b.id - a.id))[0] || {}; return clip(d.message || d.reponse, true); }},
+        ], {sort: 'fin', filters: [{key: 'service', label: 'Service'}, {key: 'fiche_statut', label: 'Statut fiche'}], onRow: conversation});
       } else if (repSub.v === 'distributeurs') {
         table(root, dist.rows, [
           {key: 'raison_sociale', label: 'Raison sociale'}, {key: 'marque', label: 'Marque'}, {key: 'vendeur', label: 'Commercial'}, {key: 'compte', label: 'N° compte'},

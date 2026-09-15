@@ -51,6 +51,21 @@ CREATE TABLE IF NOT EXISTS rep_demandes (
 );
 CREATE INDEX IF NOT EXISTS idx_rep_demandes_date ON rep_demandes(created_at);
 
+-- Conversation complète entre le client et Claire (WhatsApp entrant/sortant,
+-- résumé de l'appel VAPI). Une ligne par échange, rattachée à la fiche d'appel.
+CREATE TABLE IF NOT EXISTS rep_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  fiche_id INTEGER,
+  tel_norm TEXT,
+  canal TEXT,                             -- whatsapp | appel | sms
+  message TEXT,                           -- ce que le client a envoyé
+  reponse TEXT,                           -- ce que Claire a répondu
+  source TEXT                             -- scénario Make à l'origine
+);
+CREATE INDEX IF NOT EXISTS idx_rep_messages_tel ON rep_messages(tel_norm, date);
+CREATE INDEX IF NOT EXISTS idx_rep_messages_fiche ON rep_messages(fiche_id, date);
+
 CREATE TABLE IF NOT EXISTS distributeurs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   marque TEXT, vendeur TEXT, compte TEXT, raison_sociale TEXT,

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-15a';
+const MA_VERSION = '2026-09-15b';
 
 function ma_config(): array
 {
@@ -51,7 +51,7 @@ function ma_db(): PDO
 function ma_migrate(PDO $pdo, bool $fresh): void
 {
     // Tables et colonnes attendues par le code. Toute absence déclenche la mise à niveau.
-    $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'distributeurs',
+    $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [

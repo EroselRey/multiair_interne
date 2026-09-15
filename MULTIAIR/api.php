@@ -355,6 +355,50 @@ try {
                 }
                 out(['ok' => true, 'rows' => listRows($db, 'rep_fiches', 'created_at', $_GET, ['societe', 'contact', 'tel_norm', 'resume', 'marque', 'modele'])]);
             }
+            if ($sub === 'messages') {
+                if ($method === 'POST') {
+                    // Échange complet client <-> Claire (WhatsApp entrant + réponse envoyée)
+                    $tel = ma_tel((string) ($body['telephone'] ?? $body['tel_norm'] ?? ''));
+                    $ficheId = ma_int($body['fiche_id'] ?? null);
+                    if (!$ficheId && $tel) {
+                        $st = $db->prepare('SELECT id FROM rep_fiches WHERE tel_norm = ? ORDER BY id DESC LIMIT 1');
+                        $st->execute([$tel]);
+                        $ficheId = ma_int($st->fetchColumn()) ?: null;
+                    }
+                    $d = [
+                        'date' => ma_date($body['date'] ?? null) ?? $now,
+                        'fiche_id' => $ficheId,
+                        'tel_norm' => $tel,
+                        'canal' => ma_str($body['canal'] ?? null) ?? 'whatsapp',
+                        'message' => ma_str($body['message'] ?? null),
+                        'reponse' => ma_str($body['reponse'] ?? $body['reply'] ?? null),
+                        'source' => ma_str($body['source'] ?? null),
+                    ];
+                    if ($d['message'] === null && $d['reponse'] === null) {
+                        fail('message ou reponse requis');
+                    }
+                    $id = insert($db, 'rep_messages', $d);
+                    out(['ok' => true, 'id' => $id, 'fiche_id' => $ficheId]);
+                }
+                // GET : la conversation d'une fiche (?fiche_id=) ou d'un numéro (?tel=)
+                $where = ['1=1'];
+                $args = [];
+                if (!empty($_GET['fiche_id'])) {
+                    $where[] = 'm.fiche_id = ?';
+                    $args[] = (int) $_GET['fiche_id'];
+                }
+                if (!empty($_GET['tel'])) {
+                    $where[] = 'm.tel_norm = ?';
+                    $args[] = ma_tel((string) $_GET['tel']);
+                }
+                $sens = strtolower((string) ($_GET['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
+                $limite = min(2000, max(1, (int) ($_GET['limit'] ?? 500)));
+                $st = $db->prepare('SELECT m.*, f.societe, f.contact, f.service, f.statut AS fiche_statut
+                    FROM rep_messages m LEFT JOIN rep_fiches f ON f.id = m.fiche_id
+                    WHERE ' . implode(' AND ', $where) . " ORDER BY m.date $sens, m.id $sens LIMIT $limite");
+                $st->execute($args);
+                out(['ok' => true, 'rows' => $st->fetchAll()]);
+            }
             if ($sub === 'demandes') {
                 if ($method === 'POST' && $sub2 === null) {
                     $d = $body;
