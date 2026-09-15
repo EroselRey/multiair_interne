@@ -83,6 +83,7 @@ foreach ($_FILES['csv']['tmp_name'] ?? [] as $i => $tmp) {
 }
 $messages = [];
 $ajoutes = [];
+$completes = [];
 $presents = 0;
 $lignesAjoutees = 0;
 
@@ -101,7 +102,9 @@ if (!$fDevis) {
             }
         }
     }
-    $existe = $db->prepare('SELECT COUNT(*) FROM cso_devis WHERE n_offre = ?');
+    $existe = $db->prepare('SELECT d.id, d.version, d.date_traitement,
+        (SELECT COUNT(*) FROM cso_lignes l WHERE l.devis_id = d.id) AS nb
+        FROM cso_devis d WHERE d.n_offre = ?');
     $insDevis = $db->prepare('INSERT INTO cso_devis(date_traitement, n_offre, n_client, client, contact_client,
         email_client, tel_client, commercial, date_offre, validite_offre, ref_demande_client, montant_ht,
         transport, montant_ttc, nb_lignes, controle_coherence, statut, relance_1_j3, relance_2_j7, relance_3_j15,
@@ -118,8 +121,25 @@ if (!$fDevis) {
                 continue;
             }
             $existe->execute([$n]);
-            if ((int) $existe->fetchColumn() > 0) {
+            $dejaLa = $existe->fetch();
+            if ($dejaLa) {
                 $presents++;
+                // Le devis est là mais ses lignes manquent (import fait sans le fichier Lignes) :
+                // on complète, sans jamais dupliquer.
+                $nb = 0;
+                if ((int) $dejaLa['nb'] === 0) {
+                    foreach ($lignesParOffre[$n] ?? [] as $l) {
+                        $insLigne->execute([(int) $dejaLa['id'], $n, max(1, (int) $dejaLa['version']),
+                            ma_int($l[1] ?? null), ma_str($l[2] ?? null), ma_str($l[3] ?? null),
+                            $nombre($l[4] ?? null), $nombre($l[5] ?? null), $nombre($l[6] ?? null),
+                            ma_str($l[7] ?? null), ma_str($l[8] ?? null), $dejaLa['date_traitement']]);
+                        $nb++;
+                        $lignesAjoutees++;
+                    }
+                }
+                if ($nb) {
+                    $completes[] = [$n, $d[3] ?? '', $nb];
+                }
                 continue;
             }
             $dateTraitement = $date($d[0] ?? '') ?? ma_now();
@@ -149,7 +169,8 @@ if (!$fDevis) {
     }
     $db->prepare('INSERT INTO executions_log(date, scenario, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
         ->execute([ma_now(), 'cso', 'ok', 'rattrapage_devis',
-            count($ajoutes) . ' devis repris du classeur (' . $lignesAjoutees . ' lignes), ' . $presents . ' déjà présent(s)',
+            count($ajoutes) . ' devis repris du classeur, ' . $lignesAjoutees . ' ligne(s) ajoutée(s), '
+                . count($completes) . ' devis complété(s), ' . $presents . ' déjà présent(s)',
             json_encode(['ajoutes' => count($ajoutes), 'presents' => $presents], JSON_UNESCAPED_UNICODE)]);
 }
 ?><!DOCTYPE html>
@@ -173,7 +194,12 @@ background:#1c2431;color:#fff;cursor:pointer}</style></head><body>
 <?php if ($messages): ?>
 <div class="res ko"><?= implode('<br>', array_map('htmlspecialchars', $messages)) ?></div>
 <?php else: ?>
-<div class="res"><?= count($ajoutes) ?> devis ajouté(s) · <?= $lignesAjoutees ?> ligne(s) · <?= $presents ?> déjà présent(s)</div>
+<div class="res"><?= count($ajoutes) ?> devis ajouté(s) · <?= $lignesAjoutees ?> ligne(s) ·
+<?= count($completes) ?> devis complété(s) · <?= $presents ?> déjà présent(s)</div>
+<?php if ($completes): ?>
+<p>Devis déjà en base auxquels les lignes manquantes viennent d'être ajoutées :
+<?= htmlspecialchars(implode(', ', array_map(fn($c) => $c[0] . ' (' . $c[2] . ')', $completes))) ?>.</p>
+<?php endif; ?>
 <table><tr><th>N° offre</th><th>Client</th><th>Statut</th><th class="num">Montant HT</th><th class="num">Lignes</th></tr>
 <?php foreach ($ajoutes as [$n, $c, $s, $m, $nb]): ?>
 <tr><td><?= htmlspecialchars($n) ?></td><td><?= htmlspecialchars((string) $c) ?></td>

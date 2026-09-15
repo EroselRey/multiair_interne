@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-15d';
+const MA_VERSION = '2026-09-15e';
 
 function ma_config(): array
 {
@@ -92,6 +92,8 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     }
 
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store')");
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('domaines_internes',
+        'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr')");
     // Les leads importés du Google Sheet n'étaient pas regroupés : on le fait une
     // seule fois, automatiquement, au premier chargement après le dépôt.
     $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'dedup_initial'");
