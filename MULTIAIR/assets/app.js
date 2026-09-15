@@ -242,7 +242,7 @@
   }
 
   const journal = (rows) => `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Scénario</th><th>Statut</th><th>Événement</th><th>Détail</th></tr></thead><tbody>${
-    rows.length ? rows.map((r) => `<tr style="cursor:default"><td>${fmtDate(r.date)}</td><td>${h(r.scenario)}</td><td>${pill(r.statut, r.statut === 'ok' ? 'ok' : 'danger')}</td><td>${h(r.type_evenement)}</td><td>${clip(r.resume, true)}</td></tr>`).join('')
+    rows.length ? rows.map((r) => `<tr style="cursor:default"><td>${fmtDate(r.date)}</td><td>${h(r.scenario)}</td><td>${pill(r.statut, r.statut === 'ok' ? 'ok' : (r.statut === 'erreur' ? 'danger' : 'info'))}</td><td>${h(r.type_evenement)}</td><td>${clip(r.resume, true)}</td></tr>`).join('')
     : '<tr><td class="empty" colspan="5">Aucun événement enregistré</td></tr>'}</tbody></table></div>`;
   const exportBtn = (t) => `<a class="btn small" href="api.php?r=export/${t}" download>⬇ Export CSV</a>`;
   const subtabs = (items, active, onChange) => {

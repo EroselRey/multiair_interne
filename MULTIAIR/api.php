@@ -830,14 +830,8 @@ try {
                 $de = ma_str($body['from_email'] ?? null);
                 // Les mails partant de MultiAir (offres envoyées par les commerciaux, transferts
                 // internes) portent souvent « RE: » : ce ne sont pas des réponses de clients.
-                $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'domaines_internes'");
-                $st->execute();
-                $internes = array_filter(array_map('trim', explode(',',
-                    (string) ($st->fetchColumn() ?: 'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr'))));
-                foreach ($internes as $dom) {
-                    if ($dom !== '' && stripos((string) $de, '@' . $dom) !== false) {
-                        out(['ok' => true, 'ignore' => 'expediteur_interne', 'from_email' => $de]);
-                    }
+                if (ma_est_interne($de, ma_domaines_internes($db))) {
+                    out(['ok' => true, 'ignore' => 'expediteur_interne', 'from_email' => $de]);
                 }
                 $devis = null;
                 if ($refs !== '') {
@@ -860,7 +854,7 @@ try {
                     }
                 }
                 if (!$devis) {
-                    logEvent($db, 'cso', 'erreur', 'reponse_non_rattachee',
+                    logEvent($db, 'cso', 'info', 'reponse_non_rattachee',
                         ($de ?? '') . ' - ' . $sujet . ' : aucun devis correspondant',
                         ['classement' => $classement, 'texte' => $texte]);
                     out(['ok' => true, 'trouve' => false]);

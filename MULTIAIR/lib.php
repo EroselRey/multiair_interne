@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-15e';
+const MA_VERSION = '2026-09-15f';
 
 function ma_config(): array
 {
@@ -107,6 +107,13 @@ function ma_migrate(PDO $pdo, bool $fresh): void
                 $r['fusionnes'] . ' doublon(s) regroupé(s) automatiquement, ' . $r['restants'] . ' lead(s) restant(s)',
                 json_encode($r, JSON_UNESCAPED_UNICODE)]);
     }
+    // Un mail arrivé dans la boîte CSO sans devis correspondant a longtemps été
+    // journalisé en « erreur » alors que c'est du trafic normal (mails internes,
+    // réponses arrivées avant l'enregistrement du devis). On corrige l'étiquette
+    // des lignes déjà écrites : rien n'est supprimé, le journal reste complet.
+    $pdo->exec("UPDATE executions_log SET statut = 'info'
+        WHERE type_evenement = 'reponse_non_rattachee' AND statut = 'erreur'");
+
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
         ->execute([date('Y-m-d H:i:s')]);
 }
@@ -483,15 +490,57 @@ function ma_liste_emails(?string $brut): array
  * le commercial qui a fait le devis et les autres copies du mail d'origine.
  * La réponse du client revient au commercial grâce au Répondre-à.
  */
-function ma_destinataires_relance(array $devis, ?string $boiteCso = null): array
+/** Domaines de la maison (MultiAir, Airwco, Abac…), lus depuis les paramètres. */
+function ma_domaines_internes(?PDO $db = null): array
 {
-    $to = ma_liste_emails($devis['destinataire_email'] ?? null);
-    if (!$to) {
-        $to = ma_liste_emails($devis['email_client'] ?? null);
+    $defaut = 'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr';
+    $brut = $defaut;
+    if ($db) {
+        $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'domaines_internes'");
+        $st->execute();
+        $brut = (string) ($st->fetchColumn() ?: $defaut);
     }
-    $cc = ma_liste_emails($devis['commercial'] ?? null)
-        + ma_liste_emails($devis['copies_email'] ?? null)
-        + ma_liste_emails($boiteCso);
+    return array_values(array_filter(array_map('trim', explode(',', $brut)), fn($d) => $d !== ''));
+}
+
+/** Vrai si l'adresse appartient à l'un des domaines de la maison. */
+function ma_est_interne(?string $email, array $internes): bool
+{
+    $email = strtolower(trim((string) $email));
+    foreach ($internes as $dom) {
+        if ($email !== '' && str_ends_with($email, '@' . strtolower($dom))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Ne garde que les adresses extérieures à la maison. */
+function ma_emails_externes(array $emails, array $internes): array
+{
+    return array_filter($emails, fn($e) => !ma_est_interne($e, $internes));
+}
+
+/**
+ * Destinataires d'une relance CSO.
+ *
+ * Le client seul en « À », la boîte cso@ seule en copie. Les collègues présents
+ * dans l'en-tête du mail d'origine (commercial, personnes en copie) sont écartés :
+ * la relance part vers l'extérieur, et c'est la boîte cso@ — dépouillée dans cette
+ * page — qui reçoit la réponse. Si le champ « À » du mail d'origine était une
+ * adresse de la maison (offre envoyée en interne puis transférée), on retombe sur
+ * les adresses externes en copie, puis sur l'adresse client lue dans le PDF.
+ */
+function ma_destinataires_relance(array $devis, ?string $boiteCso = null, array $internes = []): array
+{
+    $to = ma_emails_externes(ma_liste_emails($devis['destinataire_email'] ?? null), $internes);
+    if (!$to) {
+        $to = ma_emails_externes(ma_liste_emails($devis['copies_email'] ?? null), $internes);
+    }
+    if (!$to) {
+        $to = ma_emails_externes(ma_liste_emails($devis['email_client'] ?? null), $internes);
+    }
+    $cc = ma_liste_emails($boiteCso);
     foreach ($to as $k => $_) {
         unset($cc[$k]);
     }
@@ -572,6 +621,7 @@ function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclu
     $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'cso_boite'");
     $st->execute();
     $boiteCso = (string) ($st->fetchColumn() ?: 'cso@multiairfrance.store');
+    $internes = ma_domaines_internes($db);
     $modeles = ma_relance_modeles($db);
     $colonnes = [1 => 'relance_1_j3', 2 => 'relance_2_j7', 3 => 'relance_3_j15'];
     $out = [];
@@ -590,14 +640,17 @@ function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclu
         if (($r['controle_coherence'] ?? '') === 'ECART' && !$inclureEcart) {
             continue;
         }
-        $dest = ma_destinataires_relance($r, $boiteCso);
+        $dest = ma_destinataires_relance($r, $boiteCso, $internes);
         $mail = ma_relance_rendu($r, $modeles[$num]);
         $r['relance_due'] = $num;
         $r['date_prevue'] = $datePrevue;
         $r['due'] = $due ? 1 : 0;
         $r['email_relance'] = $dest['to'];
         $r['cc_relance'] = $dest['cc'];
-        $r['repondre_a'] = (string) ($r['commercial'] ?? '');
+        // La reponse du client doit atterrir dans la boite cso@ : c'est elle que le
+        // scenario Make depouille pour mettre le statut du devis a jour. Un « Repondre a »
+        // pointant sur le commercial court-circuiterait ce suivi.
+        $r['repondre_a'] = $boiteCso;
         $r['objet_relance'] = $mail['objet'];
         $r['texte_relance'] = $mail['texte'];
         $r['commercial_nom'] = $r['commercial'] ? ucwords(str_replace('.', ' ', explode('@', (string) $r['commercial'])[0])) : '';
