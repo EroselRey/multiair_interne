@@ -647,10 +647,13 @@ function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclu
         $r['due'] = $due ? 1 : 0;
         $r['email_relance'] = $dest['to'];
         $r['cc_relance'] = $dest['cc'];
-        // La reponse du client doit atterrir dans la boite cso@ : c'est elle que le
-        // scenario Make depouille pour mettre le statut du devis a jour. Un « Repondre a »
-        // pointant sur le commercial court-circuiterait ce suivi.
-        $r['repondre_a'] = $boiteCso;
+        // « Repondre a » porte les deux adresses : le client qui clique sur Repondre
+        // ecrit d'un seul geste a la boite cso@ — que Make depouille pour mettre le
+        // statut du devis a jour — et au commercial, qui recoit ainsi le mail et ses
+        // pieces jointes (bon de commande) directement dans sa boite.
+        $r['repondre_a'] = implode(';', array_values(
+            ma_liste_emails($boiteCso) + ma_liste_emails($r['commercial'] ?? null)
+        ));
         $r['objet_relance'] = $mail['objet'];
         $r['texte_relance'] = $mail['texte'];
         $r['commercial_nom'] = $r['commercial'] ? ucwords(str_replace('.', ' ', explode('@', (string) $r['commercial'])[0])) : '';

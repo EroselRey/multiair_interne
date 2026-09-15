@@ -865,19 +865,29 @@ try {
                 if ($classement === 'sans_objet') {
                     $nouveau = null;
                 }
+                // Nom des pièces jointes du mail client (bon de commande…), si le scénario
+                // les transmet. Le fichier lui-même reste dans la boîte : le commercial le
+                // reçoit en direct, le tableau de bord se contente d'en garder la trace.
+                $pj = $body['pieces_jointes'] ?? $body['piece_jointe'] ?? null;
+                $pj = implode(', ', array_filter(array_map('trim',
+                    is_array($pj) ? $pj : explode(',', (string) $pj))));
                 $maj = ['updated_at' => $now];
                 $maj['reponse_client'] = trim(((string) ($devis['reponse_client'] ?? '')) . "\n\n"
-                    . '[' . $now . ' — ' . ($de ?? '') . ' — ' . $classement . ']' . "\n" . (string) $texte);
+                    . '[' . $now . ' — ' . ($de ?? '') . ' — ' . $classement . ']'
+                    . ($pj !== '' ? "\n" . 'Pièce(s) jointe(s) : ' . $pj : '')
+                    . "\n" . (string) $texte);
                 if ($nouveau !== null && !$fige) {
                     $maj['statut'] = $nouveau;
                 }
                 update($db, 'cso_devis', (int) $devis['id'], $maj);
-                logEvent($db, 'cso', 'ok', 'reponse_client',
+                logEvent($db, 'cso', 'ok', $classement === 'commande' ? 'commande_recue' : 'reponse_client',
                     'Devis ' . $devis['n_offre'] . ' - ' . ($devis['client'] ?? '') . ' : ' . $classement
+                        . ($pj !== '' ? ' (' . $pj . ')' : '')
                         . ($maj['statut'] ?? null ? ' -> ' . $maj['statut'] : ($fige ? ' (statut conservé)' : ' (statut inchangé)')),
-                    ['id' => $devis['id'], 'de' => $de]);
+                    ['id' => $devis['id'], 'de' => $de, 'pieces_jointes' => $pj]);
                 out(['ok' => true, 'trouve' => true, 'devis_id' => (int) $devis['id'], 'n_offre' => $devis['n_offre'],
-                    'classement' => $classement, 'statut' => $maj['statut'] ?? $devis['statut'], 'statut_fige' => $fige]);
+                    'classement' => $classement, 'statut' => $maj['statut'] ?? $devis['statut'], 'statut_fige' => $fige,
+                    'client' => $devis['client'], 'commercial' => $devis['commercial'], 'pieces_jointes' => $pj]);
             }
             if ($sub === 'lignes') {
                 out(['ok' => true, 'rows' => listRows($db, 'cso_lignes', 'date_traitement', $_GET, ['reference', 'designation', 'n_offre'])]);
