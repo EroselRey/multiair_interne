@@ -160,6 +160,18 @@ function getOne(PDO $db, string $table, int $id): ?array
  */
 function listRows(PDO $db, string $table, string $dateCol, array $q, array $textCols = []): array
 {
+    // Garde-fou : une écriture qui arrive jusqu'ici n'a été traitée par aucune route.
+    // Sans cela, un POST recevrait la liste des lignes avec « ok », et le scénario Make
+    // croirait avoir enregistré (c'est ce qui est arrivé aux devis CSO le 14/09).
+    $methode = (string) ($GLOBALS['method'] ?? 'GET');
+    if ($methode !== 'GET') {
+        $scenario = explode('_', $table)[0];
+        $scenario = ['rep' => 'repondeur', 'chat' => 'chatbot'][$scenario] ?? $scenario;
+        logEvent($db, $scenario, 'erreur', 'requete_non_traitee',
+            "$methode sur « $table » : aucune route d'écriture ne correspond, rien n'a été enregistré",
+            ['route' => $_GET['r'] ?? null]);
+        fail("Requête $methode non reconnue pour $table : rien n'a été enregistré", 400);
+    }
     $where = [];
     $args = [];
     $allCols = cols($db, $table);
@@ -673,6 +685,89 @@ try {
                 }
                 if ($sub2 === 'modeles_relance') {
                     out(['ok' => true, 'modeles' => ma_relance_modeles($db)]);
+                }
+                if ($method === 'POST' && $sub2 === null) {
+                    // Upsert complet : remplace makeAPICall B2:B + addRow/updateRow Devis + addRow/delete Lignes
+                    $d = $body;
+                    if (array_key_exists('est_un_devis', $d) && !ma_bool($d['est_un_devis'])) {
+                        logEvent($db, 'cso', 'ok', 'ignore', 'Pièce jointe non reconnue comme devis : ' . ($d['fichier_source'] ?? ''), null);
+                        out(['ok' => true, 'action' => 'ignore']);
+                    }
+                    $n = ma_str($d['n_offre'] ?? $d['numero_offre'] ?? null) ?? fail('numero_offre requis');
+                    $lignes = is_array($d['lignes'] ?? null) ? $d['lignes'] : [];
+                    if (is_string($d['lignes'] ?? null)) {
+                        $lignes = json_decode($d['lignes'], true) ?: [];
+                    }
+                    $montantHt = ma_float($d['montant_ht'] ?? null);
+                    $refs = [];
+                    $sum = 0.0;
+                    foreach ($lignes as $l) {
+                        $refs[] = (string) ($l['reference'] ?? '');
+                        $sum += (float) (ma_float($l['prix_total_ht'] ?? null) ?? 0);
+                    }
+                    $empreinte = implode('-', $refs) . '|' . ($montantHt === null ? '' : rtrim(rtrim(number_format($montantHt, 2, '.', ''), '0'), '.'));
+                    $controle = ($montantHt !== null && abs(round($sum * 100) - round($montantHt * 100)) < 1) ? 'OK' : 'ECART';
+                    $st = $db->prepare('SELECT * FROM cso_devis WHERE n_offre = ?');
+                    $st->execute([$n]);
+                    $ex = $st->fetch();
+                    $row = [
+                        'date_traitement' => ma_date($d['date_traitement'] ?? null) ?? $now,
+                        'n_offre' => $n,
+                        'n_client' => ma_str($d['n_client'] ?? $d['numero_client'] ?? null),
+                        'client' => ma_str($d['client'] ?? $d['client_nom'] ?? null),
+                        'contact_client' => ma_str($d['contact_client'] ?? null),
+                        'email_client' => ma_str($d['email_client'] ?? null) ?? ma_str($d['destinataire_email'] ?? null),
+                        'tel_client' => ma_str($d['tel_client'] ?? null),
+                        'commercial' => ma_str($d['commercial'] ?? null),
+                        'contact_interne' => ma_str($d['contact_interne'] ?? null),
+                        'date_offre' => ma_date(ma_str($d['date_offre'] ?? null), false),
+                        'validite_offre' => ma_date(ma_str($d['validite_offre'] ?? null), false),
+                        'ref_demande_client' => ma_str($d['ref_demande_client'] ?? null),
+                        'montant_ht' => $montantHt,
+                        'transport' => ma_float($d['transport'] ?? null),
+                        'montant_ttc' => ma_float($d['montant_ttc'] ?? null),
+                        'nb_lignes' => count($lignes),
+                        'controle_coherence' => $controle,
+                        'statut' => 'En attente',
+                        'relance_1_j3' => date('Y-m-d', strtotime('+3 days')),
+                        'relance_2_j7' => date('Y-m-d', strtotime('+7 days')),
+                        'relance_3_j15' => date('Y-m-d', strtotime('+15 days')),
+                        'relances_envoyees' => 0,
+                        'fichier_source' => ma_str($d['fichier_source'] ?? null),
+                        'message_id' => ma_str($d['message_id'] ?? null),
+                        'destinataire_email' => ma_str($d['destinataire_email'] ?? null),
+                        'copies_email' => ma_str($d['copies_email'] ?? null),
+                        'empreinte' => $empreinte,
+                        'updated_at' => $now,
+                    ];
+                    $db->beginTransaction();
+                    if (!$ex) {
+                        $row['version'] = 1;
+                        $id = insert($db, 'cso_devis', $row);
+                        $action = 'created';
+                        $version = 1;
+                    } elseif (($ex['empreinte'] ?? '') === $empreinte) {
+                        $db->commit();
+                        logEvent($db, 'cso', 'ok', 'doublon', "Devis $n reçu à nouveau sans changement", ['id' => $ex['id']]);
+                        out(['ok' => true, 'action' => 'unchanged', 'id' => (int) $ex['id'], 'n_offre' => $n, 'version' => (int) $ex['version']]);
+                    } else {
+                        $id = (int) $ex['id'];
+                        $version = (int) $ex['version'] + 1;
+                        $row['version'] = $version;
+                        unset($row['n_offre']);
+                        update($db, 'cso_devis', $id, $row);
+                        $action = 'updated';
+                    }
+                    $ins = $db->prepare('INSERT INTO cso_lignes(devis_id, n_offre, version, poste, reference, designation, quantite, prix_unitaire, prix_total_ht, pays_origine, code_douanier, date_traitement) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+                    foreach ($lignes as $l) {
+                        $ins->execute([$id, $n, $version, ma_int($l['poste'] ?? null), ma_str($l['reference'] ?? null), ma_str($l['designation'] ?? null),
+                            ma_float($l['quantite'] ?? null), ma_float($l['prix_unitaire'] ?? null), ma_float($l['prix_total_ht'] ?? null),
+                            ma_str($l['pays_origine'] ?? null), ma_str($l['code_douanier'] ?? null), $row['date_traitement']]);
+                    }
+                    $db->commit();
+                    logEvent($db, 'cso', 'ok', $action === 'created' ? 'devis_nouveau' : 'devis_revision',
+                        "Devis $n - " . ($row['client'] ?? '') . ' - ' . number_format((float) $montantHt, 2, ',', ' ') . " € HT (v$version, $controle)", ['id' => $id]);
+                    out(['ok' => true, 'action' => $action, 'id' => $id, 'n_offre' => $n, 'version' => $version, 'controle_coherence' => $controle, 'nb_lignes' => count($lignes)]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
