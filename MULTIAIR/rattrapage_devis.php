@@ -18,6 +18,15 @@
 require_once __DIR__ . '/lib.php';
 header('Content-Type: text/html; charset=utf-8');
 
+// Réservé aux personnes connectées à la page (même navigateur, même session).
+if (!ma_is_logged()) {
+    echo '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>MULTIAIR</title></head><body '
+        . 'style="font-family:system-ui,sans-serif;max-width:700px;margin:60px auto;padding:0 16px">'
+        . '<h1>Connexion requise</h1><p>Ouvrez d\'abord <a href="index.php">index.php</a> et connectez-vous, '
+        . 'puis revenez sur cette page.</p></body></html>';
+    exit;
+}
+
 /** Lit un CSV Google (séparateur détecté, BOM retiré) et renvoie les lignes de données. */
 function lireCsv(string $fichier): array
 {
@@ -57,15 +66,30 @@ $date = function ($v) {
 };
 
 $dossier = __DIR__ . '/import';
-$fDevis = glob($dossier . '/*[Dd]evis*.csv');
-$fLignes = glob($dossier . '/*[Ll]ignes*.csv');
+$fDevis = glob($dossier . '/*[Dd]evis*.csv') ?: [];
+$fLignes = glob($dossier . '/*[Ll]ignes*.csv') ?: [];
+
+// Fichiers envoyés depuis le formulaire : on les lit directement, sans les conserver.
+foreach ($_FILES['csv']['tmp_name'] ?? [] as $i => $tmp) {
+    $nom = (string) ($_FILES['csv']['name'][$i] ?? '');
+    if (!is_uploaded_file($tmp) || !preg_match('/\.csv$/i', $nom)) {
+        continue;
+    }
+    if (stripos($nom, 'ligne') !== false) {
+        $fLignes[] = $tmp;
+    } else {
+        $fDevis[] = $tmp;
+    }
+}
 $messages = [];
 $ajoutes = [];
 $presents = 0;
 $lignesAjoutees = 0;
 
 if (!$fDevis) {
-    $messages[] = "Aucun fichier CSV contenant « Devis » dans " . htmlspecialchars($dossier) . ".";
+    $messages[] = $_SERVER['REQUEST_METHOD'] === 'POST'
+        ? "Aucun des fichiers envoyés ne correspond à l'onglet Devis (fichier .csv attendu)."
+        : "Sélectionnez les deux fichiers CSV ci-dessus, ou déposez-les dans le dossier import/.";
 } else {
     $db = ma_db();
     $lignesParOffre = [];
@@ -133,13 +157,21 @@ if (!$fDevis) {
 <style>body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 16px;color:#1c2431}
 table{border-collapse:collapse;width:100%}td,th{padding:8px 10px;border-bottom:1px solid #e3e7ee;text-align:left;font-size:14px}
 .res{padding:14px;border-radius:8px;margin:18px 0;background:#e6f5ec;font-weight:600}
-.ko{background:#fbe9e7}.num{text-align:right}</style></head><body>
+.ko{background:#fbe9e7}.num{text-align:right}
+.envoi{border:1px solid #e3e7ee;border-radius:8px;padding:4px 16px 12px;background:#f7f9fc;margin:18px 0}
+.hint{color:#5b6472;font-size:13px}button{padding:6px 14px;border-radius:6px;border:1px solid #1c2431;
+background:#1c2431;color:#fff;cursor:pointer}</style></head><body>
 <h1>Reprise des devis depuis le classeur</h1>
+<form method="post" enctype="multipart/form-data" class="envoi">
+  <p><strong>Envoyer les deux exports CSV</strong> (onglet Devis et onglet Lignes du classeur) :</p>
+  <p><input type="file" name="csv[]" accept=".csv,text/csv" multiple required>
+     <button type="submit">Importer</button></p>
+  <p class="hint">Dans le classeur : Fichier &gt; Télécharger &gt; Valeurs séparées par des virgules (.csv),
+  une fois sur l'onglet <em>Devis</em>, une fois sur l'onglet <em>Lignes</em>. Sélectionnez les deux fichiers
+  d'un coup. Le fichier dont le nom contient « Lignes » est reconnu automatiquement.</p>
+</form>
 <?php if ($messages): ?>
 <div class="res ko"><?= implode('<br>', array_map('htmlspecialchars', $messages)) ?></div>
-<p>Exportez l'onglet <strong>Devis</strong> et l'onglet <strong>Lignes</strong> du classeur en CSV
-(Fichier &gt; Télécharger &gt; Valeurs séparées par des virgules), déposez les deux fichiers dans
-<code>MULTIAIR/import/</code>, puis rechargez cette page.</p>
 <?php else: ?>
 <div class="res"><?= count($ajoutes) ?> devis ajouté(s) · <?= $lignesAjoutees ?> ligne(s) · <?= $presents ?> déjà présent(s)</div>
 <table><tr><th>N° offre</th><th>Client</th><th>Statut</th><th class="num">Montant HT</th><th class="num">Lignes</th></tr>
