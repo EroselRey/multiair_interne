@@ -704,7 +704,8 @@
     const apercu = (r) => openDrawer(`Relance ${r.relance_due} — devis n° ${h(r.n_offre)}`, `
       ${kv([['Date prévue', fmtDate(r.date_prevue, false) + (r.due ? ' <span class="pill danger">à envoyer</span>' : '')],
         ['Client', h(r.client)], ['Montant HT', eur(r.montant_ht)],
-        ['Envoyée à', (r.email_relance || '').split(';').map((e) => h(e)).join('<br>') || '<span class="hint">—</span>'],
+        ['Envoyée à', (r.email_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>')
+          || '<span class="pill danger">aucune adresse client — cette relance ne partira pas</span>'],
         ['En copie', (r.cc_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>') || '<span class="hint">aucune</span>'],
         ['Réponse du client vers', h(r.repondre_a)], ['Objet', h(r.objet_relance)]])}
       <h4>Mail qui sera envoyé</h4><pre class="raw">${h(r.texte_relance)}</pre>`);
@@ -714,7 +715,8 @@
       {key: 'n_offre', label: 'N° offre'},
       {key: 'client', label: 'Client', render: (r) => clip(r.client)},
       {key: 'contact_client', label: 'Contact'},
-      {key: 'email_relance', label: 'Sera envoyée à', render: (r) => (r.email_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>')},
+      {key: 'email_relance', label: 'Sera envoyée à', render: (r) => (r.email_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>')
+        || pill('aucune adresse client', 'danger')},
       {key: 'cc_relance', label: 'En copie', render: (r) => (r.cc_relance || '').split(';').filter(Boolean).map((e) => h(e)).join('<br>') || '<span class="hint">aucune</span>'},
       {key: 'montant_ht', label: 'Montant HT', num: true, render: (r) => eur(r.montant_ht), sortVal: (r) => Number(r.montant_ht || 0)},
     ], {sort: 'date_prevue', asc: true, filters: [{key: 'relance_due', label: 'Relance'}, {key: 'commercial', label: 'Commercial'}], onRow: apercu});

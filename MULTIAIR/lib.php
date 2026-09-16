@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-15f';
+const MA_VERSION = '2026-09-16a';
 
 function ma_config(): array
 {
@@ -641,6 +641,15 @@ function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclu
             continue;
         }
         $dest = ma_destinataires_relance($r, $boiteCso, $internes);
+        // Aucune adresse client exploitable : la relance est injouable. On l'ecarte de
+        // la liste envoyee a Make — qui echouerait sur un destinataire vide — mais on
+        // la garde dans l'apercu de la page, signalee, pour qu'elle soit corrigee.
+        if ($dest['to'] === '') {
+            if ($seulementDues) {
+                continue;
+            }
+            $r['sans_destinataire'] = 1;
+        }
         $mail = ma_relance_rendu($r, $modeles[$num]);
         $r['relance_due'] = $num;
         $r['date_prevue'] = $datePrevue;
@@ -651,7 +660,9 @@ function ma_relances_planifiees(PDO $db, bool $seulementDues = true, bool $inclu
         // ecrit d'un seul geste a la boite cso@ — que Make depouille pour mettre le
         // statut du devis a jour — et au commercial, qui recoit ainsi le mail et ses
         // pieces jointes (bon de commande) directement dans sa boite.
-        $r['repondre_a'] = implode(';', array_values(
+        // Virgule et non point-virgule : « Reply-To » est un en-tete de message,
+        // et la RFC 5322 y separe les adresses par des virgules.
+        $r['repondre_a'] = implode(', ', array_values(
             ma_liste_emails($boiteCso) + ma_liste_emails($r['commercial'] ?? null)
         ));
         $r['objet_relance'] = $mail['objet'];
