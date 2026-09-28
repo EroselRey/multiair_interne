@@ -525,6 +525,14 @@ try {
                     'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence')")
                         ->fetchAll(PDO::FETCH_KEY_PAIR)]);
             }
+            // Tableaux « qui reçoit quoi » par service (écran de routage). Les règles en découlent.
+            if ($sub === 'grilles') {
+                if ($method === 'POST' || $method === 'PATCH') {
+                    ma_rep_grilles_enregistrer($db, $body);
+                    logEvent($db, 'repondeur', 'ok', 'routage_modifie', 'Tableaux de routage mis à jour depuis la page');
+                }
+                out(['ok' => true, 'grilles' => ma_rep_grilles_lire($db)]);
+            }
             // Listes paramétrables : marques, natures de demande, rôles de l'annuaire.
             if ($sub === 'listes') {
                 if ($method === 'POST' || $method === 'PATCH') {

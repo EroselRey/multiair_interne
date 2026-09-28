@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-28a';
+const MA_VERSION = '2026-09-28b';
 
 function ma_config(): array
 {
@@ -131,12 +131,17 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         ma_rep_routage_initial($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_initial', ?)")->execute([ma_now()]);
     }
-    // Routage commercial (boîtes partagées CTS / PAD / AIM…), ajouté ensuite : sa propre marque de passage.
-    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_routage_commerce'");
+    // Passage des règles libres (correctifs 17-18) aux tableaux par service : on relit ce que les
+    // règles faisaient, on le réécrit sous forme de tableaux. Rien ne change pour les appels.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_routage_grilles'");
     $st->execute();
     if (!$st->fetchColumn()) {
-        ma_rep_routage_commerce($pdo);
-        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_commerce', ?)")->execute([ma_now()]);
+        $pdo->exec("UPDATE rep_contacts SET role = 'finance' WHERE role = 'compta'");
+        $pdo->exec("UPDATE rep_regles SET cible_role = 'finance' WHERE cible_role = 'compta'");
+        // « Commercial (à définir) » n'était qu'un renvoi vers l'adresse de repli : le tableau Commerce le dit mieux.
+        $pdo->exec("DELETE FROM rep_contacts WHERE role = 'commercial' AND nom = 'Commercial (à définir)'");
+        ma_rep_grilles_enregistrer($pdo, ma_rep_grilles_lire($pdo));
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_grilles', ?)")->execute([ma_now()]);
     }
 
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
@@ -859,11 +864,14 @@ function ma_rep_listes(PDO $db): array
                 'mots' => 'devis+compresseur, devis+secheur, devis+equipement, prix+compresseur, devis+materiel'],
             ['code' => 'autre', 'libelle' => 'Autre demande commerciale', 'mots' => ''],
         ],
+        // Chaque rôle appartient à un seul service : les équipes finance, SAV et commerce sont distinctes.
         'roles' => [
-            ['code' => 'rso', 'libelle' => 'RSO (terrain)'], ['code' => 'cta', 'libelle' => 'CTA (agent externe)'],
-            ['code' => 'backoffice', 'libelle' => 'Back-office support'], ['code' => 'boite', 'libelle' => 'Boîte partagée'],
-            ['code' => 'direct_projet', 'libelle' => 'Direct / Projet'], ['code' => 'compta', 'libelle' => 'Compta'],
-            ['code' => 'commercial', 'libelle' => 'Commercial'], ['code' => 'autre', 'libelle' => 'Autre'],
+            ['code' => 'finance', 'libelle' => 'Finance', 'mots' => 'finance'],
+            ['code' => 'backoffice', 'libelle' => 'Back-office support', 'mots' => 'sav'],
+            ['code' => 'rso', 'libelle' => 'RSO (terrain)', 'mots' => 'sav'],
+            ['code' => 'cta', 'libelle' => 'CTA ABAC (agent externe)', 'mots' => 'sav'],
+            ['code' => 'boite', 'libelle' => 'Boîte partagée', 'mots' => 'commerce'],
+            ['code' => 'direct_projet', 'libelle' => 'Direct / Projet', 'mots' => 'commerce'],
         ],
     ];
     $params = $db->query("SELECT cle, valeur FROM parametres WHERE cle LIKE 'rep_liste_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -993,6 +1001,23 @@ function ma_rep_service(?string $s): string
     return ['sav' => 'sav', 'technique' => 'sav', 'commercial' => 'commercial', 'finance' => 'finance'][$s] ?? ($s ?: 'autre');
 }
 
+/** Une règle s'applique-t-elle à ces critères (déjà normalisés) ? Un critère vide vaut « tous ». */
+function ma_rep_regle_correspond(array $r, array $c): bool
+{
+    $s = ma_csv($r['service'] ?? null);
+    $m = ma_csv($r['marques'] ?? null);
+    $n = ma_csv($r['natures'] ?? null);
+    $equip = (string) ($c['equip'] ?? '');
+    return (!$s || in_array($c['service'], $s, true))
+        && (!$m || in_array(($c['marque'] ?? '') === '' ? 'autre' : $c['marque'], $m, true))
+        // Nature non reconnue : « autre », pour tomber sur la règle générale plutôt que nulle part.
+        && (!$n || in_array(($c['nature'] ?? '') === '' ? 'autre' : $c['nature'], $n, true))
+        && (trim((string) ($r['type_client'] ?? '')) === '' || ma_plat($r['type_client']) === ($c['type_client'] ?? 'direct'))
+        && (trim((string) ($r['urgence'] ?? '')) === '' || (ma_plat($r['urgence']) === 'oui') === (bool) ($c['urgent'] ?? false))
+        // Équipement non précisé : on le traite comme « autre » plutôt que de perdre la demande.
+        && (trim((string) ($r['type_equipement'] ?? '')) === '' || ma_plat($r['type_equipement']) === ($equip ?: 'autre'));
+}
+
 /**
  * Destinataires d'une demande du répondeur.
  *
@@ -1017,19 +1042,8 @@ function ma_rep_router(PDO $db, array $d): array
     $contacts = $db->query('SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom')->fetchAll();
     $regles = $db->query('SELECT * FROM rep_regles WHERE actif = 1 ORDER BY ordre, id')->fetchAll();
 
-    $correspond = function (array $r) use ($service, $marque, $nature, $typeClient, $urgent, $equip): bool {
-        $s = ma_csv($r['service']);
-        $m = ma_csv($r['marques']);
-        $n = ma_csv($r['natures'] ?? null);
-        return (!$s || in_array($service, $s, true))
-            && (!$m || in_array($marque === '' ? 'autre' : $marque, $m, true))
-            // Nature non reconnue : « autre », pour tomber sur la règle générale plutôt que nulle part.
-            && (!$n || in_array($nature === '' ? 'autre' : $nature, $n, true))
-            && (trim((string) $r['type_client']) === '' || ma_plat($r['type_client']) === $typeClient)
-            && (trim((string) $r['urgence']) === '' || (ma_plat($r['urgence']) === 'oui') === $urgent)
-            // Équipement non précisé : on le traite comme « autre » plutôt que de perdre la demande.
-            && (trim((string) $r['type_equipement']) === '' || ma_plat($r['type_equipement']) === ($equip ?: 'autre'));
-    };
+    $critere = compact('service', 'marque', 'nature', 'urgent', 'equip') + ['type_client' => $typeClient];
+    $correspond = fn(array $r): bool => ma_rep_regle_correspond($r, $critere);
     $pourLaMarque = fn(array $c) => !ma_csv($c['marques']) || $marque === '' || in_array($marque, ma_csv($c['marques']), true);
     $duRole = fn(string $role) => array_values(array_filter($contacts,
         fn($c) => ma_plat($c['role']) === ma_plat($role) && $pourLaMarque($c)));
@@ -1053,7 +1067,7 @@ function ma_rep_router(PDO $db, array $d): array
                 fn($c) => in_array(strtolower($dep), array_map(fn($x) => str_pad($x, 2, '0', STR_PAD_LEFT), ma_csv($c['departements'])), true)));
             if (!$personnes) {
                 $repli = (string) ($regle['repli_role'] ?? '');
-                $noms = ['rso' => 'RSO', 'cta' => 'CTA', 'backoffice' => 'back-office support', 'compta' => 'compta', 'commercial' => 'commercial'];
+                $noms = ['rso' => 'RSO', 'cta' => 'CTA', 'backoffice' => 'back-office support', 'finance' => 'finance'];
                 $notes[] = $dep === null
                     ? 'Département du site inconnu : impossible de choisir le ' . ($noms[$role] ?? $role) . ' du secteur'
                     : 'Aucun ' . ($noms[$role] ?? $role) . ' ne couvre le ' . $dep;
@@ -1175,84 +1189,158 @@ function ma_rep_message(array $d, array $x): array
     return ['objet' => $objet, 'mail_html' => $html, 'sms_texte' => $sms];
 }
 
-/** Annuaire et règles de départ, d'après le schéma de routage fourni par Multiair. */
-function ma_rep_routage_initial(PDO $db): void
-{
-    $c = $db->prepare('INSERT INTO rep_contacts(nom, role, email, mobile, departements, marques, competences, externe, actif, commentaire)
-        VALUES (?,?,?,?,?,?,?,?,1,?)');
-    $c->execute(['Compta clients', 'compta', 'Compta.clients@airwco.com', null, null, null, 'Facturation, règlements', 0,
-        'Boîte partagée : toutes les demandes finance']);
-    $c->execute(['Julien', 'backoffice', null, null, null, null, 'Support technique distributeurs', 0, 'Email et portable à compléter']);
-    $c->execute(['Marien', 'backoffice', null, null, null, null, 'Support technique distributeurs', 0, 'Email et portable à compléter']);
-    $c->execute(['Commercial (à définir)', 'commercial', 'cyril.mortier@airwco.com', null, null, null, null, 0,
-        'En attendant l\'organisation commerciale']);
+// ------------------------------------------------------------------------ Répondeur : tableaux de routage
+//
+// L'écran ne montre pas de règles : il montre, pour chaque service, un tableau « qui reçoit
+// quoi ». SAV : marque × type de client. Commerce : nature de la demande × marque. Finance :
+// toutes les personnes de la finance. Les règles sont reconstruites à partir de ces tableaux.
 
-    $r = $db->prepare('INSERT INTO rep_regles(ordre, libelle, service, marques, type_client, urgence, type_equipement,
-        cible, cible_role, cible_contacts, repli_role, cc, actif) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)');
-    $wmp = 'worthington,mauguiere,pneumatech';
-    $r->execute([10, 'Finance : boîte partagée compta', 'finance', null, null, null, null, 'role', 'compta', null, null, null]);
-    $r->execute([20, 'SAV Worthington / Mauguière / Pneumatech — distributeur → back-office', 'sav', $wmp, 'distributeur', null, null,
-        'role', 'backoffice', null, null, null]);
-    $r->execute([30, 'SAV Worthington / Mauguière / Pneumatech — client direct → RSO du secteur', 'sav', $wmp, 'direct', null, null,
-        'role_departement', 'rso', null, 'backoffice', null]);
-    $r->execute([40, 'SAV ABAC — distributeur → back-office', 'sav', 'abac', 'distributeur', null, null,
-        'role', 'backoffice', null, null, null]);
-    $r->execute([50, 'SAV ABAC — client direct, compresseur à piston → CTA du secteur', 'sav', 'abac', 'direct', null, 'piston',
-        'role_departement', 'cta', null, 'backoffice', null]);
-    $r->execute([60, 'SAV ABAC — client direct, autre équipement → CTA du secteur, sinon back-office', 'sav', 'abac', 'direct', null, 'autre',
-        'role_departement', 'cta', null, 'backoffice', null]);
-    $r->execute([90, 'Commercial', 'commercial', null, null, null, null, 'role', 'commercial', null, null, null]);
+/** Lignes et colonnes des tableaux. */
+function ma_rep_grille_axes(): array
+{
+    return [
+        'sav_marques' => ['worthington', 'mauguiere', 'pneumatech', 'abac', 'autre'],
+        'sav_clients' => ['direct', 'distributeur'],
+        'sav_choix' => ['rso', 'cta', 'backoffice', 'repli'],
+        'com_natures' => ['commande_pieces', 'devis_pieces', 'commande_equipement', 'devis_equipement'],
+        'com_marques' => ['abac', 'worthington', 'mauguiere', 'pneumatech', 'autre'],
+    ];
 }
 
-/**
- * Routage commercial, d'après le tableau des boîtes partagées fourni par Multiair :
- * chaque boîte traite une nature de demande pour une famille de marques.
- */
-function ma_rep_routage_commerce(PDO $db): void
+/** Les tableaux tels que les règles actuelles les appliquent. */
+function ma_rep_grilles_lire(PDO $db): array
 {
-    $c = $db->prepare('INSERT INTO rep_contacts(nom, role, email, membres, competences, externe, actif, commentaire) VALUES (?,?,?,?,?,0,1,?)');
-    $boite = function (string $nom, ?string $email, string $membres, string $activite, ?string $commentaire = null, string $role = 'boite') use ($db, $c): int {
-        $c->execute([$nom, $role, $email, $membres, $activite, $commentaire]);
+    $axes = ma_rep_grille_axes();
+    $regles = $db->query('SELECT * FROM rep_regles WHERE actif = 1 ORDER BY ordre, id')->fetchAll();
+    $premiere = function (array $critere, ?callable $garder = null) use ($regles): ?array {
+        foreach ($regles as $r) {
+            if (($garder === null || $garder($r)) && ma_rep_regle_correspond($r, $critere)) {
+                return $r;
+            }
+        }
+        return null;
+    };
+    $sav = [];
+    foreach ($axes['sav_marques'] as $m) {
+        foreach ($axes['sav_clients'] as $t) {
+            $r = $premiere(['service' => 'sav', 'marque' => $m, 'type_client' => $t]);
+            $sav[$m][$t] = $r && in_array($r['cible_role'], ['rso', 'cta', 'backoffice'], true) ? $r['cible_role'] : 'repli';
+        }
+    }
+    $idDe = fn(?array $r) => $r && $r['cible'] === 'contacts' ? (int) (ma_csv($r['cible_contacts'])[0] ?? 0) ?: null : null;
+    // Une case du commerce ne lit que les règles qui précisent une nature : l'acquisition et
+    // « tout le reste » ont leurs propres lignes.
+    $commerce = [];
+    foreach ($axes['com_natures'] as $n) {
+        foreach ($axes['com_marques'] as $m) {
+            $commerce[$n][$m] = $idDe($premiere(['service' => 'commercial', 'marque' => $m, 'nature' => $n],
+                fn($r) => trim((string) $r['natures']) !== ''));
+        }
+    }
+    $acq = $premiere(['service' => 'commercial', 'marque' => 'ovity', 'nature' => 'autre'],
+        fn($r) => trim((string) $r['natures']) === '' && trim((string) $r['marques']) !== '');
+    $reste = $premiere(['service' => 'commercial', 'marque' => 'autre', 'nature' => 'autre'],
+        fn($r) => trim((string) $r['natures']) === '' && trim((string) $r['marques']) === '');
+    return ['sav' => $sav, 'commerce' => $commerce, 'acquisitions' => $idDe($acq), 'reste' => $idDe($reste)];
+}
+
+/** Reconstruit les règles à partir des tableaux. Une case vide renvoie à l'adresse de repli. */
+function ma_rep_grilles_enregistrer(PDO $db, array $g): void
+{
+    $axes = ma_rep_grille_axes();
+    $noms = ['worthington' => 'Worthington', 'mauguiere' => 'Mauguière', 'pneumatech' => 'Pneumatech', 'abac' => 'ABAC', 'autre' => 'autre marque'];
+    $cibles = ['rso' => 'RSO du secteur', 'cta' => 'CTA du secteur', 'backoffice' => 'back-office'];
+    $natures = ['commande_pieces' => 'Pièces : commande / livraison', 'devis_pieces' => 'Devis pièces / SAV',
+        'commande_equipement' => 'Équipement : commande / livraison', 'devis_equipement' => 'Devis équipement'];
+    $contacts = $db->query('SELECT id, nom FROM rep_contacts')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $ins = $db->prepare('INSERT INTO rep_regles(ordre, libelle, service, marques, type_client, natures, cible, cible_role, cible_contacts, repli_role, actif)
+        VALUES (?,?,?,?,?,?,?,?,?,?,1)');
+    $db->beginTransaction();
+    $db->exec("DELETE FROM rep_regles WHERE service IN ('finance', 'sav', 'commercial')");
+    $ins->execute([10, 'Finance → toutes les personnes de la finance', 'finance', null, null, null, 'role', 'finance', null, null]);
+    $ordre = 20;
+    foreach ($axes['sav_marques'] as $m) {
+        foreach ($axes['sav_clients'] as $t) {
+            $v = (string) ($g['sav'][$m][$t] ?? 'repli');
+            if (!isset($cibles[$v])) {
+                continue;
+            }
+            $ins->execute([$ordre++, 'SAV ' . $noms[$m] . ' — ' . ($t === 'direct' ? 'client direct' : 'distributeur') . ' → ' . $cibles[$v],
+                'sav', $m, $t, null, $v === 'backoffice' ? 'role' : 'role_departement', $v, null, $v === 'backoffice' ? null : 'backoffice']);
+        }
+    }
+    $boite = fn($id) => ($id && isset($contacts[(int) $id])) ? (int) $id : null;
+    if ($id = $boite($g['acquisitions'] ?? null)) {
+        $ins->execute([95, 'Acquisitions OVITY / FITEC → ' . $contacts[$id], 'commercial', 'ovity,fitec', null, null, 'contacts', null, (string) $id, null]);
+    }
+    $ordre = 100;
+    foreach ($axes['com_natures'] as $n) {
+        foreach ($axes['com_marques'] as $m) {
+            if ($id = $boite($g['commerce'][$n][$m] ?? null)) {
+                $ins->execute([$ordre, $natures[$n] . ' — ' . $noms[$m] . ' → ' . $contacts[$id], 'commercial', $m, null, $n, 'contacts', null, (string) $id, null]);
+            }
+            $ordre++;
+        }
+    }
+    if ($id = $boite($g['reste'] ?? null)) {
+        $ins->execute([190, 'Commercial — tout le reste → ' . $contacts[$id], 'commercial', null, null, null, 'contacts', null, (string) $id, null]);
+    }
+    $db->commit();
+}
+
+/** Annuaire et tableaux de départ, d'après les schémas SAV / finance / commerce fournis par Multiair. */
+function ma_rep_routage_initial(PDO $db): void
+{
+    $c = $db->prepare('INSERT INTO rep_contacts(nom, role, email, membres, competences, externe, actif, commentaire) VALUES (?,?,?,?,?,?,1,?)');
+    $ajout = function (string $nom, string $role, ?string $email, string $membres = '', string $activite = '', ?string $commentaire = null) use ($db, $c): int {
+        $c->execute([$nom, $role, $email, $membres ?: null, $activite ?: null, $role === 'cta' ? 1 : 0, $commentaire]);
         return (int) $db->lastInsertId();
     };
-    $ctsAbac = $boite('CTS commandes ABAC', 'commandes.abac.pieces@multiairfrance.fr',
+    // Finance
+    $ajout('Compta clients', 'finance', 'Compta.clients@airwco.com', '', 'Facturation, règlements', 'Boîte partagée de la finance');
+    // SAV
+    $ajout('Julien', 'backoffice', null, '', 'Support technique distributeurs', 'Email et portable à compléter');
+    $ajout('Marien', 'backoffice', null, '', 'Support technique distributeurs', 'Email et portable à compléter');
+    // Commerce : les boîtes partagées et ceux qui les lisent
+    $b = [];
+    $b['cts_abac'] = $ajout('CTS commandes ABAC', 'boite', 'commandes.abac.pieces@multiairfrance.fr',
         'Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre',
         'Commandes et suivi de livraison des pièces ABAC');
-    $ctsFrb = $boite('CTS commandes FRB', 'commandes.pieces@multiairfrance.fr', 'Stephanie Quesmel',
+    $b['cts_frb'] = $ajout('CTS commandes FRB', 'boite', 'commandes.pieces@multiairfrance.fr', 'Stephanie Quesmel',
         'Commandes et suivi de livraison des pièces Worthington, Mauguière, Pneumatech');
-    $ctsDevis = $boite('CTS devis', 'devis.pieces@multiairfrance.fr',
-        'Melvin Mayennaquiby, Axel Grimaud, Nicolas Boulet, Charline Laptes, Ndeye Beye',
-        'Devis pièces détachées et SAV, toutes marques');
-    $padCdes = $boite('PAD commandes', 'commandes.abac.materiel@multiairfrance.fr',
+    $b['cts_devis'] = $ajout('CTS devis', 'boite', 'devis.pieces@multiairfrance.fr',
+        'Melvin Mayennaquiby, Axel Grimaud, Nicolas Boulet, Charline Laptes, Ndeye Beye', 'Devis pièces détachées et SAV, toutes marques');
+    $b['pad_cdes'] = $ajout('PAD commandes', 'boite', 'commandes.abac.materiel@multiairfrance.fr',
         'Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre, Aurelien Slastan, Doriane Afonso Da Silva',
         'Commandes et suivi de livraison des équipements ABAC');
-    $padDevis = $boite('PAD devis', 'devis.abac.materiel@multiairfrance.fr',
-        'Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre',
-        'Devis équipements ABAC');
-    $aimCdes = $boite('AIM commandes', 'commandes.materiel@multiairfrance.fr',
+    $b['pad_devis'] = $ajout('PAD devis', 'boite', 'devis.abac.materiel@multiairfrance.fr',
+        'Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre', 'Devis équipements ABAC');
+    $b['aim_cdes'] = $ajout('AIM commandes', 'boite', 'commandes.materiel@multiairfrance.fr',
         'Marie Jotterand, Mathieu Patte, Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre, Doriane Afonso Da Silva',
         'Commandes et suivi de livraison des équipements Worthington et Mauguière');
-    $devisMat = $boite('Devis matériel neuf', 'devis.materiel@multiairfrance.fr', 'Celine Charlier, Chloe Baudet',
+    $b['devis_mat'] = $ajout('Devis matériel neuf', 'boite', 'devis.materiel@multiairfrance.fr', 'Celine Charlier, Chloe Baudet',
         'Devis équipements Worthington, Mauguière, Pneumatech');
-    $acq = $boite('Devis acquisitions', 'devis.acquisitions@multiairfrance.fr', 'Cecile Ollier, Bruno Picciano',
-        'Demandes concernant les acquisitions OVITY et FITEC');
-    $boite('Devis techniciens', 'devis.techniciens@airwco.com', 'Lionel Lebre, Esteban Godefroy', 'À préciser',
-        'Rôle à préciser : aucune règle ne l\'utilise encore');
+    $b['acq'] = $ajout('Devis acquisitions', 'boite', 'devis.acquisitions@multiairfrance.fr', 'Cecile Ollier, Bruno Picciano',
+        'Acquisitions OVITY et FITEC');
+    $ajout('Devis techniciens', 'boite', 'devis.techniciens@airwco.com', 'Lionel Lebre, Esteban Godefroy', 'À préciser',
+        'Rôle à préciser : aucune case du tableau ne l\'utilise encore');
     foreach (['Gwenaelle Pacheco', 'Doriane Afonso Da Silva', 'Emma De Faria'] as $nom) {
-        $boite($nom, null, '', 'Direct / Projet', 'Email à compléter ; critère de routage à préciser', 'direct_projet');
+        $ajout($nom, 'direct_projet', null, '', 'Direct / Projet', 'Email à compléter ; critère de routage à préciser');
     }
 
-    $r = $db->prepare('INSERT INTO rep_regles(ordre, libelle, service, marques, natures, cible, cible_contacts, actif) VALUES (?,?,?,?,?,?,?,1)');
-    $wmp = 'worthington,mauguiere,pneumatech';
-    $r->execute([95, 'Acquisitions OVITY / FITEC → devis acquisitions', 'commercial', 'ovity,fitec', null, 'contacts', (string) $acq]);
-    $r->execute([100, 'Pièces : commande / livraison — ABAC → CTS commandes ABAC', 'commercial', 'abac', 'commande_pieces', 'contacts', (string) $ctsAbac]);
-    $r->execute([110, 'Pièces : commande / livraison — Worthington, Mauguière, Pneumatech → CTS commandes FRB', 'commercial', $wmp, 'commande_pieces', 'contacts', (string) $ctsFrb]);
-    $r->execute([120, 'Devis pièces / SAV — toutes marques → CTS devis', 'commercial', null, 'devis_pieces', 'contacts', (string) $ctsDevis]);
-    $r->execute([130, 'Équipement : commande / livraison — ABAC → PAD commandes', 'commercial', 'abac', 'commande_equipement', 'contacts', (string) $padCdes]);
-    $r->execute([140, 'Équipement : commande / livraison — Worthington, Mauguière → AIM commandes', 'commercial', 'worthington,mauguiere', 'commande_equipement', 'contacts', (string) $aimCdes]);
-    $r->execute([150, 'Devis équipement — ABAC → PAD devis', 'commercial', 'abac', 'devis_equipement', 'contacts', (string) $padDevis]);
-    $r->execute([160, 'Devis équipement — Worthington, Mauguière, Pneumatech → devis matériel neuf', 'commercial', $wmp, 'devis_equipement', 'contacts', (string) $devisMat]);
-    // L'ancienne règle « Commercial » devient le filet : tout ce qui n'a pas trouvé de boîte.
-    $db->exec("UPDATE rep_regles SET ordre = 190, libelle = 'Commercial — tout le reste (nature ou marque non reconnue)'
-        WHERE libelle = 'Commercial' AND ordre = 90 AND cible = 'role' AND cible_role = 'commercial'");
+    $wmp = ['direct' => 'rso', 'distributeur' => 'backoffice'];
+    $cts = ['abac' => $b['cts_abac'], 'worthington' => $b['cts_frb'], 'mauguiere' => $b['cts_frb'], 'pneumatech' => $b['cts_frb'], 'autre' => null];
+    ma_rep_grilles_enregistrer($db, [
+        'sav' => ['worthington' => $wmp, 'mauguiere' => $wmp, 'pneumatech' => $wmp,
+            'abac' => ['direct' => 'cta', 'distributeur' => 'backoffice'], 'autre' => ['direct' => 'repli', 'distributeur' => 'repli']],
+        'commerce' => [
+            'commande_pieces' => $cts,
+            'devis_pieces' => array_fill_keys(['abac', 'worthington', 'mauguiere', 'pneumatech', 'autre'], $b['cts_devis']),
+            // Commande d'équipement Pneumatech : pas de boîte désignée dans le tableau fourni.
+            'commande_equipement' => ['abac' => $b['pad_cdes'], 'worthington' => $b['aim_cdes'], 'mauguiere' => $b['aim_cdes'], 'pneumatech' => null, 'autre' => null],
+            'devis_equipement' => ['abac' => $b['pad_devis'], 'worthington' => $b['devis_mat'], 'mauguiere' => $b['devis_mat'], 'pneumatech' => $b['devis_mat'], 'autre' => null],
+        ],
+        'acquisitions' => $b['acq'],
+        'reste' => null,
+    ]);
 }
