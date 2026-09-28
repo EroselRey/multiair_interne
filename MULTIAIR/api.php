@@ -324,6 +324,9 @@ try {
                     // Urgence réservée au SAV (panne, production arrêtée).
                     $d['urgence'] = ma_rep_service($d['service']) === 'sav' && ma_bool($d['urgence'] ?? false) ? 1 : 0;
                     $d['statut'] = ma_str($d['statut'] ?? null) ?? ($d['urgence'] ? 'Urgent' : 'En attente');
+                    if (!$d['urgence'] && $d['statut'] === 'Urgent') {
+                        $d['statut'] = 'Transmis';
+                    }
                     $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;
                     foreach (['contact', 'marque', 'modele', 'numero_serie', 'type_panne', 'besoin_commercial', 'reference_facture', 'resume', 'justification_urgence', 'email', 'departement', 'canal', 'derniere_reponse_ia'] as $c) {
                         $d[$c] = ma_str($d[$c] ?? null);
