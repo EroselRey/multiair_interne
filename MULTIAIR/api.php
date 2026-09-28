@@ -321,7 +321,8 @@ try {
                     $d['tel_norm'] = ma_tel((string) ($d['telephone'] ?? $d['tel'] ?? $d['tel_norm'] ?? ''));
                     $d['societe'] = ma_str($d['societe'] ?? $d['distributeur'] ?? null);
                     $d['service'] = strtolower(ma_str($d['service'] ?? null) ?? '');
-                    $d['urgence'] = ma_bool($d['urgence'] ?? false) ? 1 : 0;
+                    // Urgence réservée au SAV (panne, production arrêtée).
+                    $d['urgence'] = ma_rep_service($d['service']) === 'sav' && ma_bool($d['urgence'] ?? false) ? 1 : 0;
                     $d['statut'] = ma_str($d['statut'] ?? null) ?? ($d['urgence'] ? 'Urgent' : 'En attente');
                     $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;
                     foreach (['contact', 'marque', 'modele', 'numero_serie', 'type_panne', 'besoin_commercial', 'reference_facture', 'resume', 'justification_urgence', 'email', 'departement', 'canal', 'derniere_reponse_ia'] as $c) {
@@ -417,7 +418,8 @@ try {
                     $svc = strtoupper(ma_str($d['service'] ?? null) ?? '');
                     $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'FINANCE' => 'FINANCE'];
                     $d['service'] = $map[$svc] ?? fail("Service non reconnu : $svc");
-                    $d['priorite'] = ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT' ? 'URGENT' : 'Normal';
+                    $d['priorite'] = $d['service'] === 'SAV'
+                        && (ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT') ? 'URGENT' : 'Normal';
                     $d['tel'] = ma_tel((string) ($d['tel'] ?? $d['telephone'] ?? ''));
                     $d['societe'] = ma_str($d['societe'] ?? $d['distributeur'] ?? null);
                     $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;

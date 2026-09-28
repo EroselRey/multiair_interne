@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-28b';
+const MA_VERSION = '2026-09-28c';
 
 function ma_config(): array
 {
@@ -1033,7 +1033,8 @@ function ma_rep_router(PDO $db, array $d): array
     $marque = ma_rep_marque($d['marque'] ?? null, $d['modele'] ?? null, $listes['marques']);
     $nature = ma_rep_nature($d, $listes['natures']);
     $typeClient = ma_rep_type_client($d);
-    $urgent = ma_rep_urgent($d);
+    // L'urgence (panne, production arrêtée) n'existe qu'au SAV : finance et commerce ne sont jamais urgents.
+    $urgent = $service === 'sav' && ma_rep_urgent($d);
     $equip = ma_plat($d['type_equipement'] ?? null);
     $equip = $equip === '' ? '' : (str_contains($equip, 'piston') ? 'piston' : 'autre');
     $dep = ma_departement($d['code_postal'] ?? null, $d['departement'] ?? null);
