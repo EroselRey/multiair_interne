@@ -301,8 +301,17 @@
   }
 
   // ------------------------------------------------------------------ Répondeur : règles, annuaire, simulateur
-  const R_ROLES = [['rso', 'RSO (terrain)'], ['cta', 'CTA (agent externe)'], ['backoffice', 'Back-office support'], ['compta', 'Compta'], ['commercial', 'Commercial'], ['autre', 'Autre']];
-  const R_MARQUES = [['worthington', 'Worthington'], ['mauguiere', 'Mauguière'], ['abac', 'ABAC'], ['pneumatech', 'Pneumatech'], ['autre', 'Autre marque']];
+  // Listes paramétrables (onglet Routage > Listes) ; remplacées par celles du serveur au chargement.
+  let R_ROLES = [['rso', 'RSO (terrain)'], ['cta', 'CTA (agent externe)'], ['backoffice', 'Back-office support'], ['boite', 'Boîte partagée'], ['compta', 'Compta'], ['commercial', 'Commercial'], ['autre', 'Autre']];
+  let R_MARQUES = [['worthington', 'Worthington'], ['mauguiere', 'Mauguière'], ['abac', 'ABAC'], ['pneumatech', 'Pneumatech'], ['autre', 'Autre marque']];
+  let R_NATURES = [['autre', 'Autre demande commerciale']];
+  let R_LISTES = null;
+  async function chargerListes() {
+    R_LISTES = await api('rep/listes');
+    R_ROLES = R_LISTES.roles.map((x) => [x.code, x.libelle]);
+    R_MARQUES = [...R_LISTES.marques.map((x) => [x.code, x.libelle]), ['autre', 'Autre marque']].filter((x, i, a) => a.findIndex((y) => y[0] === x[0]) === i);
+    R_NATURES = R_LISTES.natures.map((x) => [x.code, x.libelle]);
+  }
   const R_SERVICES = [['', 'Tous services'], ['sav', 'SAV'], ['finance', 'Finance'], ['commercial', 'Commercial']];
   const R_CLIENTS = [['', 'Tous clients'], ['direct', 'Client direct'], ['distributeur', 'Distributeur']];
   const R_URGENCE = [['', 'Urgent ou non'], ['oui', 'Urgent seulement'], ['non', 'Non urgent seulement']];
@@ -317,13 +326,14 @@
   const ligne = (label, html, aide = '') => `<div class="editrow"><label>${h(label)}</label>${html}${aide ? `<span class="hint">${h(aide)}</span>` : ''}</div>`;
 
   async function repRoutageUI(root) {
-    const [c, r] = await Promise.all([api('rep/contacts'), api('rep/regles')]);
+    const [c, r] = await Promise.all([api('rep/contacts'), api('rep/regles'), chargerListes()]);
     const contacts = c.rows, regles = r.rows, params = c.parametres || {};
     const actifs = contacts.filter((x) => Number(x.actif));
     const personnesDe = (rg) => rg.cible === 'contacts'
       ? actifs.filter((x) => csvDe(rg.cible_contacts).includes(String(x.id)))
       : actifs.filter((x) => x.role === rg.cible_role);
     const criteres = (rg) => [nomDe(R_SERVICES, rg.service), rg.marques ? csvDe(rg.marques).map((m) => nomDe(R_MARQUES, m)).join(', ') : '',
+      rg.natures ? csvDe(rg.natures).map((n) => nomDe(R_NATURES, n)).join(', ') : '',
       rg.type_client ? nomDe(R_CLIENTS, rg.type_client) : '', rg.urgence ? nomDe(R_URGENCE, rg.urgence) : '', rg.type_equipement ? nomDe(R_EQUIP, rg.type_equipement) : '']
       .filter(Boolean).join(' · ');
     const cibleTxt = (rg) => rg.cible === 'contacts' ? personnesDe(rg).map((x) => x.nom).join(', ') || '—'
@@ -348,6 +358,7 @@
           <label>Client ${sel('type_client', R_CLIENTS.slice(1), 'direct')}</label>
           <label>Urgence ${sel('urgence', [['false', 'Non urgent'], ['true', 'URGENT — production arrêtée']], 'false')}</label>
           <label>Équipement ${sel('type_equipement', R_EQUIP, '')}</label>
+          <label>Nature (commercial) ${sel('nature', [['', 'Non précisée'], ...R_NATURES], '')}</label>
           <label>Code postal du site <input name="code_postal" placeholder="ex. 69003" inputmode="numeric"></label>
         </div>
         <div style="margin-top:10px"><button class="btn primary" id="simGo">Qui reçoit ?</button></div>
@@ -368,6 +379,19 @@
         <label>Copie en cas d'urgence (escalade), séparer par ; <input name="rep_cc_urgence" value="${h(params.rep_cc_urgence)}" placeholder="ex. direction@airwco.com"></label>
       </div><div style="margin-top:10px"><button class="btn small primary" id="saveParams">Enregistrer</button></div></div>
 
+      <div class="section-title"><h2>Listes</h2></div>
+      <div class="card">
+        <p class="hint" style="margin-top:0">Une ligne par élément : <b>code | libellé | mots-clés</b>. Le code est ce que Claire transmet (sans espace ni accent) ;
+        les mots-clés permettent de reconnaître l'élément dans ce que dit l'appelant. Pour une nature, <code>devis+piece</code> exige les deux mots.
+        Modifier un code casse les règles qui l'utilisent : ajoutez plutôt une ligne.</p>
+        <div class="route-grid" style="grid-template-columns:1fr">
+          <label>Marques <textarea name="liste_marques" rows="7" style="font-family:ui-monospace,monospace;font-size:12.5px">${h(R_LISTES.marques.map((x) => [x.code, x.libelle, x.mots || ''].join(' | ')).join('\n'))}</textarea></label>
+          <label>Natures de demande <textarea name="liste_natures" rows="6" style="font-family:ui-monospace,monospace;font-size:12.5px">${h(R_LISTES.natures.map((x) => [x.code, x.libelle, x.mots || ''].join(' | ')).join('\n'))}</textarea></label>
+          <label>Rôles de l'annuaire <textarea name="liste_roles" rows="6" style="font-family:ui-monospace,monospace;font-size:12.5px">${h(R_LISTES.roles.map((x) => [x.code, x.libelle].join(' | ')).join('\n'))}</textarea></label>
+        </div>
+        <div style="margin-top:10px"><button class="btn small primary" id="saveListes">Enregistrer les listes</button></div>
+      </div>
+
       <details style="margin-top:18px"><summary class="hint" style="cursor:pointer">Ancien routage par service — sert encore aux WhatsApp non identifiés (clé « aiguilleur »)</summary><div id="oldRoutage" style="margin-top:10px"></div></details>`;
 
     const recharger = () => repRoutageUI(root);
@@ -381,7 +405,8 @@
     ], {sort: 'ordre', asc: true, onRow: (x) => regle(x)});
 
     table('#tblContacts', contacts, [
-      {key: 'nom', label: 'Nom', render: (x) => `<b>${h(x.nom)}</b>${Number(x.externe) ? ' <span class="hint">(externe)</span>' : ''}`},
+      {key: 'nom', label: 'Nom', render: (x) => `<b>${h(x.nom)}</b>${Number(x.externe) ? ' <span class="hint">(externe)</span>' : ''}${x.membres ? `<br><span class="hint">${h(x.membres)}</span>` : ''}`,
+        search: (x) => `${x.nom} ${x.membres || ''} ${x.email || ''}`},
       {key: 'role', label: 'Rôle', render: (x) => h(nomDe(R_ROLES, x.role))},
       {key: 'email', label: 'Email', render: (x) => x.email ? h(x.email) : pill('à compléter', 'warn')},
       {key: 'mobile', label: 'Portable', render: (x) => x.mobile ? h(x.mobile) : '<span class="hint">—</span>'},
@@ -396,6 +421,7 @@
         ${ligne('Nom', `<input name="nom" value="${h(x.nom)}">`)}
         ${ligne('Rôle', sel('role', R_ROLES, x.role || 'rso'))}
         ${ligne('Email', `<input name="email" value="${h(x.email)}" placeholder="prenom.nom@airwco.com">`)}
+        ${ligne('Membres (boîte partagée)', `<textarea name="membres">${h(x.membres)}</textarea>`, 'Les personnes qui lisent cette boîte. Pour information : le mail part à l\'adresse de la boîte.')}
         ${ligne('Portable (SMS)', `<input name="mobile" value="${h(x.mobile)}" placeholder="06 12 34 56 78">`, 'Un 06 ou 07 : le SMS part à chaque demande reçue.')}
         ${ligne('Départements couverts', `<input name="departements" value="${h(x.departements)}" placeholder="69, 01, 38, 42">`, 'Vide = tous. Utilisé pour choisir le RSO ou le CTA du secteur.')}
         ${ligne('Marques', cases('marques', R_MARQUES, x.marques), 'Aucune case = toutes les marques.')}
@@ -405,7 +431,7 @@
         ${ligne('Commentaire', `<textarea name="commentaire">${h(x.commentaire)}</textarea>`)}`, saveBtn() + (x.id ? delBtn() : ''));
       $('#drawerSave').onclick = async () => {
         const b = $('#drawerBody');
-        const body = Object.fromEntries(['nom', 'role', 'email', 'mobile', 'departements', 'competences', 'externe', 'actif', 'commentaire'].map((k) => [k, $(`[name="${k}"]`, b).value.trim()]));
+        const body = Object.fromEntries(['nom', 'role', 'email', 'membres', 'mobile', 'departements', 'competences', 'externe', 'actif', 'commentaire'].map((k) => [k, $(`[name="${k}"]`, b).value.trim()]));
         body.marques = lu(b, 'marques');
         if (!body.nom) return toast('Le nom est requis', true);
         if (x.id) await patch('rep/contacts/' + x.id, body); else await api('rep/contacts', {method: 'POST', body});
@@ -424,6 +450,7 @@
         ${ligne('Type de client', sel('type_client', R_CLIENTS, x.type_client || ''))}
         ${ligne('Urgence', sel('urgence', R_URGENCE, x.urgence || ''))}
         ${ligne('Équipement', sel('type_equipement', R_EQUIP, x.type_equipement || ''), 'Utile pour ABAC : compresseur à piston ou non.')}
+        ${ligne('Nature de la demande', cases('natures', R_NATURES, x.natures), 'Surtout pour le commercial : commande de pièces, devis équipement… Aucune case = toutes.')}
         <h4>… envoyer à</h4>
         ${ligne('Destinataires', sel('cible', R_CIBLES, x.cible || 'role_departement'))}
         ${ligne('Rôle', sel('cible_role', R_ROLES, x.cible_role || 'rso'))}
@@ -435,6 +462,7 @@
         const b = $('#drawerBody');
         const body = Object.fromEntries(['libelle', 'ordre', 'service', 'type_client', 'urgence', 'type_equipement', 'cible', 'cible_role', 'repli_role', 'cc', 'actif'].map((k) => [k, $(`[name="${k}"]`, b).value.trim()]));
         body.marques = lu(b, 'marques');
+        body.natures = lu(b, 'natures');
         body.cible_contacts = lu(b, 'cible_contacts');
         if (body.cible === 'contacts' && !body.cible_contacts) return toast('Cochez au moins une personne', true);
         if (x.id) await patch('rep/regles/' + x.id, body); else await api('rep/regles', {method: 'POST', body});
@@ -449,15 +477,22 @@
       await api('parametres', {method: 'POST', body: {valeurs: {rep_repli_email: $('[name=rep_repli_email]', root).value.trim(), rep_cc_urgence: $('[name=rep_cc_urgence]', root).value.trim()}}});
       toast('Réglages enregistrés');
     };
+    $('#saveListes', root).onclick = async () => {
+      const lire = (name) => $(`[name="${name}"]`, root).value.split('\n').map((l) => l.split('|').map((x) => x.trim()))
+        .filter(([code]) => code).map(([code, libelle, mots]) => ({code, libelle: libelle || code, mots: mots || ''}));
+      await api('rep/listes', {method: 'POST', body: {marques: lire('liste_marques'), natures: lire('liste_natures'), roles: lire('liste_roles')}});
+      toast('Listes enregistrées'); recharger();
+    };
     $('#simGo', root).onclick = async () => {
       const f = $('#simForm', root);
-      const body = Object.fromEntries(['service', 'marque', 'type_client', 'urgence', 'type_equipement', 'code_postal'].map((k) => [k, $(`[name="${k}"]`, f).value]));
+      const body = Object.fromEntries(['service', 'marque', 'type_client', 'urgence', 'type_equipement', 'nature', 'code_postal'].map((k) => [k, $(`[name="${k}"]`, f).value]));
       const x = await api('rep/simuler', {method: 'POST', body});
       const liste = (s) => (s || '').split(';').filter(Boolean).map((e) => h(e)).join(', ') || '<span class="hint">—</span>';
       $('#simRes', root).innerHTML = `
         ${x.urgent ? '<div class="msg err" style="margin-top:0"><b>Urgent :</b> objet du mail et SMS marqués URGENT.</div>' : ''}
         <div class="who">→ ${h(x.personnes.map((p) => p.nom).join(', ') || 'Adresse de repli')}</div>
-        ${kv([['Règle appliquée', h(x.regle_libelle)], ['Département', h(x.departement || '')], ['Mail à', liste(x.to)], ['Copie', liste(x.cc)], ['SMS à', liste(x.sms)],
+        ${kv([['Règle appliquée', h(x.regle_libelle)], ['Nature retenue', x.nature ? h(nomDe(R_NATURES, x.nature)) : ''], ['Département', h(x.departement || '')],
+          ['Lu par', h(x.personnes.map((p) => p.membres).filter(Boolean).join(' · '))], ['Mail à', liste(x.to)], ['Copie', liste(x.cc)], ['SMS à', liste(x.sms)],
           ['Objet du mail', h(x.objet)], ['Texte du SMS', h(x.sms_texte)]])}
         ${x.notes.length ? `<div class="msg" style="background:#fdefd6;color:var(--warn)">${x.notes.map(h).join('<br>')}</div>` : ''}`;
     };
@@ -506,6 +541,7 @@
     const [s, fiches, demandes, conv, dist, logs] = await Promise.all([
       api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('rep/messages', {query: {limit: 2000}}),
       api('distributeurs', {query: {limit: 5000}}), api('log', {query: {scenario: 'repondeur', limit: 50}}),
+      chargerListes().catch(() => {}),
     ]);
     // une ligne par numéro : le fil complet des échanges avec Claire
     const fils = [...conv.rows.reduce((m, r) => {
@@ -591,7 +627,7 @@
         ${kv([['Reçue le', fmtDate(d.created_at)], ['Priorité', pill(d.priorite, cls(d.priorite))], ['Source', L(d.source)],
           ['À rappeler', h(d.contact || '') + (d.tel ? ` — <a href="tel:+${h(d.tel)}">${h(telFr(d.tel))}</a>` : '')], ['Société', h(d.societe)], ['Email', h(d.email)],
           ['Marque / modèle', h([d.marque, d.modele].filter(Boolean).join(' '))], ['N° série', h(d.numero_serie)], ['Équipement', d.type_equipement ? h(L(d.type_equipement)) : ''],
-          ['Problème', h(d.type_panne)], ['Besoin commercial', h(d.besoin_commercial)], ['Réf. facture', h(d.reference_facture)], ['Résumé', h(d.resume)],
+          ['Problème', h(d.type_panne)], ['Nature', d.nature ? h(nomDe(R_NATURES, d.nature)) : ''], ['Besoin commercial', h(d.besoin_commercial)], ['Réf. facture', h(d.reference_facture)], ['Résumé', h(d.resume)],
           ['Justification urgence', h(d.justification_urgence)],
           ['Type de client', d.type_client ? h(L(d.type_client)) : ''], ['Compte distributeur', h(d.compte_distributeur)], ['Département du site', h(d.departement)]])}
         <h4>Transmission</h4>
@@ -635,14 +671,15 @@
           {key: 'priorite', label: 'Priorité', render: (r) => r.priorite === 'URGENT' ? pill('🔴 URGENT', 'danger') : pill('Normal', 'muted')},
           {key: 'statut', label: 'Suivi', render: (r) => `<select class="inline" data-dem="${r.id}"><option value="a_traiter" ${r.statut === 'a_traiter' ? 'selected' : ''}>À traiter</option><option value="en_cours" ${r.statut === 'en_cours' ? 'selected' : ''}>En cours</option><option value="traite" ${r.statut === 'traite' ? 'selected' : ''}>Traitée</option></select>`},
           {key: 'service', label: 'Service', render: (r) => pill(r.service, 'info')},
-          {key: 'marque', label: 'Marque', render: (r) => h(r.marque_norm ? L(r.marque_norm) : (r.marque || ''))},
+          {key: 'marque', label: 'Marque', render: (r) => h(r.marque_norm ? nomDe(R_MARQUES, r.marque_norm) : (r.marque || ''))
+            + (r.nature ? `<br><span class="hint">${h(nomDe(R_NATURES, r.nature))}</span>` : '')},
           {key: 'type_client', label: 'Client', render: (r) => r.type_client ? h(L(r.type_client)) : ''},
           {key: 'departement', label: 'Dpt'},
           {key: 'societe', label: 'Société', render: (r) => clip(r.societe)},
           {key: 'contact', label: 'À rappeler', render: (r) => `${h(r.contact || '')}${r.tel ? `<br><span class="hint">${h(telFr(r.tel))}</span>` : ''}`},
           {key: 'destinataires', label: 'Transmise à', render: (r) => clip(r.destinataires || (r.dest_to || '').replace(/;/g, ', '))},
           {key: 'resume', label: 'Problème', render: (r) => clip(r.type_panne || r.resume, true)},
-        ], {filters: [{key: 'statut', label: 'Suivi', map: L}, {key: 'priorite', label: 'Priorité'}, {key: 'service', label: 'Service'}, {key: 'type_client', label: 'Client', map: L}, {key: 'marque_norm', label: 'Marque', map: L}], onRow: demande,
+        ], {filters: [{key: 'statut', label: 'Suivi', map: L}, {key: 'priorite', label: 'Priorité'}, {key: 'service', label: 'Service'}, {key: 'type_client', label: 'Client', map: L}, {key: 'marque_norm', label: 'Marque', map: (v) => nomDe(R_MARQUES, v)}], onRow: demande,
           afterRender: (el) => {
             $$('tbody tr[data-i]', el).forEach((tr) => tr.classList.toggle('urgent', urgentNonPris(rows[Number(tr.dataset.i)])));
             $$('[data-dem]', el).forEach((sel) => sel.addEventListener('change', async () => {

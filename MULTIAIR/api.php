@@ -431,6 +431,7 @@ try {
                     $d['statut'] = 'a_traiter';
                     $rt = ma_rep_router($db, $d);
                     $d['marque_norm'] = $rt['marque'];
+                    $d['nature'] = $rt['nature'] ?: null;
                     $d['type_client'] = $rt['type_client'];
                     $d['type_equipement'] = ma_str($d['type_equipement'] ?? null) ?? ($rt['type_equipement'] ?: null);
                     $d['departement'] = $rt['departement'] ?? ma_str($d['departement'] ?? null);
@@ -523,6 +524,30 @@ try {
                 out(['ok' => true, 'rows' => $db->query("SELECT * FROM $table ORDER BY $ordre")->fetchAll(),
                     'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence')")
                         ->fetchAll(PDO::FETCH_KEY_PAIR)]);
+            }
+            // Listes paramétrables : marques, natures de demande, rôles de l'annuaire.
+            if ($sub === 'listes') {
+                if ($method === 'POST' || $method === 'PATCH') {
+                    foreach (['marques', 'natures', 'roles'] as $cle) {
+                        if (!isset($body[$cle]) || !is_array($body[$cle])) {
+                            continue;
+                        }
+                        $liste = [];
+                        foreach ($body[$cle] as $x) {
+                            $code = preg_replace('/[^a-z0-9_]/', '', str_replace([' ', '-'], '_', ma_plat($x['code'] ?? '')));
+                            if ($code !== '') {
+                                $liste[] = ['code' => $code, 'libelle' => trim((string) ($x['libelle'] ?? '')) ?: $code,
+                                    'mots' => trim((string) ($x['mots'] ?? ''))];
+                            }
+                        }
+                        if (!$liste) {
+                            fail("La liste « $cle » ne peut pas être vide");
+                        }
+                        $db->prepare('INSERT OR REPLACE INTO parametres(cle, valeur) VALUES (?,?)')
+                            ->execute(['rep_liste_' . $cle, json_encode($liste, JSON_UNESCAPED_UNICODE)]);
+                    }
+                }
+                out(['ok' => true] + ma_rep_listes($db));
             }
             // Simulateur : qui recevrait cette demande ? Rien n'est enregistré ni envoyé.
             if ($sub === 'simuler') {

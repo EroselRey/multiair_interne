@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS rep_contacts (
   departements TEXT, marques TEXT, competences TEXT,
   externe INTEGER NOT NULL DEFAULT 0,
   actif INTEGER NOT NULL DEFAULT 1,
-  commentaire TEXT
+  commentaire TEXT,
+  membres TEXT                            -- boîte partagée : les personnes qui la lisent
 );
 
 -- Règles de routage du répondeur, évaluées dans l'ordre : la première qui correspond
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS rep_regles (
   type_client TEXT,                       -- direct | distributeur
   urgence TEXT,                           -- oui | non
   type_equipement TEXT,                   -- piston | autre
+  natures TEXT,                           -- commande_pieces, devis_equipement… (liste paramétrable)
   cible TEXT NOT NULL DEFAULT 'role',     -- role | role_departement | contacts
   cible_role TEXT,
   cible_contacts TEXT,                    -- identifiants de contacts, séparés par des virgules

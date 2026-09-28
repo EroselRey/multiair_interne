@@ -64,7 +64,9 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Routage par marque / type de client / urgence (moteur ma_rep_router)
             'code_postal' => 'TEXT', 'marque_norm' => 'TEXT', 'type_client' => 'TEXT', 'type_equipement' => 'TEXT',
             'regle_id' => 'INTEGER', 'regle_libelle' => 'TEXT', 'destinataires' => 'TEXT',
-            'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT'],
+            'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT', 'nature' => 'TEXT'],
+        'rep_contacts' => ['membres' => 'TEXT'],
+        'rep_regles' => ['natures' => 'TEXT'],
     ];
 
     $present = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
@@ -128,6 +130,13 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     if (!$st->fetchColumn()) {
         ma_rep_routage_initial($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_initial', ?)")->execute([ma_now()]);
+    }
+    // Routage commercial (boîtes partagées CTS / PAD / AIM…), ajouté ensuite : sa propre marque de passage.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_routage_commerce'");
+    $st->execute();
+    if (!$st->fetchColumn()) {
+        ma_rep_routage_commerce($pdo);
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_commerce', ?)")->execute([ma_now()]);
     }
 
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
@@ -822,36 +831,104 @@ function ma_csv(?string $s): array
     return array_values(array_filter(array_map('ma_plat', preg_split('/[,;]+/', (string) $s) ?: []), fn($x) => $x !== ''));
 }
 
-/** Marque normalisée : worthington | mauguiere | abac | pneumatech | autre | '' (inconnue). */
-function ma_rep_marque(?string $marque, ?string $modele = null): string
+/**
+ * Listes paramétrables du routage : marques, natures de demande, rôles de l'annuaire.
+ * Chaque liste se modifie depuis la page (paramètres rep_liste_*, en JSON) ; à défaut,
+ * on part des valeurs ci-dessous. « mots » : mots-clés qui permettent de reconnaître
+ * l'élément dans un texte libre. Pour une nature, « devis+piece » exige les deux mots.
+ */
+function ma_rep_listes(PDO $db): array
 {
-    $m = ma_plat($marque);
-    $table = [
-        'worthington' => ['worthington', 'creyssensac', 'creysensac'],
-        'mauguiere' => ['mauguiere', 'maugiere'],
-        'abac' => ['abac'],
-        'pneumatech' => ['pneumatech', 'pneumatec'],
+    $defauts = [
+        'marques' => [
+            ['code' => 'worthington', 'libelle' => 'Worthington Creyssensac', 'mots' => 'worthington, creyssensac, rollair, rlr, dixair, dnx, decibair, snx, pixair, pxr, blocair'],
+            ['code' => 'mauguiere', 'libelle' => 'Mauguière', 'mots' => 'mauguiere, mav, mrl'],
+            ['code' => 'abac', 'libelle' => 'ABAC', 'mots' => 'abac, genesis, formula, cross'],
+            ['code' => 'pneumatech', 'libelle' => 'Pneumatech', 'mots' => 'pneumatech'],
+            ['code' => 'ovity', 'libelle' => 'OVITY (acquisition)', 'mots' => 'ovity'],
+            ['code' => 'fitec', 'libelle' => 'FITEC (acquisition)', 'mots' => 'fitec'],
+        ],
+        'natures' => [
+            ['code' => 'commande_pieces', 'libelle' => 'Pièces : commande ou suivi de livraison',
+                'mots' => 'commande+piece, livraison+piece, suivi+piece, commande+kit, commande+filtre, commande+huile'],
+            ['code' => 'devis_pieces', 'libelle' => 'Devis pièces détachées ou SAV (réparation, entretien)',
+                'mots' => 'devis+piece, devis+kit, devis+filtre, devis+entretien, devis+sav, devis+reparation, prix+piece'],
+            ['code' => 'commande_equipement', 'libelle' => 'Équipement : commande ou suivi de livraison',
+                'mots' => 'commande+compresseur, livraison+compresseur, suivi+compresseur, commande+secheur, commande+equipement, livraison+equipement'],
+            ['code' => 'devis_equipement', 'libelle' => 'Devis équipement neuf',
+                'mots' => 'devis+compresseur, devis+secheur, devis+equipement, prix+compresseur, devis+materiel'],
+            ['code' => 'autre', 'libelle' => 'Autre demande commerciale', 'mots' => ''],
+        ],
+        'roles' => [
+            ['code' => 'rso', 'libelle' => 'RSO (terrain)'], ['code' => 'cta', 'libelle' => 'CTA (agent externe)'],
+            ['code' => 'backoffice', 'libelle' => 'Back-office support'], ['code' => 'boite', 'libelle' => 'Boîte partagée'],
+            ['code' => 'direct_projet', 'libelle' => 'Direct / Projet'], ['code' => 'compta', 'libelle' => 'Compta'],
+            ['code' => 'commercial', 'libelle' => 'Commercial'], ['code' => 'autre', 'libelle' => 'Autre'],
+        ],
     ];
-    foreach ($table as $cle => $mots) {
-        foreach ($mots as $mot) {
-            if ($m !== '' && str_contains($m, $mot)) {
-                return $cle;
+    $params = $db->query("SELECT cle, valeur FROM parametres WHERE cle LIKE 'rep_liste_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $out = [];
+    foreach ($defauts as $cle => $def) {
+        $v = json_decode((string) ($params['rep_liste_' . $cle] ?? ''), true);
+        $v = is_array($v) ? array_values(array_filter($v, fn($x) => is_array($x) && trim((string) ($x['code'] ?? '')) !== '')) : [];
+        $out[$cle] = $v ?: $def;
+    }
+    return $out;
+}
+
+/** Un mot-clé est présent en début de mot (« mav » reconnaît « MAVD 151 », pas « amave »). */
+function ma_mot_present(string $texte, string $mot): bool
+{
+    $mot = ma_plat($mot);
+    return $mot !== '' && preg_match('/(^|[^a-z0-9])' . preg_quote($mot, '/') . '/', $texte) === 1;
+}
+
+/** Marque normalisée (code de la liste des marques), 'autre' si inconnue, '' si non renseignée. */
+function ma_rep_marque(?string $marque, ?string $modele = null, ?array $marques = null): string
+{
+    $marques ??= ma_rep_listes(ma_db())['marques'];
+    $codes = array_map(fn($x) => ma_plat($x['code']), $marques);
+    $m = ma_plat($marque);
+    if ($m !== '' && in_array($m, $codes, true)) {
+        return $m;
+    }
+    // La marque dite, puis le modèle : les gammes reconnaissables trahissent la marque.
+    foreach ([$m, ma_plat($modele)] as $texte) {
+        if ($texte === '') {
+            continue;
+        }
+        foreach ($marques as $x) {
+            foreach (ma_csv($x['mots'] ?? '') as $mot) {
+                if (ma_mot_present($texte, $mot)) {
+                    return ma_plat($x['code']);
+                }
             }
         }
     }
-    // Marque absente : on la déduit des gammes les plus reconnaissables (table du prompt VAPI).
-    $mod = ma_plat($modele);
-    $gammes = [
-        'worthington' => '/^(rlr|rollair|dnx|dixair|snx|decibair|pxr|pixair|blocair)/',
-        'mauguiere' => '/^(mavdv|mavd|mav|mrl)\b/',
-        'abac' => '/^(genesis|formula|cross)/',
-    ];
-    foreach ($gammes as $cle => $re) {
-        if ($mod !== '' && preg_match($re, $mod)) {
-            return $cle;
+    return $m === '' ? '' : 'autre';
+}
+
+/** Nature de la demande : le code transmis par Claire, sinon déduit des mots de la demande. */
+function ma_rep_nature(array $d, array $natures): string
+{
+    $codes = array_map(fn($x) => ma_plat($x['code']), $natures);
+    $dit = ma_plat($d['nature'] ?? $d['type_demande'] ?? null);
+    if ($dit !== '' && in_array($dit, $codes, true)) {
+        return $dit;
+    }
+    $texte = ma_plat(implode(' ', [$d['nature'] ?? '', $d['besoin_commercial'] ?? '', $d['resume'] ?? '']));
+    if (trim($texte) === '') {
+        return '';
+    }
+    foreach ($natures as $x) {
+        foreach (ma_csv($x['mots'] ?? '') as $groupe) {
+            $tous = array_filter(array_map('trim', explode('+', $groupe)));
+            if ($tous && count(array_filter($tous, fn($mot) => ma_mot_present($texte, $mot))) === count($tous)) {
+                return ma_plat($x['code']);
+            }
         }
     }
-    return $m === '' ? '' : 'autre';
+    return '';
 }
 
 /** direct | distributeur. Un compte distributeur retrouvé vaut preuve. */
@@ -926,8 +1003,10 @@ function ma_rep_service(?string $s): string
 function ma_rep_router(PDO $db, array $d): array
 {
     $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $listes = ma_rep_listes($db);
     $service = ma_rep_service($d['service'] ?? null);
-    $marque = ma_rep_marque($d['marque'] ?? null, $d['modele'] ?? null);
+    $marque = ma_rep_marque($d['marque'] ?? null, $d['modele'] ?? null, $listes['marques']);
+    $nature = ma_rep_nature($d, $listes['natures']);
     $typeClient = ma_rep_type_client($d);
     $urgent = ma_rep_urgent($d);
     $equip = ma_plat($d['type_equipement'] ?? null);
@@ -938,11 +1017,14 @@ function ma_rep_router(PDO $db, array $d): array
     $contacts = $db->query('SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom')->fetchAll();
     $regles = $db->query('SELECT * FROM rep_regles WHERE actif = 1 ORDER BY ordre, id')->fetchAll();
 
-    $correspond = function (array $r) use ($service, $marque, $typeClient, $urgent, $equip): bool {
+    $correspond = function (array $r) use ($service, $marque, $nature, $typeClient, $urgent, $equip): bool {
         $s = ma_csv($r['service']);
         $m = ma_csv($r['marques']);
+        $n = ma_csv($r['natures'] ?? null);
         return (!$s || in_array($service, $s, true))
             && (!$m || in_array($marque === '' ? 'autre' : $marque, $m, true))
+            // Nature non reconnue : « autre », pour tomber sur la règle générale plutôt que nulle part.
+            && (!$n || in_array($nature === '' ? 'autre' : $nature, $n, true))
             && (trim((string) $r['type_client']) === '' || ma_plat($r['type_client']) === $typeClient)
             && (trim((string) $r['urgence']) === '' || (ma_plat($r['urgence']) === 'oui') === $urgent)
             // Équipement non précisé : on le traite comme « autre » plutôt que de perdre la demande.
@@ -1007,19 +1089,28 @@ function ma_rep_router(PDO $db, array $d): array
         unset($cc[$k]);
     }
 
+    $libelle = function (array $liste, string $code): string {
+        foreach ($liste as $x) {
+            if (ma_plat($x['code']) === $code) {
+                return (string) ($x['libelle'] ?? $code);
+            }
+        }
+        return $code === 'autre' ? 'Autre marque' : '';
+    };
     $contenu = ma_rep_message($d, [
+        'marque_libelle' => $libelle($listes['marques'], $marque), 'nature_libelle' => $nature ? $libelle($listes['natures'], $nature) : '',
         'service' => $service, 'marque' => $marque, 'type_client' => $typeClient, 'urgent' => $urgent,
         'departement' => $dep, 'personnes' => $personnes, 'url' => $params['url_tableau_de_bord']
             ?? 'https://multiairfrance.store/calculateurs/interne/MULTIAIR/',
     ]);
 
     return [
-        'service' => $service, 'marque' => $marque, 'type_client' => $typeClient, 'urgent' => $urgent,
+        'service' => $service, 'marque' => $marque, 'nature' => $nature, 'type_client' => $typeClient, 'urgent' => $urgent,
         'type_equipement' => $equip, 'departement' => $dep,
         'regle_id' => $regle ? (int) $regle['id'] : null,
         'regle_libelle' => $regle['libelle'] ?? 'Aucune règle (repli)',
         'personnes' => array_map(fn($p) => ['id' => (int) $p['id'], 'nom' => $p['nom'], 'role' => $p['role'],
-            'email' => $p['email'], 'mobile' => $p['mobile']], $personnes),
+            'email' => $p['email'], 'mobile' => $p['mobile'], 'membres' => $p['membres'] ?? null], $personnes),
         'to' => implode(';', array_values($to)),
         'cc' => implode(';', array_values($cc)),
         'sms' => implode(';', array_values($sms)),
@@ -1030,9 +1121,8 @@ function ma_rep_router(PDO $db, array $d): array
 /** Objet, corps HTML et texte SMS de la transmission. L'urgence se voit dès l'objet. */
 function ma_rep_message(array $d, array $x): array
 {
-    $noms = ['worthington' => 'Worthington Creyssensac', 'mauguiere' => 'Mauguière', 'abac' => 'ABAC', 'pneumatech' => 'Pneumatech', 'autre' => 'Autre marque'];
     $svc = ['sav' => 'SAV', 'commercial' => 'Commercial', 'finance' => 'Finance'][$x['service']] ?? 'Demande';
-    $marque = $noms[$x['marque']] ?? '';
+    $marque = (string) ($x['marque_libelle'] ?? '');
     $societe = trim((string) ($d['societe'] ?? $d['distributeur'] ?? '')) ?: 'Société non précisée';
     $contact = trim((string) ($d['contact'] ?? ''));
     $telBrut = ma_tel($d['tel'] ?? $d['telephone'] ?? null);
@@ -1041,8 +1131,10 @@ function ma_rep_message(array $d, array $x): array
     $client = $x['type_client'] === 'distributeur' ? 'Distributeur' : 'Client direct';
     $dep = $x['departement'] ? ' (' . $x['departement'] . ')' : '';
 
+    $nature = (string) ($x['nature_libelle'] ?? '');
     $objet = ($x['urgent'] ? '🔴 URGENT — PRODUCTION ARRÊTÉE — ' : '')
-        . $svc . ($marque && $x['service'] === 'sav' ? ' ' . $marque : '') . ' — ' . $societe . $dep . ' — ' . $client;
+        . $svc . ($marque ? ' ' . $marque : '') . ($nature && $x['service'] === 'commercial' ? ' — ' . $nature : '')
+        . ' — ' . $societe . $dep . ' — ' . $client;
 
     $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
     $ligne = fn($k, $v) => trim((string) $v) === '' ? '' : '<tr><td style="padding:4px 12px 4px 0;color:#5f6b7a;white-space:nowrap">'
@@ -1057,6 +1149,7 @@ function ma_rep_message(array $d, array $x): array
         . ($telLisible ? ' au <a href="tel:' . $e($tel) . '">' . $e($telLisible) . '</a>' : '') . '</p>'
         . '<table style="font-family:system-ui,sans-serif;font-size:14px;border-collapse:collapse">'
         . $ligne('Type de client', $client . (trim((string) ($d['compte_distributeur'] ?? '')) !== '' ? ' — compte ' . $d['compte_distributeur'] : ''))
+        . $ligne('Nature de la demande', $nature)
         . $ligne('Département du site', $x['departement'] ?? '')
         . $ligne('Marque', $marque)
         . $ligne('Modèle', $d['modele'] ?? '')
@@ -1073,7 +1166,7 @@ function ma_rep_message(array $d, array $x): array
         . '<p style="font-family:system-ui,sans-serif;font-size:14px;margin-top:18px">Une fois le client rappelé, passez la demande '
         . '« En cours » puis « Traitée » dans le <a href="' . $e($x['url']) . '#repondeur">tableau de bord MULTIAIR</a>.</p>';
 
-    $sms = ($x['urgent'] ? 'URGENT prod arretee - ' : '') . 'Multiair ' . $svc . ($marque && $x['service'] === 'sav' ? ' ' . $marque : '')
+    $sms = ($x['urgent'] ? 'URGENT prod arretee - ' : '') . 'Multiair ' . $svc . ($marque ? ' ' . $marque : '')
         . ' : ' . $societe . $dep . ' - rappeler ' . ($contact ?: 'le client') . ($telLisible ? ' au ' . $telLisible : '')
         . (trim((string) ($d['type_panne'] ?? $d['resume'] ?? '')) !== '' ? ' - ' . trim((string) ($d['type_panne'] ?? $d['resume'])) : '');
     if (mb_strlen($sms) > 300) {
@@ -1109,4 +1202,57 @@ function ma_rep_routage_initial(PDO $db): void
     $r->execute([60, 'SAV ABAC — client direct, autre équipement → CTA du secteur, sinon back-office', 'sav', 'abac', 'direct', null, 'autre',
         'role_departement', 'cta', null, 'backoffice', null]);
     $r->execute([90, 'Commercial', 'commercial', null, null, null, null, 'role', 'commercial', null, null, null]);
+}
+
+/**
+ * Routage commercial, d'après le tableau des boîtes partagées fourni par Multiair :
+ * chaque boîte traite une nature de demande pour une famille de marques.
+ */
+function ma_rep_routage_commerce(PDO $db): void
+{
+    $c = $db->prepare('INSERT INTO rep_contacts(nom, role, email, membres, competences, externe, actif, commentaire) VALUES (?,?,?,?,?,0,1,?)');
+    $boite = function (string $nom, ?string $email, string $membres, string $activite, ?string $commentaire = null, string $role = 'boite') use ($db, $c): int {
+        $c->execute([$nom, $role, $email, $membres, $activite, $commentaire]);
+        return (int) $db->lastInsertId();
+    };
+    $ctsAbac = $boite('CTS commandes ABAC', 'commandes.abac.pieces@multiairfrance.fr',
+        'Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre',
+        'Commandes et suivi de livraison des pièces ABAC');
+    $ctsFrb = $boite('CTS commandes FRB', 'commandes.pieces@multiairfrance.fr', 'Stephanie Quesmel',
+        'Commandes et suivi de livraison des pièces Worthington, Mauguière, Pneumatech');
+    $ctsDevis = $boite('CTS devis', 'devis.pieces@multiairfrance.fr',
+        'Melvin Mayennaquiby, Axel Grimaud, Nicolas Boulet, Charline Laptes, Ndeye Beye',
+        'Devis pièces détachées et SAV, toutes marques');
+    $padCdes = $boite('PAD commandes', 'commandes.abac.materiel@multiairfrance.fr',
+        'Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre, Aurelien Slastan, Doriane Afonso Da Silva',
+        'Commandes et suivi de livraison des équipements ABAC');
+    $padDevis = $boite('PAD devis', 'devis.abac.materiel@multiairfrance.fr',
+        'Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre',
+        'Devis équipements ABAC');
+    $aimCdes = $boite('AIM commandes', 'commandes.materiel@multiairfrance.fr',
+        'Marie Jotterand, Mathieu Patte, Aurelien Slastan, Prisca Vieille, Audrey Dovillers, Nadiya Messioui, Marie Laure Gomez, Anaelle Alexandre, Doriane Afonso Da Silva',
+        'Commandes et suivi de livraison des équipements Worthington et Mauguière');
+    $devisMat = $boite('Devis matériel neuf', 'devis.materiel@multiairfrance.fr', 'Celine Charlier, Chloe Baudet',
+        'Devis équipements Worthington, Mauguière, Pneumatech');
+    $acq = $boite('Devis acquisitions', 'devis.acquisitions@multiairfrance.fr', 'Cecile Ollier, Bruno Picciano',
+        'Demandes concernant les acquisitions OVITY et FITEC');
+    $boite('Devis techniciens', 'devis.techniciens@airwco.com', 'Lionel Lebre, Esteban Godefroy', 'À préciser',
+        'Rôle à préciser : aucune règle ne l\'utilise encore');
+    foreach (['Gwenaelle Pacheco', 'Doriane Afonso Da Silva', 'Emma De Faria'] as $nom) {
+        $boite($nom, null, '', 'Direct / Projet', 'Email à compléter ; critère de routage à préciser', 'direct_projet');
+    }
+
+    $r = $db->prepare('INSERT INTO rep_regles(ordre, libelle, service, marques, natures, cible, cible_contacts, actif) VALUES (?,?,?,?,?,?,?,1)');
+    $wmp = 'worthington,mauguiere,pneumatech';
+    $r->execute([95, 'Acquisitions OVITY / FITEC → devis acquisitions', 'commercial', 'ovity,fitec', null, 'contacts', (string) $acq]);
+    $r->execute([100, 'Pièces : commande / livraison — ABAC → CTS commandes ABAC', 'commercial', 'abac', 'commande_pieces', 'contacts', (string) $ctsAbac]);
+    $r->execute([110, 'Pièces : commande / livraison — Worthington, Mauguière, Pneumatech → CTS commandes FRB', 'commercial', $wmp, 'commande_pieces', 'contacts', (string) $ctsFrb]);
+    $r->execute([120, 'Devis pièces / SAV — toutes marques → CTS devis', 'commercial', null, 'devis_pieces', 'contacts', (string) $ctsDevis]);
+    $r->execute([130, 'Équipement : commande / livraison — ABAC → PAD commandes', 'commercial', 'abac', 'commande_equipement', 'contacts', (string) $padCdes]);
+    $r->execute([140, 'Équipement : commande / livraison — Worthington, Mauguière → AIM commandes', 'commercial', 'worthington,mauguiere', 'commande_equipement', 'contacts', (string) $aimCdes]);
+    $r->execute([150, 'Devis équipement — ABAC → PAD devis', 'commercial', 'abac', 'devis_equipement', 'contacts', (string) $padDevis]);
+    $r->execute([160, 'Devis équipement — Worthington, Mauguière, Pneumatech → devis matériel neuf', 'commercial', $wmp, 'devis_equipement', 'contacts', (string) $devisMat]);
+    // L'ancienne règle « Commercial » devient le filet : tout ce qui n'a pas trouvé de boîte.
+    $db->exec("UPDATE rep_regles SET ordre = 190, libelle = 'Commercial — tout le reste (nature ou marque non reconnue)'
+        WHERE libelle = 'Commercial' AND ordre = 90 AND cible = 'role' AND cible_role = 'commercial'");
 }
