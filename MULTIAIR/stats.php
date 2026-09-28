@@ -68,6 +68,11 @@ function ma_stats(PDO $db, string $scenario, array $q): array
             $out['a_traiter'] = [
                 'rep_fiches_en_attente' => ma_count($db, "SELECT COUNT(*) FROM rep_fiches WHERE statut IN ('En attente','Urgent')"),
                 'rep_demandes_a_traiter' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE statut = 'a_traiter'"),
+                // Urgences pas encore prises en charge, sur 72 h (un appel du vendredi soir reste visible
+                // le lundi) : elles s'affichent en bandeau sur toutes les pages. Au-delà, elles restent
+                // en rouge dans la liste des demandes mais ne sont plus des « urgences » à la minute.
+                'rep_urgences' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE priorite = 'URGENT' AND statut = 'a_traiter' AND created_at >= ?",
+                    [date('Y-m-d H:i:s', time() - 72 * 3600)]),
                 'adv_a_valider' => ma_count($db, "SELECT COUNT(*) FROM adv_demandes WHERE statut_suivi = 'a_valider'"),
                 'cso_en_cours' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE statut IN ('En attente','Relance 1','Relance 2','Relance 3','Reponse recue')"),
                 'cso_ecart' => ma_count($db, "SELECT COUNT(*) FROM cso_devis WHERE controle_coherence = 'ECART' AND statut NOT IN ('Gagne','Perdu','Sans suite')"),
@@ -87,6 +92,10 @@ function ma_stats(PDO $db, string $scenario, array $q): array
                     'traites_whatsapp' => ma_count($db, "SELECT COUNT(*) FROM rep_fiches WHERE statut = 'Traite'"),
                     'sans_reponse' => ma_count($db, "SELECT COUNT(*) FROM rep_fiches WHERE statut LIKE 'Transmis (sans%'"),
                     'demandes_a_traiter' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE statut = 'a_traiter'"),
+                    'demandes_en_cours' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE statut = 'en_cours'"),
+                    'urgences_a_traiter' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE priorite = 'URGENT' AND statut = 'a_traiter'"),
+                    'urgences_72h' => ma_count($db, "SELECT COUNT(*) FROM rep_demandes WHERE priorite = 'URGENT' AND statut = 'a_traiter' AND created_at >= ?",
+                        [date('Y-m-d H:i:s', time() - 72 * 3600)]),
                     'demandes_total' => ma_count($db, 'SELECT COUNT(*) FROM rep_demandes'),
                 ],
                 'taux_reponse_whatsapp' => (function () use ($db) {

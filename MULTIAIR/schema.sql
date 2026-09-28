@@ -66,6 +66,39 @@ CREATE TABLE IF NOT EXISTS rep_messages (
 CREATE INDEX IF NOT EXISTS idx_rep_messages_tel ON rep_messages(tel_norm, date);
 CREATE INDEX IF NOT EXISTS idx_rep_messages_fiche ON rep_messages(fiche_id, date);
 
+-- Annuaire des personnes qui rappellent les clients du répondeur : RSO (responsables
+-- techniques terrain), CTA (agents externes ABAC), back-office support, compta…
+-- departements et marques sont des listes séparées par des virgules ; vides = tous.
+CREATE TABLE IF NOT EXISTS rep_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nom TEXT NOT NULL,
+  role TEXT NOT NULL,                     -- rso | cta | backoffice | compta | commercial | autre
+  email TEXT, mobile TEXT,
+  departements TEXT, marques TEXT, competences TEXT,
+  externe INTEGER NOT NULL DEFAULT 0,
+  actif INTEGER NOT NULL DEFAULT 1,
+  commentaire TEXT
+);
+
+-- Règles de routage du répondeur, évaluées dans l'ordre : la première qui correspond
+-- désigne les destinataires. Un critère vide vaut « tous ».
+CREATE TABLE IF NOT EXISTS rep_regles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ordre INTEGER NOT NULL DEFAULT 100,
+  libelle TEXT,
+  service TEXT,                           -- sav | commercial | finance
+  marques TEXT,                           -- worthington,mauguiere,abac,pneumatech,autre
+  type_client TEXT,                       -- direct | distributeur
+  urgence TEXT,                           -- oui | non
+  type_equipement TEXT,                   -- piston | autre
+  cible TEXT NOT NULL DEFAULT 'role',     -- role | role_departement | contacts
+  cible_role TEXT,
+  cible_contacts TEXT,                    -- identifiants de contacts, séparés par des virgules
+  repli_role TEXT,                        -- personne sur le département : ce rôle prend le relais
+  cc TEXT,                                -- adresses ajoutées en copie
+  actif INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS distributeurs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   marque TEXT, vendeur TEXT, compte TEXT, raison_sociale TEXT,

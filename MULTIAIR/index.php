@@ -59,6 +59,7 @@ document.getElementById('recoverBtn').addEventListener('click', async () => {
   <button data-tab="cso">CSO devis <span class="badge zero" data-badge="cso">0</span></button>
   <button data-tab="cee">Prime CEE <span class="badge zero" data-badge="cee">0</span></button>
 </nav>
+<div class="urgent-bar" id="urgentBar" role="alert" hidden></div>
 <main id="main"><div class="loading">Chargement…</div></main>
 <div class="drawer-bg" id="drawerBg"></div>
 <aside class="drawer" id="drawer">

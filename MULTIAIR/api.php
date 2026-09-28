@@ -422,14 +422,37 @@ try {
                     $d['societe'] = ma_str($d['societe'] ?? $d['distributeur'] ?? null);
                     $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;
                     $d['fiche_id'] = isset($d['fiche_id']) ? (int) $d['fiche_id'] : null;
+                    $d['type_panne'] = ma_str($d['type_panne'] ?? $d['description'] ?? null);
+                    // Le département vient du code postal du site ; à défaut, de la fiche d'appel.
+                    if (empty($d['code_postal']) && empty($d['departement']) && $d['fiche_id']) {
+                        $d['departement'] = getOne($db, 'rep_fiches', $d['fiche_id'])['departement'] ?? null;
+                    }
+                    // Une demande naît toujours « à traiter » : seul un humain la fait avancer.
+                    $d['statut'] = 'a_traiter';
+                    $rt = ma_rep_router($db, $d);
+                    $d['marque_norm'] = $rt['marque'];
+                    $d['type_client'] = $rt['type_client'];
+                    $d['type_equipement'] = ma_str($d['type_equipement'] ?? null) ?? ($rt['type_equipement'] ?: null);
+                    $d['departement'] = $rt['departement'] ?? ma_str($d['departement'] ?? null);
+                    $d['regle_id'] = $rt['regle_id'];
+                    $d['regle_libelle'] = $rt['regle_libelle'];
+                    $d['destinataires'] = implode(', ', array_map(fn($p) => $p['nom'], $rt['personnes'])) ?: null;
+                    $d['dest_to'] = $rt['to'];
+                    $d['dest_cc'] = $rt['cc'];
+                    $d['dest_sms'] = $rt['sms'];
                     $id = insert($db, 'rep_demandes', $d);
                     if ($d['fiche_id']) {
                         $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, $d['fiche_id']]);
                     }
-                    logEvent($db, 'repondeur', 'ok', 'demande_' . strtolower($d['service']), ($d['societe'] ?? '') . ' - ' . $d['priorite'] . ' (' . ($d['source'] ?? '') . ')', ['id' => $id]);
-                    $rt = ma_routage($db, 'repondeur', ['SAV' => 'technique', 'COMMERCIAL' => 'commercial', 'FINANCE' => 'finance'][$d['service']]);
-                    out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'],
-                        'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
+                    logEvent($db, 'repondeur', 'ok', ($rt['urgent'] ? 'urgence_' : 'demande_') . strtolower($d['service']),
+                        ($rt['urgent'] ? 'URGENT — ' : '') . ($d['societe'] ?? '') . ' → ' . ($d['destinataires'] ?? $rt['to'])
+                            . ' [' . $rt['regle_libelle'] . ']' . ($rt['notes'] ? ' — ' . implode(' ; ', $rt['notes']) : ''),
+                        ['id' => $id, 'to' => $rt['to'], 'sms' => $rt['sms']]);
+                    out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'], 'urgent' => $rt['urgent'],
+                        // Champs historiques, lus par le scénario Make actuel : ils suivent désormais les règles.
+                        'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => $rt['regle_libelle'],
+                        'sms' => $rt['sms'], 'destinataires' => $d['destinataires'], 'notes' => $rt['notes'],
+                        'objet' => $rt['objet'], 'mail_html' => $rt['mail_html'], 'sms_texte' => $rt['sms_texte']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
@@ -437,6 +460,10 @@ try {
                         $d = $body;
                         if (($d['statut'] ?? '') === 'traite') {
                             $d['traite_at'] = $now;
+                        }
+                        if (($d['statut'] ?? '') === 'en_cours') {
+                            $deja = getOne($db, 'rep_demandes', $id)['pris_at'] ?? null;
+                            $d['pris_at'] = $deja ?: $now;
                         }
                         update($db, 'rep_demandes', $id, $d);
                         out(['ok' => true, 'demande' => getOne($db, 'rep_demandes', $id)]);
@@ -451,6 +478,55 @@ try {
             }
             if ($sub === 'routage') {
                 routageRoutes($db, 'repondeur', $sub2, $method, $body);
+            }
+            // Annuaire (rep/contacts) et règles de routage (rep/regles) : même mécanique.
+            if ($sub === 'contacts' || $sub === 'regles') {
+                $table = $sub === 'contacts' ? 'rep_contacts' : 'rep_regles';
+                $norm = function (array $d) use ($sub): array {
+                    foreach (['actif', 'externe'] as $b) {
+                        if (array_key_exists($b, $d)) {
+                            $d[$b] = ma_bool($d[$b]) ? 1 : 0;
+                        }
+                    }
+                    if ($sub === 'regles' && isset($d['ordre'])) {
+                        $d['ordre'] = (int) $d['ordre'];
+                    }
+                    if ($sub === 'contacts' && isset($d['mobile'])) {
+                        $d['mobile'] = ma_str($d['mobile']);
+                    }
+                    return $d;
+                };
+                if ($method === 'POST' && $sub2 === null) {
+                    $d = $norm($body);
+                    if ($sub === 'contacts' && (trim((string) ($d['nom'] ?? '')) === '' || trim((string) ($d['role'] ?? '')) === '')) {
+                        fail('Nom et rôle requis');
+                    }
+                    if ($sub === 'regles' && trim((string) ($d['cible'] ?? '')) === '') {
+                        fail('Cible requise');
+                    }
+                    $id = insert($db, $table, $d);
+                    out(['ok' => true, 'id' => $id, 'ligne' => getOne($db, $table, $id)]);
+                }
+                if ($sub2 !== null) {
+                    $id = idFrom($parts, 2);
+                    if ($method === 'PATCH' || $method === 'POST') {
+                        update($db, $table, $id, $norm($body));
+                        out(['ok' => true, 'ligne' => getOne($db, $table, $id)]);
+                    }
+                    if ($method === 'DELETE') {
+                        $db->prepare("DELETE FROM $table WHERE id = ?")->execute([$id]);
+                        out(['ok' => true]);
+                    }
+                    out(['ok' => true, 'ligne' => getOne($db, $table, $id) ?? fail('Introuvable', 404)]);
+                }
+                $ordre = $sub === 'contacts' ? 'role, nom' : 'ordre, id';
+                out(['ok' => true, 'rows' => $db->query("SELECT * FROM $table ORDER BY $ordre")->fetchAll(),
+                    'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence')")
+                        ->fetchAll(PDO::FETCH_KEY_PAIR)]);
+            }
+            // Simulateur : qui recevrait cette demande ? Rien n'est enregistré ni envoyé.
+            if ($sub === 'simuler') {
+                out(['ok' => true] + ma_rep_router($db, $body + $_GET));
             }
             fail('Route rep inconnue', 404);
 

@@ -202,12 +202,25 @@
     return 'muted';
   };
   const lbl = {
-    a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traité', nouveau: 'Nouveau', contacte: 'Contacté', converti: 'Converti', perdu: 'Perdu',
+    a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traitée', nouveau: 'Nouveau',
+    direct: 'Client direct', distributeur: 'Distributeur', sav: 'SAV', finance: 'Finance', commercial: 'Commercial',
+    worthington: 'Worthington', mauguiere: 'Mauguière', abac: 'ABAC', pneumatech: 'Pneumatech',
+    rso: 'RSO (terrain)', cta: 'CTA (agent externe)', backoffice: 'Back-office support', compta: 'Compta', piston: 'Compresseur à piston',
+    role: 'Tout le rôle', role_departement: 'Le rôle, selon le département', contacts: 'Personnes choisies', contacte: 'Contacté', converti: 'Converti', perdu: 'Perdu',
     qualifie: 'Qualifié', rappel_planifie: 'Rappel planifié', envoye: 'Envoyé', a_valider: 'À valider', valide: 'Validé', recu: 'Reçu, sans réponse',
     'Reponse recue': 'Réponse reçue', Gagne: 'Gagné',
     vapi_direct: 'Appel direct', whatsapp_qualifie: 'Qualifié WhatsApp', sans_reponse_10min: 'Sans réponse WhatsApp', import: 'Import Sheets',
   };
   const L = (v) => lbl[v] || v || '—';
+
+  // Statut d'une fiche d'appel : il décrit où en est Claire (qualification WhatsApp), jamais le
+  // rappel du client — celui-ci se suit sur la demande. D'où des libellés et des couleurs neutres.
+  const FICHE_STATUTS = {
+    'En attente': ['En attente de réponse WhatsApp', 'warn'], Urgent: ['Urgent — en qualification', 'danger'],
+    Transmis: ['Transmise au service', 'info'], Traite: ['Qualifiée par WhatsApp, transmise', 'info'],
+    'Transmis (sans réponse WhatsApp)': ['Transmise sans réponse WhatsApp', 'muted'],
+  };
+  const ficheStatut = (s) => pill((FICHE_STATUTS[s] || [s])[0], (FICHE_STATUTS[s] || [0, 'muted'])[1]);
 
   // ------------------------------------------------------------------ état global
   const main = $('#main');
@@ -238,8 +251,23 @@
       set('adv', s.adv_a_valider);
       set('cso', s.cso_en_cours);
       set('cee', s.cee_actions_a_faire);
+      urgentBar(s.rep_urgences || 0);
     } catch (e) { /* silencieux */ }
   }
+
+  // Bandeau rouge sur toutes les pages tant qu'une urgence SAV n'est pas prise en charge.
+  // Actualisé chaque minute : une urgence apparaît sans avoir à recharger la page.
+  function urgentBar(n) {
+    const bar = $('#urgentBar');
+    if (!bar) return;
+    bar.hidden = !n;
+    if (!n) return;
+    bar.innerHTML = `<span class="pulse" aria-hidden="true"></span>
+      <span>${n} urgence${n > 1 ? 's' : ''} — production arrêtée — ${n > 1 ? 'personne ne les a' : "personne ne l'a"} encore prise${n > 1 ? 's' : ''} en charge</span>
+      <span class="go">Voir ${n > 1 ? 'les demandes' : 'la demande'} →</span>`;
+    bar.onclick = () => { repSub.v = 'demandes'; show('repondeur'); };
+  }
+  setInterval(() => { if (!document.hidden) refreshBadges(); }, 60000);
 
   const journal = (rows) => `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Scénario</th><th>Statut</th><th>Événement</th><th>Détail</th></tr></thead><tbody>${
     rows.length ? rows.map((r) => `<tr style="cursor:default"><td>${fmtDate(r.date)}</td><td>${h(r.scenario)}</td><td>${pill(r.statut, r.statut === 'ok' ? 'ok' : (r.statut === 'erreur' ? 'danger' : 'info'))}</td><td>${h(r.type_evenement)}</td><td>${clip(r.resume, true)}</td></tr>`).join('')
@@ -272,6 +300,171 @@
     }));
   }
 
+  // ------------------------------------------------------------------ Répondeur : règles, annuaire, simulateur
+  const R_ROLES = [['rso', 'RSO (terrain)'], ['cta', 'CTA (agent externe)'], ['backoffice', 'Back-office support'], ['compta', 'Compta'], ['commercial', 'Commercial'], ['autre', 'Autre']];
+  const R_MARQUES = [['worthington', 'Worthington'], ['mauguiere', 'Mauguière'], ['abac', 'ABAC'], ['pneumatech', 'Pneumatech'], ['autre', 'Autre marque']];
+  const R_SERVICES = [['', 'Tous services'], ['sav', 'SAV'], ['finance', 'Finance'], ['commercial', 'Commercial']];
+  const R_CLIENTS = [['', 'Tous clients'], ['direct', 'Client direct'], ['distributeur', 'Distributeur']];
+  const R_URGENCE = [['', 'Urgent ou non'], ['oui', 'Urgent seulement'], ['non', 'Non urgent seulement']];
+  const R_EQUIP = [['', 'Tout équipement'], ['piston', 'Compresseur à piston'], ['autre', 'Autre équipement']];
+  const R_CIBLES = [['role_departement', 'Le rôle, selon le département du site'], ['role', 'Toutes les personnes du rôle'], ['contacts', 'Des personnes précises']];
+  const nomDe = (liste, v) => (liste.find(([k]) => k === String(v ?? '').toLowerCase()) || [v, v])[1];
+  const csvDe = (s) => String(s || '').split(/[,;]/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const sel = (name, liste, v) => `<select name="${name}">${liste.map(([k, t]) => `<option value="${h(k)}" ${String(v ?? '') === k ? 'selected' : ''}>${h(t)}</option>`).join('')}</select>`;
+  const cases = (name, liste, csv) => `<div style="display:flex;flex-wrap:wrap;gap:6px 14px">${liste.map(([k, t]) =>
+    `<label style="display:flex;gap:5px;align-items:center;font-size:13px"><input type="checkbox" name="${name}" value="${h(k)}" ${csvDe(csv).includes(String(k)) ? 'checked' : ''}>${h(t)}</label>`).join('')}</div>`;
+  const lu = (root, name) => $$(`[name="${name}"]:checked`, root).map((i) => i.value).join(',');
+  const ligne = (label, html, aide = '') => `<div class="editrow"><label>${h(label)}</label>${html}${aide ? `<span class="hint">${h(aide)}</span>` : ''}</div>`;
+
+  async function repRoutageUI(root) {
+    const [c, r] = await Promise.all([api('rep/contacts'), api('rep/regles')]);
+    const contacts = c.rows, regles = r.rows, params = c.parametres || {};
+    const actifs = contacts.filter((x) => Number(x.actif));
+    const personnesDe = (rg) => rg.cible === 'contacts'
+      ? actifs.filter((x) => csvDe(rg.cible_contacts).includes(String(x.id)))
+      : actifs.filter((x) => x.role === rg.cible_role);
+    const criteres = (rg) => [nomDe(R_SERVICES, rg.service), rg.marques ? csvDe(rg.marques).map((m) => nomDe(R_MARQUES, m)).join(', ') : '',
+      rg.type_client ? nomDe(R_CLIENTS, rg.type_client) : '', rg.urgence ? nomDe(R_URGENCE, rg.urgence) : '', rg.type_equipement ? nomDe(R_EQUIP, rg.type_equipement) : '']
+      .filter(Boolean).join(' · ');
+    const cibleTxt = (rg) => rg.cible === 'contacts' ? personnesDe(rg).map((x) => x.nom).join(', ') || '—'
+      : rg.cible === 'role_departement' ? `${nomDe(R_ROLES, rg.cible_role)} du département${rg.repli_role ? `, sinon ${nomDe(R_ROLES, rg.repli_role)}` : ''}`
+      : `${nomDe(R_ROLES, rg.cible_role)} (${personnesDe(rg).map((x) => x.nom).join(', ') || 'personne'})`;
+    // Ce qui empêcherait la règle d'atteindre quelqu'un : on le montre avant que ça arrive.
+    const alertes = (rg) => {
+      const a = [];
+      const p = personnesDe(rg);
+      if (!p.length) a.push(rg.cible === 'role_departement' ? `aucun ${nomDe(R_ROLES, rg.cible_role)} dans l'annuaire` : 'personne à joindre');
+      p.filter((x) => !x.email).forEach((x) => a.push(`${x.nom} sans email`));
+      if (rg.cible === 'role_departement' && rg.repli_role && !actifs.some((x) => x.role === rg.repli_role && x.email)) a.push(`relais ${nomDe(R_ROLES, rg.repli_role)} injoignable`);
+      return a;
+    };
+
+    root.innerHTML = `
+      <div class="card"><h3>Tester le routage</h3>
+        <p class="hint" style="margin-top:0">Décrivez un appel : la page montre qui recevra le mail et le SMS, et pourquoi. Rien n'est envoyé.</p>
+        <div class="route-grid" id="simForm">
+          <label>Service ${sel('service', R_SERVICES.slice(1), 'sav')}</label>
+          <label>Marque ${sel('marque', R_MARQUES, 'worthington')}</label>
+          <label>Client ${sel('type_client', R_CLIENTS.slice(1), 'direct')}</label>
+          <label>Urgence ${sel('urgence', [['false', 'Non urgent'], ['true', 'URGENT — production arrêtée']], 'false')}</label>
+          <label>Équipement ${sel('type_equipement', R_EQUIP, '')}</label>
+          <label>Code postal du site <input name="code_postal" placeholder="ex. 69003" inputmode="numeric"></label>
+        </div>
+        <div style="margin-top:10px"><button class="btn primary" id="simGo">Qui reçoit ?</button></div>
+        <div class="route-res" id="simRes"></div>
+      </div>
+
+      <div class="section-title"><h2>Règles de routage (${regles.length})</h2><div class="tools"><button class="btn small primary" id="addRegle">+ Ajouter une règle</button></div></div>
+      <p class="hint">Lues de haut en bas : la première règle qui correspond désigne les destinataires. Si aucune ne correspond, la demande part à ${h(params.rep_repli_email || '—')}. Le SMS part à chaque destinataire qui a un portable.</p>
+      <div id="tblRegles"></div>
+
+      <div class="section-title"><h2>Annuaire (${contacts.length})</h2><div class="tools"><button class="btn small primary" id="addContact">+ Ajouter une personne</button></div></div>
+      <p class="hint">Un RSO ou un CTA reçoit les demandes des départements qu'il couvre (numéros séparés par des virgules : 69, 01, 38). Marques vides = toutes les marques.</p>
+      <div id="tblContacts"></div>
+
+      <div class="section-title"><h2>Réglages</h2></div>
+      <div class="card"><div class="route-grid" style="grid-template-columns:1fr 1fr">
+        <label>Adresse de repli (aucune règle, ou personne de joignable) <input name="rep_repli_email" value="${h(params.rep_repli_email)}"></label>
+        <label>Copie en cas d'urgence (escalade), séparer par ; <input name="rep_cc_urgence" value="${h(params.rep_cc_urgence)}" placeholder="ex. direction@airwco.com"></label>
+      </div><div style="margin-top:10px"><button class="btn small primary" id="saveParams">Enregistrer</button></div></div>
+
+      <details style="margin-top:18px"><summary class="hint" style="cursor:pointer">Ancien routage par service — sert encore aux WhatsApp non identifiés (clé « aiguilleur »)</summary><div id="oldRoutage" style="margin-top:10px"></div></details>`;
+
+    const recharger = () => repRoutageUI(root);
+
+    table('#tblRegles', regles, [
+      {key: 'ordre', label: '#', num: true, render: (x) => `<span class="ordre">${h(x.ordre)}</span>`, sortVal: (x) => Number(x.ordre)},
+      {key: 'actif', label: 'Active', render: (x) => Number(x.actif) ? pill('oui', 'ok') : pill('non', 'muted')},
+      {key: 'libelle', label: 'Règle', render: (x) => `<b>${h(x.libelle || '')}</b><br><span class="hint">${h(criteres(x))}</span>`},
+      {key: 'cible', label: 'Destinataires', render: (x) => h(cibleTxt(x)) + (x.cc ? `<br><span class="hint">copie : ${h(x.cc)}</span>` : '')},
+      {key: 'alertes', label: 'À vérifier', render: (x) => alertes(x).map((a) => pill('⚠ ' + a, 'warn')).join(' ') || pill('ok', 'ok')},
+    ], {sort: 'ordre', asc: true, onRow: (x) => regle(x)});
+
+    table('#tblContacts', contacts, [
+      {key: 'nom', label: 'Nom', render: (x) => `<b>${h(x.nom)}</b>${Number(x.externe) ? ' <span class="hint">(externe)</span>' : ''}`},
+      {key: 'role', label: 'Rôle', render: (x) => h(nomDe(R_ROLES, x.role))},
+      {key: 'email', label: 'Email', render: (x) => x.email ? h(x.email) : pill('à compléter', 'warn')},
+      {key: 'mobile', label: 'Portable', render: (x) => x.mobile ? h(x.mobile) : '<span class="hint">—</span>'},
+      {key: 'departements', label: 'Départements', render: (x) => x.departements ? clip(x.departements) : '<span class="hint">tous</span>'},
+      {key: 'marques', label: 'Marques', render: (x) => x.marques ? h(csvDe(x.marques).map((m) => nomDe(R_MARQUES, m)).join(', ')) : '<span class="hint">toutes</span>'},
+      {key: 'competences', label: 'Compétences', render: (x) => clip(x.competences)},
+      {key: 'actif', label: 'Actif', render: (x) => Number(x.actif) ? pill('oui', 'ok') : pill('non', 'muted')},
+    ], {sort: 'role', asc: true, filters: [{key: 'role', label: 'Rôle', map: (v) => nomDe(R_ROLES, v)}], onRow: (x) => contact(x)});
+
+    function contact(x) {
+      openDrawer(x.id ? `Annuaire — ${h(x.nom)}` : 'Nouvelle personne', `
+        ${ligne('Nom', `<input name="nom" value="${h(x.nom)}">`)}
+        ${ligne('Rôle', sel('role', R_ROLES, x.role || 'rso'))}
+        ${ligne('Email', `<input name="email" value="${h(x.email)}" placeholder="prenom.nom@airwco.com">`)}
+        ${ligne('Portable (SMS)', `<input name="mobile" value="${h(x.mobile)}" placeholder="06 12 34 56 78">`, 'Un 06 ou 07 : le SMS part à chaque demande reçue.')}
+        ${ligne('Départements couverts', `<input name="departements" value="${h(x.departements)}" placeholder="69, 01, 38, 42">`, 'Vide = tous. Utilisé pour choisir le RSO ou le CTA du secteur.')}
+        ${ligne('Marques', cases('marques', R_MARQUES, x.marques), 'Aucune case = toutes les marques.')}
+        ${ligne('Compétences', `<input name="competences" value="${h(x.competences)}" placeholder="ex. sécheurs, vis > 30 kW">`)}
+        ${ligne('Externe', sel('externe', [['0', 'Non, salarié Multiair'], ['1', 'Oui, agent externe']], String(Number(x.externe) || 0)))}
+        ${ligne('Actif', sel('actif', [['1', 'Oui'], ['0', 'Non (congés, départ…)']], String(x.actif ?? 1)))}
+        ${ligne('Commentaire', `<textarea name="commentaire">${h(x.commentaire)}</textarea>`)}`, saveBtn() + (x.id ? delBtn() : ''));
+      $('#drawerSave').onclick = async () => {
+        const b = $('#drawerBody');
+        const body = Object.fromEntries(['nom', 'role', 'email', 'mobile', 'departements', 'competences', 'externe', 'actif', 'commentaire'].map((k) => [k, $(`[name="${k}"]`, b).value.trim()]));
+        body.marques = lu(b, 'marques');
+        if (!body.nom) return toast('Le nom est requis', true);
+        if (x.id) await patch('rep/contacts/' + x.id, body); else await api('rep/contacts', {method: 'POST', body});
+        toast('Annuaire enregistré'); closeDrawer(); recharger();
+      };
+      if (x.id) $('#drawerDelete').onclick = async () => { if (confirm(`Retirer ${x.nom} de l'annuaire ?`)) { await api('rep/contacts/' + x.id, {method: 'DELETE'}); closeDrawer(); recharger(); } };
+    }
+
+    function regle(x) {
+      openDrawer(x.id ? 'Règle de routage' : 'Nouvelle règle', `
+        ${ligne('Libellé', `<input name="libelle" value="${h(x.libelle)}" placeholder="ex. SAV ABAC — client direct → CTA du secteur">`)}
+        ${ligne('Ordre', `<input name="ordre" value="${h(x.ordre ?? 100)}" inputmode="numeric">`, 'Plus petit = évalué en premier.')}
+        <h4>Quand…</h4>
+        ${ligne('Service', sel('service', R_SERVICES, x.service || ''))}
+        ${ligne('Marques', cases('marques', R_MARQUES, x.marques), 'Aucune case = toutes les marques.')}
+        ${ligne('Type de client', sel('type_client', R_CLIENTS, x.type_client || ''))}
+        ${ligne('Urgence', sel('urgence', R_URGENCE, x.urgence || ''))}
+        ${ligne('Équipement', sel('type_equipement', R_EQUIP, x.type_equipement || ''), 'Utile pour ABAC : compresseur à piston ou non.')}
+        <h4>… envoyer à</h4>
+        ${ligne('Destinataires', sel('cible', R_CIBLES, x.cible || 'role_departement'))}
+        ${ligne('Rôle', sel('cible_role', R_ROLES, x.cible_role || 'rso'))}
+        ${ligne('Si personne sur le département', sel('repli_role', [['', 'Adresse de repli générale'], ...R_ROLES], x.repli_role || ''), 'Relais quand aucun RSO / CTA ne couvre le département du site.')}
+        ${ligne('Personnes précises', actifs.length ? cases('cible_contacts', actifs.map((p) => [String(p.id), p.nom]), x.cible_contacts) : '<span class="hint">Annuaire vide</span>', 'Seulement si « Des personnes précises » est choisi.')}
+        ${ligne('Copie en plus', `<input name="cc" value="${h(x.cc)}" placeholder="adresse1;adresse2">`)}
+        ${ligne('Active', sel('actif', [['1', 'Oui'], ['0', 'Non']], String(x.actif ?? 1)))}`, saveBtn() + (x.id ? delBtn() : ''));
+      $('#drawerSave').onclick = async () => {
+        const b = $('#drawerBody');
+        const body = Object.fromEntries(['libelle', 'ordre', 'service', 'type_client', 'urgence', 'type_equipement', 'cible', 'cible_role', 'repli_role', 'cc', 'actif'].map((k) => [k, $(`[name="${k}"]`, b).value.trim()]));
+        body.marques = lu(b, 'marques');
+        body.cible_contacts = lu(b, 'cible_contacts');
+        if (body.cible === 'contacts' && !body.cible_contacts) return toast('Cochez au moins une personne', true);
+        if (x.id) await patch('rep/regles/' + x.id, body); else await api('rep/regles', {method: 'POST', body});
+        toast('Règle enregistrée'); closeDrawer(); recharger();
+      };
+      if (x.id) $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette règle ?')) { await api('rep/regles/' + x.id, {method: 'DELETE'}); closeDrawer(); recharger(); } };
+    }
+
+    $('#addRegle', root).onclick = () => regle({});
+    $('#addContact', root).onclick = () => contact({});
+    $('#saveParams', root).onclick = async () => {
+      await api('parametres', {method: 'POST', body: {valeurs: {rep_repli_email: $('[name=rep_repli_email]', root).value.trim(), rep_cc_urgence: $('[name=rep_cc_urgence]', root).value.trim()}}});
+      toast('Réglages enregistrés');
+    };
+    $('#simGo', root).onclick = async () => {
+      const f = $('#simForm', root);
+      const body = Object.fromEntries(['service', 'marque', 'type_client', 'urgence', 'type_equipement', 'code_postal'].map((k) => [k, $(`[name="${k}"]`, f).value]));
+      const x = await api('rep/simuler', {method: 'POST', body});
+      const liste = (s) => (s || '').split(';').filter(Boolean).map((e) => h(e)).join(', ') || '<span class="hint">—</span>';
+      $('#simRes', root).innerHTML = `
+        ${x.urgent ? '<div class="msg err" style="margin-top:0"><b>Urgent :</b> objet du mail et SMS marqués URGENT.</div>' : ''}
+        <div class="who">→ ${h(x.personnes.map((p) => p.nom).join(', ') || 'Adresse de repli')}</div>
+        ${kv([['Règle appliquée', h(x.regle_libelle)], ['Département', h(x.departement || '')], ['Mail à', liste(x.to)], ['Copie', liste(x.cc)], ['SMS à', liste(x.sms)],
+          ['Objet du mail', h(x.objet)], ['Texte du SMS', h(x.sms_texte)]])}
+        ${x.notes.length ? `<div class="msg" style="background:#fdefd6;color:var(--warn)">${x.notes.map(h).join('<br>')}</div>` : ''}`;
+    };
+    routageUI($('#oldRoutage', root), 'repondeur', {keyLabel: 'Service', placeholder: 'aiguilleur…',
+      hint: "Table historique : les demandes SAV / finance / commercial suivent désormais les règles ci-dessus. Seule la clé « aiguilleur » (WhatsApp non identifiés) est encore lue."});
+  }
+
   // ================================================================== VUE D'ENSEMBLE
   tabs.overview = async () => {
     const s = await api('stats/overview');
@@ -292,7 +485,8 @@
       <div class="section-title"><h2>À traiter</h2></div>
       <div class="todo-list">
         ${todo(t.rep_fiches_en_attente, 'Fiches Répondeur en attente / urgentes', 'repondeur')}
-        ${todo(t.rep_demandes_a_traiter, 'Demandes SAV / Commercial / Finance à traiter', 'repondeur')}
+        ${t.rep_urgences ? `<div class="todo" data-go="repondeur" style="border-color:var(--danger);color:var(--danger)"><span>🔴 Urgences SAV non prises en charge (72 h)</span><b>${num(t.rep_urgences)}</b></div>` : ''}
+        ${todo(t.rep_demandes_a_traiter, 'Demandes SAV / Commercial / Finance à rappeler', 'repondeur')}
         ${todo(t.adv_a_valider, 'Réponses Claire ADV à valider (escalades)', 'adv')}
         ${todo(t.cso_en_cours, 'Devis CSO en cours de relance', 'cso')}
         ${todo(t.cso_ecart, 'Devis CSO avec écart de cohérence', 'cso')}
@@ -307,7 +501,7 @@
   const todo = (n, label, go) => `<div class="todo ${n ? '' : 'zero'}" data-go="${go}"><span>${h(label)}</span><b>${num(n)}</b></div>`;
 
   // ================================================================== RÉPONDEUR IA
-  const repSub = {v: 'fiches'};
+  const repSub = {v: 'demandes'};
   tabs.repondeur = async () => {
     const [s, fiches, demandes, conv, dist, logs] = await Promise.all([
       api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('rep/messages', {query: {limit: 2000}}),
@@ -325,22 +519,22 @@
       return m.set(cle, f);
     }, new Map()).values()];
     const k = s.kpi;
-    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['demandes', `Demandes SAV / Commercial / Finance (${demandes.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['routage', 'Routage des mails'], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
+    const st = subtabs([['demandes', `Demandes à rappeler (${k.demandes_a_traiter} à traiter)`], ['fiches', `Fiches d'appel (${fiches.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['routage', 'Routage et annuaire'], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
     main.innerHTML = `
       <div class="section-title"><h2>Répondeur IA — appels VAPI et suivi WhatsApp</h2><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
       <div class="kpis">
+        ${kpi(num(k.urgences_a_traiter), 'Urgences à traiter', k.urgences_a_traiter ? 'danger' : 'ok')}
+        ${kpi(num(k.demandes_a_traiter), 'Demandes à rappeler', k.demandes_a_traiter ? 'warn' : 'ok')}
+        ${kpi(num(k.demandes_en_cours), 'Rappels en cours', 'info')}
         ${kpi(num(k.appels_j30), 'Appels sur 30 jours')}
-        ${kpi(num(k.appels_total), 'Appels au total')}
         ${kpi(num(k.en_attente), 'En attente de réponse WhatsApp', k.en_attente ? 'warn' : '')}
-        ${kpi(num(k.urgents), 'Urgents', k.urgents ? 'danger' : '')}
-        ${kpi(num(k.traites_whatsapp), 'Qualifiés via WhatsApp', 'ok')}
+        ${kpi(num(k.traites_whatsapp), 'Qualifiés par WhatsApp')}
         ${kpi(num(k.sans_reponse), 'Transmis sans réponse WhatsApp')}
         ${kpi(pct(s.taux_reponse_whatsapp), 'Taux de réponse WhatsApp', 'info')}
-        ${kpi(num(k.demandes_a_traiter), 'Demandes à traiter', k.demandes_a_traiter ? 'danger' : 'ok')}
       </div>
       <div class="grid2" style="margin-top:12px">
         <div class="card"><h3>Appels et demandes par jour (30 j)</h3><div class="chart-wrap"><canvas id="c_rep"></canvas></div></div>
-        <div class="grid3" style="grid-template-columns:1fr">${distCard('Demandes par service', s.par_service)}${distCard('Fiches par statut', s.par_statut)}</div>
+        <div class="grid3" style="grid-template-columns:1fr">${distCard('Demandes par service', s.par_service)}${distCard('Fiches par étape de qualification', s.par_statut.map((r) => ({k: (FICHE_STATUTS[r.k] || [r.k])[0], n: r.n})))}</div>
       </div>
       <div class="section-title"><h2>Données</h2><div class="tools">${exportBtn('rep_fiches')} ${exportBtn('rep_demandes')} ${exportBtn('rep_messages')}</div></div>
       ${st.html}<div id="rep_sub"></div>`;
@@ -354,7 +548,7 @@
       const e = [...f.echanges].sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id - b.id));
       openDrawer(`Conversation — ${h(f.societe || f.contact || f.tel_norm || '')}`, `
         ${kv([['Téléphone', h(f.tel_norm)], ['Société', h(f.societe)], ['Contact', h(f.contact)],
-          ['Service', h(f.service)], ['Statut de la fiche', pill(f.fiche_statut, cls(f.fiche_statut))],
+          ['Service', h(f.service)], ['Statut de la fiche', ficheStatut(f.fiche_statut)],
           ['Premier échange', fmtDate(f.debut)], ['Dernier échange', fmtDate(f.fin)], ['Échanges', f.nb],
           ['Fiche d\'appel', f.fiche_id ? `<button class="link" id="goFiche">#${f.fiche_id}</button>` : '<span class="hint">aucune</span>']])}
         ${bulles(e)}`);
@@ -363,7 +557,7 @@
     };
     const fiche = (f) => {
       const fields = [
-        {key: 'statut', label: 'Statut', type: 'select', options: ['En attente', 'Urgent', 'Transmis', 'Traite', 'Transmis (sans réponse WhatsApp)']},
+        {key: 'statut', label: 'Étape de qualification', type: 'select', options: Object.entries(FICHE_STATUTS).map(([v, [t]]) => [v, t])},
         {key: 'service', label: 'Service pressenti', type: 'select', options: ['technique', 'commercial', 'finance']},
         {key: 'societe', label: 'Société'}, {key: 'contact', label: 'Contact'}, {key: 'email', label: 'Email'}, {key: 'departement', label: 'Département'},
         {key: 'resume', label: 'Résumé', type: 'textarea'},
@@ -375,7 +569,8 @@
           ['Besoin commercial', h(f.besoin_commercial)], ['Réf. facture', h(f.reference_facture)], ['Justification urgence', h(f.justification_urgence)],
           ['Dernière réponse IA', h(f.derniere_reponse_ia)], ['Mis à jour', fmtDate(f.updated_at)], ['Transmis le', fmtDate(f.transmis_at)]])}
         <h4>Modifier</h4>${editForm(fields, f)}
-        <h4>Demandes transmises (${dems.length})</h4>${dems.length ? dems.map((d) => `<div>${pill(d.service, 'info')} ${pill(d.priorite, cls(d.priorite))} ${fmtDate(d.created_at)} — ${h(d.resume || '')} <span class="hint">(${L(d.source)})</span></div>`).join('') : '<span class="hint">Aucune</span>'}
+        <p class="hint">Cette fiche retrace l'appel et la qualification par Claire. Le rappel du client se suit sur la demande ci-dessous.</p>
+        <h4>Demandes transmises (${dems.length})</h4>${dems.length ? dems.map((d) => `<div>${pill(d.service, 'info')} ${pill(d.priorite, cls(d.priorite))} ${pill(L(d.statut), cls(d.statut))} ${fmtDate(d.created_at)} — ${h(d.resume || '')}${d.destinataires ? ` <span class="hint">→ ${h(d.destinataires)}</span>` : ''} <span class="hint">(${L(d.source)})</span></div>`).join('') : '<span class="hint">Aucune</span>'}
         <h4>Conversation avec Claire (${conv.rows.filter((m) => m.fiche_id === f.id).length})</h4>${(() => {
           const e = conv.rows.filter((m) => m.fiche_id === f.id).sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id - b.id));
           return e.length ? bulles(e) : '<span class="hint">Aucun échange enregistré pour cette fiche</span>';
@@ -384,16 +579,25 @@
       $('#drawerSave').onclick = async () => { await patch('rep/fiches/' + f.id, readForm($('#drawerBody'), fields)); toast('Fiche enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette fiche ?')) { await api('rep/fiches/' + f.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
     };
+    const telFr = (t) => { const m = String(t || '').match(/^33(\d{9})$/); return m ? ('0' + m[1]).replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
     const demande = (d) => {
       const fields = [
-        {key: 'statut', label: 'Statut', type: 'select', options: [['a_traiter', 'À traiter'], ['en_cours', 'En cours'], ['traite', 'Traité']]},
-        {key: 'traite_par', label: 'Traité par'}, {key: 'commentaire', label: 'Commentaire', type: 'textarea'},
+        {key: 'statut', label: 'Suivi du rappel', type: 'select', options: [['a_traiter', 'À traiter'], ['en_cours', 'En cours (pris en charge)'], ['traite', 'Traitée (client rappelé)']]},
+        {key: 'traite_par', label: 'Pris en charge par'}, {key: 'commentaire', label: 'Commentaire', type: 'textarea'},
       ];
-      openDrawer(`${h(d.service)} — ${h(d.societe || d.contact || '')}`, `
-        ${kv([['Date', fmtDate(d.created_at)], ['Priorité', pill(d.priorite, cls(d.priorite))], ['Source', L(d.source)], ['Société', h(d.societe)], ['Contact', h(d.contact)],
-          ['Téléphone', h(d.tel)], ['Email', h(d.email)], ['Marque / modèle', h([d.marque, d.modele].filter(Boolean).join(' '))], ['N° série', h(d.numero_serie)],
-          ['Type de panne', h(d.type_panne)], ['Besoin commercial', h(d.besoin_commercial)], ['Réf. facture', h(d.reference_facture)], ['Résumé', h(d.resume)],
-          ['Justification urgence', h(d.justification_urgence)], ['Compte distributeur', h(d.compte_distributeur)], ['Commercial', h(d.commercial)], ['Traité le', fmtDate(d.traite_at)]])}
+      const urgent = d.priorite === 'URGENT';
+      openDrawer(`${urgent ? '🔴 ' : ''}${h(d.service)} — ${h(d.societe || d.contact || '')}`, `
+        ${urgent && d.statut === 'a_traiter' ? '<div class="msg err"><b>URGENT — production arrêtée.</b> Personne n\'a encore pris cette demande en charge.</div>' : ''}
+        ${kv([['Reçue le', fmtDate(d.created_at)], ['Priorité', pill(d.priorite, cls(d.priorite))], ['Source', L(d.source)],
+          ['À rappeler', h(d.contact || '') + (d.tel ? ` — <a href="tel:+${h(d.tel)}">${h(telFr(d.tel))}</a>` : '')], ['Société', h(d.societe)], ['Email', h(d.email)],
+          ['Marque / modèle', h([d.marque, d.modele].filter(Boolean).join(' '))], ['N° série', h(d.numero_serie)], ['Équipement', d.type_equipement ? h(L(d.type_equipement)) : ''],
+          ['Problème', h(d.type_panne)], ['Besoin commercial', h(d.besoin_commercial)], ['Réf. facture', h(d.reference_facture)], ['Résumé', h(d.resume)],
+          ['Justification urgence', h(d.justification_urgence)],
+          ['Type de client', d.type_client ? h(L(d.type_client)) : ''], ['Compte distributeur', h(d.compte_distributeur)], ['Département du site', h(d.departement)]])}
+        <h4>Transmission</h4>
+        ${kv([['Transmise à', h(d.destinataires)], ['Mails', h((d.dest_to || '').replace(/;/g, ', '))], ['Copie', h((d.dest_cc || '').replace(/;/g, ', '))],
+          ['SMS', h((d.dest_sms || '').replace(/;/g, ', '))], ['Règle appliquée', h(d.regle_libelle)],
+          ['Prise en charge', fmtDate(d.pris_at)], ['Traitée le', fmtDate(d.traite_at)]])}
         <h4>Suivi</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('rep/demandes/' + d.id, readForm($('#drawerBody'), fields)); toast('Demande enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette demande ?')) { await api('rep/demandes/' + d.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
@@ -416,25 +620,37 @@
       if (repSub.v === 'fiches') {
         table(root, fiches.rows, [
           {key: 'created_at', label: 'Date', render: (r) => fmtDate(r.created_at)},
-          {key: 'statut', label: 'Statut', render: (r) => pill(r.statut, cls(r.statut))},
+          {key: 'statut', label: 'Qualification', render: (r) => ficheStatut(r.statut)},
           {key: 'service', label: 'Service'}, {key: 'societe', label: 'Société'}, {key: 'contact', label: 'Contact'}, {key: 'tel_norm', label: 'Téléphone'},
           {key: 'marque', label: 'Marque'}, {key: 'modele', label: 'Modèle'}, {key: 'departement', label: 'Dpt'},
           {key: 'resume', label: 'Résumé', render: (r) => clip(r.resume, true)},
         ], {sort: 'created_at', filters: [{key: 'statut', label: 'Statut'}, {key: 'service', label: 'Service'}], onRow: fiche});
       } else if (repSub.v === 'demandes') {
-        table(root, demandes.rows, [
-          {key: 'created_at', label: 'Date', render: (r) => fmtDate(r.created_at)},
+        // Ordre de travail : urgences non prises, puis ce qui reste à rappeler, puis le reste ; récent d'abord.
+        const rang = (r) => (r.statut === 'a_traiter' ? (r.priorite === 'URGENT' ? 0 : 1) : (r.statut === 'en_cours' ? 2 : 3));
+        const rows = [...demandes.rows].sort((a, b) => rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
+        const urgentNonPris = (r) => r.priorite === 'URGENT' && r.statut === 'a_traiter';
+        table(root, rows, [
+          {key: 'created_at', label: 'Reçue', render: (r) => `${fmtDate(r.created_at)}<br><span class="hint">${rel(r.created_at)}</span>`},
+          {key: 'priorite', label: 'Priorité', render: (r) => r.priorite === 'URGENT' ? pill('🔴 URGENT', 'danger') : pill('Normal', 'muted')},
+          {key: 'statut', label: 'Suivi', render: (r) => `<select class="inline" data-dem="${r.id}"><option value="a_traiter" ${r.statut === 'a_traiter' ? 'selected' : ''}>À traiter</option><option value="en_cours" ${r.statut === 'en_cours' ? 'selected' : ''}>En cours</option><option value="traite" ${r.statut === 'traite' ? 'selected' : ''}>Traitée</option></select>`},
           {key: 'service', label: 'Service', render: (r) => pill(r.service, 'info')},
-          {key: 'priorite', label: 'Priorité', render: (r) => pill(r.priorite, cls(r.priorite))},
-          {key: 'statut', label: 'Suivi', render: (r) => `<select class="inline" data-dem="${r.id}"><option value="a_traiter" ${r.statut === 'a_traiter' ? 'selected' : ''}>À traiter</option><option value="en_cours" ${r.statut === 'en_cours' ? 'selected' : ''}>En cours</option><option value="traite" ${r.statut === 'traite' ? 'selected' : ''}>Traité</option></select>`},
-          {key: 'societe', label: 'Société'}, {key: 'contact', label: 'Contact'}, {key: 'tel', label: 'Téléphone'},
-          {key: 'marque', label: 'Marque'}, {key: 'modele', label: 'Modèle'},
-          {key: 'resume', label: 'Résumé', render: (r) => clip(r.resume, true)},
-          {key: 'source', label: 'Source', render: (r) => L(r.source)},
-        ], {sort: 'created_at', filters: [{key: 'service', label: 'Service'}, {key: 'statut', label: 'Suivi', map: L}, {key: 'priorite', label: 'Priorité'}], onRow: demande,
-          afterRender: (el) => $$('[data-dem]', el).forEach((sel) => sel.addEventListener('change', async () => {
-            await patch('rep/demandes/' + sel.dataset.dem, {statut: sel.value}); toast('Suivi mis à jour'); const d = demandes.rows.find((x) => x.id == sel.dataset.dem); if (d) d.statut = sel.value; refreshBadges();
-          }))});
+          {key: 'marque', label: 'Marque', render: (r) => h(r.marque_norm ? L(r.marque_norm) : (r.marque || ''))},
+          {key: 'type_client', label: 'Client', render: (r) => r.type_client ? h(L(r.type_client)) : ''},
+          {key: 'departement', label: 'Dpt'},
+          {key: 'societe', label: 'Société', render: (r) => clip(r.societe)},
+          {key: 'contact', label: 'À rappeler', render: (r) => `${h(r.contact || '')}${r.tel ? `<br><span class="hint">${h(telFr(r.tel))}</span>` : ''}`},
+          {key: 'destinataires', label: 'Transmise à', render: (r) => clip(r.destinataires || (r.dest_to || '').replace(/;/g, ', '))},
+          {key: 'resume', label: 'Problème', render: (r) => clip(r.type_panne || r.resume, true)},
+        ], {filters: [{key: 'statut', label: 'Suivi', map: L}, {key: 'priorite', label: 'Priorité'}, {key: 'service', label: 'Service'}, {key: 'type_client', label: 'Client', map: L}, {key: 'marque_norm', label: 'Marque', map: L}], onRow: demande,
+          afterRender: (el) => {
+            $$('tbody tr[data-i]', el).forEach((tr) => tr.classList.toggle('urgent', urgentNonPris(rows[Number(tr.dataset.i)])));
+            $$('[data-dem]', el).forEach((sel) => sel.addEventListener('change', async () => {
+              await patch('rep/demandes/' + sel.dataset.dem, {statut: sel.value}); toast('Suivi mis à jour');
+              const d = demandes.rows.find((x) => x.id == sel.dataset.dem); if (d) d.statut = sel.value;
+              sel.closest('tr').classList.toggle('urgent', !!d && urgentNonPris(d)); refreshBadges();
+            }));
+          }});
       } else if (repSub.v === 'conversations') {
         table(root, fils, [
           {key: 'fin', label: 'Dernier échange', render: (r) => fmtDate(r.fin)},
@@ -442,7 +658,7 @@
           {key: 'societe', label: 'Société', render: (r) => clip(r.societe)},
           {key: 'contact', label: 'Contact'},
           {key: 'service', label: 'Service', render: (r) => r.service ? pill(r.service, 'info') : ''},
-          {key: 'fiche_statut', label: 'Statut fiche', render: (r) => pill(r.fiche_statut, cls(r.fiche_statut))},
+          {key: 'fiche_statut', label: 'Qualification', render: (r) => ficheStatut(r.fiche_statut)},
           {key: 'nb', label: 'Échanges', num: true},
           {key: 'debut', label: 'Premier échange', render: (r) => fmtDate(r.debut)},
           {key: 'apercu', label: 'Dernier message', search: (r) => r.echanges.map((e) => `${e.message || ''} ${e.reponse || ''}`).join(' '),
@@ -455,8 +671,8 @@
         ], {sort: 'raison_sociale', asc: true, filters: [{key: 'marque', label: 'Marque'}, {key: 'vendeur', label: 'Commercial'}], onRow: distrib,
           tools: `<button class="btn small primary" id="addDist">+ Ajouter</button>`, afterRender: (el) => $('#addDist', el).addEventListener('click', () => distrib({}))});
       } else if (repSub.v === 'routage') {
-        routageUI(root, 'repondeur', {keyLabel: 'Service', placeholder: 'technique, commercial, finance…',
-          hint: "Service pressenti par l'IA (technique / commercial / finance / autre) → destinataires du mail de transmission SAV, Commercial ou Finance. La clé « aiguilleur » sert aux WhatsApp non identifiés."});
+        root.innerHTML = '<div class="loading">Chargement…</div>';
+        repRoutageUI(root).catch((e) => { root.innerHTML = `<div class="msg err">${h(e.message)}</div>`; });
       } else {
         root.innerHTML = journal(logs.rows);
       }

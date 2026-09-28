@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-16a';
+const MA_VERSION = '2026-09-28a';
 
 function ma_config(): array
 {
@@ -52,6 +52,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
 {
     // Tables et colonnes attendues par le code. Toute absence déclenche la mise à niveau.
     $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
+        'rep_contacts', 'rep_regles',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [
@@ -59,7 +60,11 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         'adv_demandes' => ['commentaire' => 'TEXT'],
         'cso_devis' => ['commentaire' => 'TEXT', 'contact_interne' => 'TEXT'],
         'cee_leads' => ['commentaire' => 'TEXT'],
-        'rep_demandes' => ['commentaire' => 'TEXT', 'email' => 'TEXT', 'departement' => 'TEXT'],
+        'rep_demandes' => ['commentaire' => 'TEXT', 'email' => 'TEXT', 'departement' => 'TEXT',
+            // Routage par marque / type de client / urgence (moteur ma_rep_router)
+            'code_postal' => 'TEXT', 'marque_norm' => 'TEXT', 'type_client' => 'TEXT', 'type_equipement' => 'TEXT',
+            'regle_id' => 'INTEGER', 'regle_libelle' => 'TEXT', 'destinataires' => 'TEXT',
+            'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT'],
     ];
 
     $present = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
@@ -113,6 +118,17 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     // des lignes déjà écrites : rien n'est supprimé, le journal reste complet.
     $pdo->exec("UPDATE executions_log SET statut = 'info'
         WHERE type_evenement = 'reponse_non_rattachee' AND statut = 'erreur'");
+
+    // Répondeur : annuaire et règles pré-remplis une seule fois, d'après le schéma
+    // de routage SAV / finance. Ensuite, tout se modifie depuis la page.
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('rep_repli_email', 'cyril.mortier@airwco.com')");
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('rep_cc_urgence', '')");
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_routage_initial'");
+    $st->execute();
+    if (!$st->fetchColumn()) {
+        ma_rep_routage_initial($pdo);
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_initial', ?)")->execute([ma_now()]);
+    }
 
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
         ->execute([date('Y-m-d H:i:s')]);
@@ -783,4 +799,314 @@ function ma_chat_dedup(PDO $db, ?int $windowMin = null): array
         ->execute($aSupprimer);
     $db->commit();
     return ['fusionnes' => count($aSupprimer), 'restants' => count($rows) - count($aSupprimer), 'leads_touches' => count($fusions)];
+}
+
+// ======================================================================== Répondeur : routage
+//
+// Chaque demande (SAV, finance, commercial) est orientée selon trois critères — la marque,
+// le type de client (direct ou distributeur) et l'urgence — complétés du service et, pour
+// ABAC, du type d'équipement. Les règles sont évaluées dans l'ordre ; la première qui
+// correspond désigne un rôle (RSO, CTA, back-office…) ou des personnes de l'annuaire.
+
+/** Minuscules sans accents, pour comparer des libellés saisis librement. */
+function ma_plat(?string $s): string
+{
+    $s = mb_strtolower(trim((string) $s));
+    return strtr($s, ['à' => 'a', 'â' => 'a', 'ä' => 'a', 'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e',
+        'î' => 'i', 'ï' => 'i', 'ô' => 'o', 'ö' => 'o', 'ù' => 'u', 'û' => 'u', 'ü' => 'u', 'ç' => 'c']);
+}
+
+/** Liste « a, b ;c » → ['a', 'b', 'c'] en minuscules sans accents. */
+function ma_csv(?string $s): array
+{
+    return array_values(array_filter(array_map('ma_plat', preg_split('/[,;]+/', (string) $s) ?: []), fn($x) => $x !== ''));
+}
+
+/** Marque normalisée : worthington | mauguiere | abac | pneumatech | autre | '' (inconnue). */
+function ma_rep_marque(?string $marque, ?string $modele = null): string
+{
+    $m = ma_plat($marque);
+    $table = [
+        'worthington' => ['worthington', 'creyssensac', 'creysensac'],
+        'mauguiere' => ['mauguiere', 'maugiere'],
+        'abac' => ['abac'],
+        'pneumatech' => ['pneumatech', 'pneumatec'],
+    ];
+    foreach ($table as $cle => $mots) {
+        foreach ($mots as $mot) {
+            if ($m !== '' && str_contains($m, $mot)) {
+                return $cle;
+            }
+        }
+    }
+    // Marque absente : on la déduit des gammes les plus reconnaissables (table du prompt VAPI).
+    $mod = ma_plat($modele);
+    $gammes = [
+        'worthington' => '/^(rlr|rollair|dnx|dixair|snx|decibair|pxr|pixair|blocair)/',
+        'mauguiere' => '/^(mavdv|mavd|mav|mrl)\b/',
+        'abac' => '/^(genesis|formula|cross)/',
+    ];
+    foreach ($gammes as $cle => $re) {
+        if ($mod !== '' && preg_match($re, $mod)) {
+            return $cle;
+        }
+    }
+    return $m === '' ? '' : 'autre';
+}
+
+/** direct | distributeur. Un compte distributeur retrouvé vaut preuve. */
+function ma_rep_type_client(array $d): string
+{
+    $t = ma_plat($d['type_client'] ?? $d['type_interlocuteur'] ?? null);
+    if (str_contains($t, 'distri') || str_contains($t, 'revend') || trim((string) ($d['compte_distributeur'] ?? '')) !== '') {
+        return 'distributeur';
+    }
+    return 'direct';
+}
+
+/** Département à partir du code postal du site (ou d'un département déjà donné). */
+function ma_departement(?string $codePostal, ?string $departement = null): ?string
+{
+    $dep = strtoupper(trim((string) $departement));
+    if (preg_match('/^(2A|2B)$/', $dep)) {
+        return $dep;
+    }
+    if (preg_match('/^\d{1,3}$/', $dep)) {
+        return str_pad($dep, 2, '0', STR_PAD_LEFT);
+    }
+    $cp = preg_replace('/\D/', '', (string) $codePostal);
+    if (strlen($cp) === 4) {
+        $cp = '0' . $cp;                    // 1000 → 01000
+    }
+    if (strlen($cp) !== 5) {
+        return null;
+    }
+    if (str_starts_with($cp, '97') || str_starts_with($cp, '98')) {
+        return substr($cp, 0, 3);
+    }
+    if (str_starts_with($cp, '20')) {
+        return ((int) $cp < 20200) ? '2A' : '2B';
+    }
+    return substr($cp, 0, 2);
+}
+
+/** Portable au format international pour l'envoi de SMS (+33612345678), sinon null. */
+function ma_mobile_sms(?string $tel): ?string
+{
+    $t = ma_tel($tel);
+    if (!$t) {
+        return null;
+    }
+    // En France, seuls les 06 et 07 reçoivent des SMS ; l'étranger est accepté tel quel.
+    if (str_starts_with($t, '33') && !preg_match('/^33[67]\d{8}$/', $t)) {
+        return null;
+    }
+    return '+' . $t;
+}
+
+function ma_rep_urgent(array $d): bool
+{
+    return ma_bool($d['urgence'] ?? false) || strtoupper(trim((string) ($d['priorite'] ?? ''))) === 'URGENT';
+}
+
+/** Service normalisé : sav | commercial | finance | autre. */
+function ma_rep_service(?string $s): string
+{
+    $s = ma_plat($s);
+    return ['sav' => 'sav', 'technique' => 'sav', 'commercial' => 'commercial', 'finance' => 'finance'][$s] ?? ($s ?: 'autre');
+}
+
+/**
+ * Destinataires d'une demande du répondeur.
+ *
+ * Retourne la règle retenue, les personnes désignées, les adresses (to, cc), les portables
+ * pour le SMS, et le contenu prêt à envoyer (objet, corps HTML, texte du SMS). Rien n'est
+ * écrit en base : la même fonction sert à la création d'une demande et au simulateur.
+ */
+function ma_rep_router(PDO $db, array $d): array
+{
+    $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $service = ma_rep_service($d['service'] ?? null);
+    $marque = ma_rep_marque($d['marque'] ?? null, $d['modele'] ?? null);
+    $typeClient = ma_rep_type_client($d);
+    $urgent = ma_rep_urgent($d);
+    $equip = ma_plat($d['type_equipement'] ?? null);
+    $equip = $equip === '' ? '' : (str_contains($equip, 'piston') ? 'piston' : 'autre');
+    $dep = ma_departement($d['code_postal'] ?? null, $d['departement'] ?? null);
+    $notes = [];
+
+    $contacts = $db->query('SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom')->fetchAll();
+    $regles = $db->query('SELECT * FROM rep_regles WHERE actif = 1 ORDER BY ordre, id')->fetchAll();
+
+    $correspond = function (array $r) use ($service, $marque, $typeClient, $urgent, $equip): bool {
+        $s = ma_csv($r['service']);
+        $m = ma_csv($r['marques']);
+        return (!$s || in_array($service, $s, true))
+            && (!$m || in_array($marque === '' ? 'autre' : $marque, $m, true))
+            && (trim((string) $r['type_client']) === '' || ma_plat($r['type_client']) === $typeClient)
+            && (trim((string) $r['urgence']) === '' || (ma_plat($r['urgence']) === 'oui') === $urgent)
+            // Équipement non précisé : on le traite comme « autre » plutôt que de perdre la demande.
+            && (trim((string) $r['type_equipement']) === '' || ma_plat($r['type_equipement']) === ($equip ?: 'autre'));
+    };
+    $pourLaMarque = fn(array $c) => !ma_csv($c['marques']) || $marque === '' || in_array($marque, ma_csv($c['marques']), true);
+    $duRole = fn(string $role) => array_values(array_filter($contacts,
+        fn($c) => ma_plat($c['role']) === ma_plat($role) && $pourLaMarque($c)));
+
+    $regle = null;
+    foreach ($regles as $r) {
+        if ($correspond($r)) {
+            $regle = $r;
+            break;
+        }
+    }
+
+    $personnes = [];
+    if ($regle) {
+        $role = (string) ($regle['cible_role'] ?? '');
+        if ($regle['cible'] === 'contacts') {
+            $ids = array_map('intval', ma_csv($regle['cible_contacts']));
+            $personnes = array_values(array_filter($contacts, fn($c) => in_array((int) $c['id'], $ids, true)));
+        } elseif ($regle['cible'] === 'role_departement') {
+            $personnes = $dep === null ? [] : array_values(array_filter($duRole($role),
+                fn($c) => in_array(strtolower($dep), array_map(fn($x) => str_pad($x, 2, '0', STR_PAD_LEFT), ma_csv($c['departements'])), true)));
+            if (!$personnes) {
+                $repli = (string) ($regle['repli_role'] ?? '');
+                $noms = ['rso' => 'RSO', 'cta' => 'CTA', 'backoffice' => 'back-office support', 'compta' => 'compta', 'commercial' => 'commercial'];
+                $notes[] = $dep === null
+                    ? 'Département du site inconnu : impossible de choisir le ' . ($noms[$role] ?? $role) . ' du secteur'
+                    : 'Aucun ' . ($noms[$role] ?? $role) . ' ne couvre le ' . $dep;
+                if ($repli !== '') {
+                    $personnes = $duRole($repli);
+                    $notes[] = 'Relais : ' . ($noms[$repli] ?? $repli);
+                }
+            }
+        } else {
+            $personnes = $duRole($role);
+        }
+    } else {
+        $notes[] = 'Aucune règle ne correspond';
+    }
+
+    $to = [];
+    $sms = [];
+    foreach ($personnes as $p) {
+        $to += ma_liste_emails($p['email'] ?? null);
+        if (trim((string) ($p['email'] ?? '')) === '') {
+            $notes[] = $p['nom'] . ' : email manquant dans l\'annuaire';
+        }
+        if ($m = ma_mobile_sms($p['mobile'] ?? null)) {
+            $sms[$m] = $m;
+        }
+    }
+    if (!$to) {
+        $to = ma_liste_emails($params['rep_repli_email'] ?? 'cyril.mortier@airwco.com');
+        $notes[] = 'Aucun destinataire joignable : envoi à l\'adresse de repli';
+    }
+    $cc = ma_liste_emails($regle['cc'] ?? null) + ($urgent ? ma_liste_emails($params['rep_cc_urgence'] ?? null) : []);
+    foreach ($to as $k => $_) {
+        unset($cc[$k]);
+    }
+
+    $contenu = ma_rep_message($d, [
+        'service' => $service, 'marque' => $marque, 'type_client' => $typeClient, 'urgent' => $urgent,
+        'departement' => $dep, 'personnes' => $personnes, 'url' => $params['url_tableau_de_bord']
+            ?? 'https://multiairfrance.store/calculateurs/interne/MULTIAIR/',
+    ]);
+
+    return [
+        'service' => $service, 'marque' => $marque, 'type_client' => $typeClient, 'urgent' => $urgent,
+        'type_equipement' => $equip, 'departement' => $dep,
+        'regle_id' => $regle ? (int) $regle['id'] : null,
+        'regle_libelle' => $regle['libelle'] ?? 'Aucune règle (repli)',
+        'personnes' => array_map(fn($p) => ['id' => (int) $p['id'], 'nom' => $p['nom'], 'role' => $p['role'],
+            'email' => $p['email'], 'mobile' => $p['mobile']], $personnes),
+        'to' => implode(';', array_values($to)),
+        'cc' => implode(';', array_values($cc)),
+        'sms' => implode(';', array_values($sms)),
+        'notes' => $notes,
+    ] + $contenu;
+}
+
+/** Objet, corps HTML et texte SMS de la transmission. L'urgence se voit dès l'objet. */
+function ma_rep_message(array $d, array $x): array
+{
+    $noms = ['worthington' => 'Worthington Creyssensac', 'mauguiere' => 'Mauguière', 'abac' => 'ABAC', 'pneumatech' => 'Pneumatech', 'autre' => 'Autre marque'];
+    $svc = ['sav' => 'SAV', 'commercial' => 'Commercial', 'finance' => 'Finance'][$x['service']] ?? 'Demande';
+    $marque = $noms[$x['marque']] ?? '';
+    $societe = trim((string) ($d['societe'] ?? $d['distributeur'] ?? '')) ?: 'Société non précisée';
+    $contact = trim((string) ($d['contact'] ?? ''));
+    $telBrut = ma_tel($d['tel'] ?? $d['telephone'] ?? null);
+    $tel = $telBrut && preg_match('/^33(\d{9})$/', $telBrut, $mm) ? '0' . $mm[1] : ($telBrut ?? '');
+    $telLisible = preg_match('/^0\d{9}$/', $tel) ? trim(chunk_split($tel, 2, ' ')) : $tel;
+    $client = $x['type_client'] === 'distributeur' ? 'Distributeur' : 'Client direct';
+    $dep = $x['departement'] ? ' (' . $x['departement'] . ')' : '';
+
+    $objet = ($x['urgent'] ? '🔴 URGENT — PRODUCTION ARRÊTÉE — ' : '')
+        . $svc . ($marque && $x['service'] === 'sav' ? ' ' . $marque : '') . ' — ' . $societe . $dep . ' — ' . $client;
+
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $ligne = fn($k, $v) => trim((string) $v) === '' ? '' : '<tr><td style="padding:4px 12px 4px 0;color:#5f6b7a;white-space:nowrap">'
+        . $e($k) . '</td><td style="padding:4px 0">' . nl2br($e($v)) . '</td></tr>';
+    $qui = implode(', ', array_map(fn($p) => $p['nom'], $x['personnes']));
+    $html = ($x['urgent']
+            ? '<div style="background:#b3261e;color:#fff;padding:12px 16px;font-size:18px;font-weight:700;border-radius:6px">'
+              . '🔴 URGENT — production arrêtée : rappel immédiat</div>'
+            : '')
+        . '<h2 style="font-family:system-ui,sans-serif;color:#1c2431">' . $e($svc . ($marque ? ' ' . $marque : '')) . ' — ' . $e($societe) . '</h2>'
+        . '<p style="font-family:system-ui,sans-serif;font-size:16px"><b>À rappeler :</b> ' . $e($contact ?: 'contact non précisé')
+        . ($telLisible ? ' au <a href="tel:' . $e($tel) . '">' . $e($telLisible) . '</a>' : '') . '</p>'
+        . '<table style="font-family:system-ui,sans-serif;font-size:14px;border-collapse:collapse">'
+        . $ligne('Type de client', $client . (trim((string) ($d['compte_distributeur'] ?? '')) !== '' ? ' — compte ' . $d['compte_distributeur'] : ''))
+        . $ligne('Département du site', $x['departement'] ?? '')
+        . $ligne('Marque', $marque)
+        . $ligne('Modèle', $d['modele'] ?? '')
+        . $ligne('N° de série', $d['numero_serie'] ?? '')
+        . $ligne('Type d\'équipement', $d['type_equipement'] ?? '')
+        . $ligne('Problème', $d['type_panne'] ?? $d['description'] ?? '')
+        . $ligne('Besoin commercial', $d['besoin_commercial'] ?? '')
+        . $ligne('Facture / dossier', $d['reference_facture'] ?? '')
+        . $ligne('Résumé', $d['resume'] ?? '')
+        . $ligne('Pourquoi urgent', $x['urgent'] ? ($d['justification_urgence'] ?? '') : '')
+        . $ligne('Email du client', $d['email'] ?? '')
+        . $ligne('Transmis à', $qui)
+        . '</table>'
+        . '<p style="font-family:system-ui,sans-serif;font-size:14px;margin-top:18px">Une fois le client rappelé, passez la demande '
+        . '« En cours » puis « Traitée » dans le <a href="' . $e($x['url']) . '#repondeur">tableau de bord MULTIAIR</a>.</p>';
+
+    $sms = ($x['urgent'] ? 'URGENT prod arretee - ' : '') . 'Multiair ' . $svc . ($marque && $x['service'] === 'sav' ? ' ' . $marque : '')
+        . ' : ' . $societe . $dep . ' - rappeler ' . ($contact ?: 'le client') . ($telLisible ? ' au ' . $telLisible : '')
+        . (trim((string) ($d['type_panne'] ?? $d['resume'] ?? '')) !== '' ? ' - ' . trim((string) ($d['type_panne'] ?? $d['resume'])) : '');
+    if (mb_strlen($sms) > 300) {
+        $sms = mb_substr($sms, 0, 297) . '...';
+    }
+    return ['objet' => $objet, 'mail_html' => $html, 'sms_texte' => $sms];
+}
+
+/** Annuaire et règles de départ, d'après le schéma de routage fourni par Multiair. */
+function ma_rep_routage_initial(PDO $db): void
+{
+    $c = $db->prepare('INSERT INTO rep_contacts(nom, role, email, mobile, departements, marques, competences, externe, actif, commentaire)
+        VALUES (?,?,?,?,?,?,?,?,1,?)');
+    $c->execute(['Compta clients', 'compta', 'Compta.clients@airwco.com', null, null, null, 'Facturation, règlements', 0,
+        'Boîte partagée : toutes les demandes finance']);
+    $c->execute(['Julien', 'backoffice', null, null, null, null, 'Support technique distributeurs', 0, 'Email et portable à compléter']);
+    $c->execute(['Marien', 'backoffice', null, null, null, null, 'Support technique distributeurs', 0, 'Email et portable à compléter']);
+    $c->execute(['Commercial (à définir)', 'commercial', 'cyril.mortier@airwco.com', null, null, null, null, 0,
+        'En attendant l\'organisation commerciale']);
+
+    $r = $db->prepare('INSERT INTO rep_regles(ordre, libelle, service, marques, type_client, urgence, type_equipement,
+        cible, cible_role, cible_contacts, repli_role, cc, actif) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)');
+    $wmp = 'worthington,mauguiere,pneumatech';
+    $r->execute([10, 'Finance : boîte partagée compta', 'finance', null, null, null, null, 'role', 'compta', null, null, null]);
+    $r->execute([20, 'SAV Worthington / Mauguière / Pneumatech — distributeur → back-office', 'sav', $wmp, 'distributeur', null, null,
+        'role', 'backoffice', null, null, null]);
+    $r->execute([30, 'SAV Worthington / Mauguière / Pneumatech — client direct → RSO du secteur', 'sav', $wmp, 'direct', null, null,
+        'role_departement', 'rso', null, 'backoffice', null]);
+    $r->execute([40, 'SAV ABAC — distributeur → back-office', 'sav', 'abac', 'distributeur', null, null,
+        'role', 'backoffice', null, null, null]);
+    $r->execute([50, 'SAV ABAC — client direct, compresseur à piston → CTA du secteur', 'sav', 'abac', 'direct', null, 'piston',
+        'role_departement', 'cta', null, 'backoffice', null]);
+    $r->execute([60, 'SAV ABAC — client direct, autre équipement → CTA du secteur, sinon back-office', 'sav', 'abac', 'direct', null, 'autre',
+        'role_departement', 'cta', null, 'backoffice', null]);
+    $r->execute([90, 'Commercial', 'commercial', null, null, null, null, 'role', 'commercial', null, null, null]);
 }
