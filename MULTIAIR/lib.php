@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-28c';
+const MA_VERSION = '2026-09-29a';
 
 function ma_config(): array
 {
@@ -64,7 +64,10 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Routage par marque / type de client / urgence (moteur ma_rep_router)
             'code_postal' => 'TEXT', 'marque_norm' => 'TEXT', 'type_client' => 'TEXT', 'type_equipement' => 'TEXT',
             'regle_id' => 'INTEGER', 'regle_libelle' => 'TEXT', 'destinataires' => 'TEXT',
-            'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT', 'nature' => 'TEXT'],
+            'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT', 'nature' => 'TEXT',
+            'type_interlocuteur' => 'TEXT'],
+        // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
+        'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT'],
         'rep_regles' => ['natures' => 'TEXT'],
     ];

@@ -428,9 +428,20 @@ try {
                     $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;
                     $d['fiche_id'] = isset($d['fiche_id']) ? (int) $d['fiche_id'] : null;
                     $d['type_panne'] = ma_str($d['type_panne'] ?? $d['description'] ?? null);
-                    // Le département vient du code postal du site ; à défaut, de la fiche d'appel.
-                    if (empty($d['code_postal']) && empty($d['departement']) && $d['fiche_id']) {
-                        $d['departement'] = getOne($db, 'rep_fiches', $d['fiche_id'])['departement'] ?? null;
+                    // Une demande créée après la qualification WhatsApp ne connaît que la fiche :
+                    // on y reprend ce que Claire a recueilli au téléphone (type d'appelant, site, etc.).
+                    $fiche = $d['fiche_id'] ? getOne($db, 'rep_fiches', $d['fiche_id']) : null;
+                    foreach (['code_postal', 'type_interlocuteur', 'nature', 'type_equipement', 'departement'] as $c) {
+                        if (trim((string) ($d[$c] ?? '')) === '' && $fiche && trim((string) ($fiche[$c] ?? '')) !== '') {
+                            $d[$c] = $fiche[$c];
+                        }
+                    }
+                    if (!str_contains((string) ($d['email'] ?? ''), '@')) {
+                        $d['email'] = $fiche['email'] ?? null;
+                    }
+                    // Claire écrit toujours « Site : 69003 » dans son résumé : filet si le champ n'est pas arrivé.
+                    if (trim((string) ($d['code_postal'] ?? '')) === '' && preg_match('/Site\s*:\s*(\d{5})\b/u', (string) ($d['resume'] ?? ''), $m)) {
+                        $d['code_postal'] = $m[1];
                     }
                     // Une demande naît toujours « à traiter » : seul un humain la fait avancer.
                     $d['statut'] = 'a_traiter';
