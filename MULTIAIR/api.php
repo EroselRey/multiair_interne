@@ -107,7 +107,7 @@ if (!$estAdmin) {
         ($r0 === 'rep' && $r1 === 'demandes' && ($lecture || (($method === 'PATCH' || $method === 'POST') && isset($parts[2]))))
         || ($r0 === 'rep' && in_array($r1, ['fiches', 'messages', 'listes'], true) && $lecture)
         || ($r0 === 'equipe' && $lecture && !isset($parts[1]))
-        || ($r0 === 'clients' && $lecture));
+        || ($r0 === 'clients' && ($lecture || (($parts[2] ?? null) === 'equipements'))));
     if (!$permis) {
         fail('Accès réservé aux administrateurs', 403);
     }
@@ -778,9 +778,60 @@ try {
             if ($sub !== null) {
                 $id = idFrom($parts, 1);
                 $c = getOne($db, 'rep_clients', $id) ?? fail('Client introuvable', 404);
-                if (($method === 'PATCH' || $method === 'POST') && $estAdmin) {
-                    $d = array_intersect_key($body, array_flip(['contact', 'societe', 'type_client', 'type_interlocuteur', 'code_postal', 'departement',
-                        'marque', 'modele', 'numero_serie', 'compte_distributeur', 'statut_client', 'notes', 'email']));
+                // Parc machines : ajouter, corriger, retirer une machine.
+                if ($sub2 === 'equipements' && $method !== 'GET') {
+                    $eid = (int) ($parts[3] ?? 0);
+                    $e = $eid ? (getOne($db, 'rep_equipements', $eid) ?? fail('Machine introuvable', 404)) : null;
+                    if ($e && (int) $e['client_id'] !== $id) {
+                        fail('Machine d\'un autre client', 400);
+                    }
+                    if ($method === 'DELETE' && $e) {
+                        $db->prepare('UPDATE rep_demandes SET equipement_id = NULL WHERE equipement_id = ?')->execute([$eid]);
+                        $db->prepare('DELETE FROM rep_equipements WHERE id = ?')->execute([$eid]);
+                        logEvent($db, 'plateforme', 'ok', 'machine_retiree', 'Machine retirée du parc du client ' . $id . ($user ? ' par ' . $user['nom'] : ''));
+                    } else {
+                        $d = array_map(fn($v) => is_string($v) ? (trim($v) === '' ? null : trim($v)) : $v,
+                            array_intersect_key($body, array_flip(['marque', 'modele', 'numero_serie', 'type_equipement', 'code_postal', 'departement', 'commentaire', 'actif'])));
+                        if (isset($d['actif'])) {
+                            $d['actif'] = ma_bool($d['actif']) ? 1 : 0;
+                        }
+                        if (!empty($d['code_postal'])) {
+                            $d['departement'] = ma_departement($d['code_postal']) ?? ($d['departement'] ?? null);
+                        }
+                        $d['updated_at'] = $now;
+                        if ($e) {
+                            update($db, 'rep_equipements', $eid, $d);
+                        } else {
+                            if (empty($d['marque']) && empty($d['modele']) && empty($d['numero_serie'])) {
+                                fail('Indiquez au moins la marque, le modèle ou le numéro de série');
+                            }
+                            insert($db, 'rep_equipements', $d + ['client_id' => $id, 'source' => 'manuel', 'created_at' => $now]);
+                        }
+                        logEvent($db, 'plateforme', 'ok', $e ? 'machine_corrigee' : 'machine_ajoutee', 'Parc du client ' . $id . ($user ? ' — ' . $user['nom'] : ''));
+                    }
+                } elseif ($sub2 === 'fusionner' && $method === 'POST' && $estAdmin) {
+                    $autre = (int) ($body['avec'] ?? 0);
+                    getOne($db, 'rep_clients', $autre) ?? fail('Fiche à fusionner introuvable', 404);
+                    ma_clients_fusionner($db, $id, $autre);
+                    logEvent($db, 'plateforme', 'ok', 'clients_fusionnes', "Fiche client $autre fusionnée dans $id" . ($user ? ' par ' . $user['nom'] : ''));
+                    $c = getOne($db, 'rep_clients', $id);
+                } elseif (($method === 'PATCH' || $method === 'POST') && $estAdmin) {
+                    $identite = ['contact', 'societe', 'tel', 'email', 'type_client', 'type_interlocuteur', 'code_postal', 'departement', 'compte_distributeur'];
+                    $d = array_intersect_key($body, array_flip([...$identite, 'statut_client', 'notes']));
+                    if (array_key_exists('tel', $d)) {
+                        $d['tel'] = ma_tel_cle((string) $d['tel']);
+                    }
+                    if (!empty($d['code_postal'])) {
+                        $d['departement'] = ma_departement((string) $d['code_postal']);
+                    }
+                    // Une correction faite ici ne sera plus écrasée par les demandes suivantes.
+                    $corr = ma_csv($c['champs_corriges'] ?? '');
+                    foreach ($identite as $k) {
+                        if (array_key_exists($k, $d) && (string) $d[$k] !== (string) ($c[$k] ?? '')) {
+                            $corr[] = $k;
+                        }
+                    }
+                    $d['champs_corriges'] = implode(',', array_unique($corr));
                     $d['updated_at'] = $now;
                     update($db, 'rep_clients', $id, $d);
                     logEvent($db, 'plateforme', 'ok', 'client_modifie', 'Fiche client ' . $id . ' modifiée' . ($user ? ' par ' . $user['nom'] : ''));
@@ -791,6 +842,9 @@ try {
                 $st->execute($portee !== null ? [$id, $portee] : [$id]);
                 $c['demandes'] = $st->fetchAll();
                 $c['fidelite'] = ma_client_fidelite($c);
+                $st = $db->prepare('SELECT * FROM rep_equipements WHERE client_id = ? ORDER BY actif DESC, COALESCE(derniere_demande, created_at) DESC');
+                $st->execute([$id]);
+                $c['equipements'] = $st->fetchAll();
                 // Devis CSO au même e-mail ou au même numéro : ce que le client achète chez nous.
                 $st = $db->prepare("SELECT id, n_offre, date_offre, montant_ht, statut, commercial FROM cso_devis
                     WHERE (email_client IS NOT NULL AND lower(email_client) = lower(?)) OR (tel_client IS NOT NULL AND tel_client != '' AND ? != '' AND replace(replace(tel_client, ' ', ''), '.', '') LIKE ?)

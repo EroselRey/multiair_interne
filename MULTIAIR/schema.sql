@@ -69,6 +69,21 @@ CREATE TABLE IF NOT EXISTS rep_clients (
 CREATE INDEX IF NOT EXISTS idx_rep_clients_tel ON rep_clients(tel);
 CREATE INDEX IF NOT EXISTS idx_rep_clients_email ON rep_clients(email);
 
+-- Parc machines d'un client : une ligne par équipement signalé (ajouté automatiquement à chaque demande
+-- qui cite une machine, corrigeable depuis la fiche client).
+CREATE TABLE IF NOT EXISTS rep_equipements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL,
+  marque TEXT, modele TEXT, numero_serie TEXT, type_equipement TEXT,
+  code_postal TEXT, departement TEXT,
+  commentaire TEXT,
+  actif INTEGER NOT NULL DEFAULT 1,
+  nb_demandes INTEGER NOT NULL DEFAULT 0, derniere_demande TEXT,
+  source TEXT,                    -- auto | manuel
+  created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rep_equipements_client ON rep_equipements(client_id);
+
 -- Historique d'une demande, pour la traçabilité : réception, transmission (à qui, par quel
 -- canal), messages envoyés au client, prise en charge, rappels, notes, clôture.
 CREATE TABLE IF NOT EXISTS rep_evenements (

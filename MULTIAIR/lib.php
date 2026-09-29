@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29g';
+const MA_VERSION = '2026-09-29h';
 
 function ma_config(): array
 {
@@ -52,7 +52,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
 {
     // Tables et colonnes attendues par le code. Toute absence déclenche la mise à niveau.
     $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
-        'rep_contacts', 'rep_regles', 'rep_evenements', 'rep_clients',
+        'rep_contacts', 'rep_regles', 'rep_evenements', 'rep_clients', 'rep_equipements',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [
@@ -69,10 +69,12 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Suivi : un lien secret pour l'équipe, un autre pour le client (sa demande uniquement).
             'jeton_interne' => 'TEXT', 'jeton_client' => 'TEXT', 'pris_par' => 'TEXT', 'rappel_prevu' => 'TEXT',
             // Par où la demande est arrivée : telephone | whatsapp | chat | email.
-            'canal' => 'TEXT', 'client_id' => 'INTEGER'],
+            'canal' => 'TEXT', 'client_id' => 'INTEGER', 'equipement_id' => 'INTEGER'],
         // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
         'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
+        // Champs corrigés à la main sur la fiche client : les demandes suivantes ne les écrasent plus.
+        'rep_clients' => ['champs_corriges' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT', 'fonction' => 'TEXT', 'service' => 'TEXT', 'acces' => 'TEXT',
             'mdp_hash' => 'TEXT', 'mdp_jeton' => 'TEXT', 'mdp_jeton_exp' => 'TEXT', 'derniere_connexion' => 'TEXT'],
         'rep_regles' => ['natures' => 'TEXT'],
@@ -182,7 +184,17 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('chat_leads_repris', ?)")->execute([ma_now() . ' : ' . $n . ' lead(s)']);
     }
 
+    // Parc machines : constitué une seule fois à partir des demandes déjà rattachées.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'parc_constitue'");
+    $st->execute();
+    if (!$st->fetchColumn() && !$clientsAFaire && in_array('rep_equipements', $present, true)) {
+        foreach ($pdo->query('SELECT id FROM rep_demandes WHERE client_id IS NOT NULL ORDER BY created_at, id')->fetchAll(PDO::FETCH_COLUMN) as $did) {
+            ma_equipement_rattacher($pdo, (int) $did);
+        }
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('parc_constitue', ?)")->execute([ma_now()]);
+    }
     if ($clientsAFaire && in_array('rep_demandes', $present, true)) {
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('parc_constitue', ?)")->execute([ma_now()]);
         $n = ma_clients_reprise($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('clients_constitues', ?)")->execute([ma_now() . ' : ' . $n . ' demande(s) rattachée(s)']);
     }
@@ -2414,6 +2426,16 @@ function ma_client_rattacher(PDO $db, int $demandeId): ?int
     $champs = ['contact' => 'contact', 'societe' => 'societe', 'type_client' => 'type_client', 'type_interlocuteur' => 'type_interlocuteur',
         'code_postal' => 'code_postal', 'departement' => 'departement', 'marque' => 'marque', 'modele' => 'modele', 'numero_serie' => 'numero_serie',
         'compte_distributeur' => 'compte_distributeur'];
+    $corriges = ma_csv($c['champs_corriges'] ?? '');
+    foreach ($corriges as $k) {
+        unset($champs[$k]);
+    }
+    if (in_array('tel', $corriges, true)) {
+        $maj['tel'] = $c['tel'];
+    }
+    if (in_array('email', $corriges, true)) {
+        $maj['email'] = $c['email'];
+    }
     foreach ($liste as $x) {
         foreach ($champs as $k => $col) {
             $v = trim((string) ($x[$col] ?? ''));
@@ -2433,7 +2455,118 @@ function ma_client_rattacher(PDO $db, int $demandeId): ?int
     ];
     $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
     $db->prepare("UPDATE rep_clients SET $sets WHERE id = ?")->execute([...array_values($maj), $cid]);
+    ma_equipement_rattacher($db, $demandeId);
     return $cid;
+}
+
+/**
+ * Ajoute au parc du client la machine citée par une demande, ou reconnaît celle qu'il a déjà : même
+ * numéro de série, sinon même marque et même modèle sur le même site. Une nouvelle machine s'ajoute,
+ * elle ne remplace jamais les autres.
+ */
+function ma_equipement_rattacher(PDO $db, int $demandeId): ?int
+{
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$demandeId]);
+    $d = $st->fetch();
+    if (!$d || !$d['client_id']) {
+        return null;
+    }
+    $marque = in_array(ma_plat($d['marque'] ?? ''), ['', 'inconnue', 'autre', 'a qualifier'], true) ? '' : trim((string) $d['marque']);
+    $modele = trim((string) ($d['modele'] ?? ''));
+    $serie = trim((string) ($d['numero_serie'] ?? ''));
+    if ($marque === '' && $modele === '' && $serie === '') {
+        return null;
+    }
+    $site = trim((string) ($d['code_postal'] ?? ''));
+    $cid = (int) $d['client_id'];
+    $eq = null;
+    $parc = $db->prepare('SELECT * FROM rep_equipements WHERE client_id = ? ORDER BY id');
+    $parc->execute([$cid]);
+    $plat = fn($v) => preg_replace('/[^a-z0-9]/', '', ma_plat($v));
+    foreach ($parc->fetchAll() as $e) {
+        if ($serie !== '' && $plat($e['numero_serie']) === $plat($serie)) {
+            $eq = $e;
+            break;
+        }
+        $memeModele = $modele !== '' && $plat($e['modele']) === $plat($modele);
+        $memeMarque = $marque === '' || $e['marque'] === '' || $e['marque'] === null || ma_rep_marque($e['marque']) === ma_rep_marque($marque);
+        $memeSite = $site === '' || (string) $e['code_postal'] === '' || (string) $e['code_postal'] === $site;
+        if ($serie === '' || trim((string) $e['numero_serie']) === '') {
+            if (($memeModele && $memeMarque && $memeSite) || ($modele === '' && trim((string) $e['modele']) === '' && $memeMarque && $memeSite && $marque !== '')) {
+                $eq = $e;
+                break;
+            }
+        }
+    }
+    $now = ma_now();
+    if (!$eq) {
+        $eid = ma_inserer($db, 'rep_equipements', ['client_id' => $cid, 'marque' => $marque ?: null, 'modele' => $modele ?: null,
+            'numero_serie' => $serie ?: null, 'type_equipement' => $d['type_equipement'] ?: null, 'code_postal' => $site ?: null,
+            'departement' => $d['departement'] ?: null, 'source' => 'auto', 'created_at' => $d['created_at'] ?: $now, 'updated_at' => $now]);
+    } else {
+        $eid = (int) $eq['id'];
+        // On complète ce qui manquait, sans écraser ce qui a été saisi ou corrigé.
+        $maj = [];
+        foreach (['marque' => $marque, 'modele' => $modele, 'numero_serie' => $serie, 'code_postal' => $site,
+            'type_equipement' => (string) ($d['type_equipement'] ?? ''), 'departement' => (string) ($d['departement'] ?? '')] as $k => $v) {
+            if ($v !== '' && trim((string) $eq[$k]) === '') {
+                $maj[$k] = $v;
+            }
+        }
+        if ($maj) {
+            $maj['updated_at'] = $now;
+            $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+            $db->prepare("UPDATE rep_equipements SET $sets WHERE id = ?")->execute([...array_values($maj), $eid]);
+        }
+    }
+    $db->prepare('UPDATE rep_demandes SET equipement_id = ? WHERE id = ?')->execute([$eid, $demandeId]);
+    ma_equipement_compter($db, $eid);
+    return $eid;
+}
+
+function ma_equipement_compter(PDO $db, int $eid): void
+{
+    $db->prepare('UPDATE rep_equipements SET nb_demandes = (SELECT COUNT(*) FROM rep_demandes WHERE equipement_id = ?),
+        derniere_demande = (SELECT MAX(created_at) FROM rep_demandes WHERE equipement_id = ?) WHERE id = ?')->execute([$eid, $eid, $eid]);
+}
+
+/** Réunit deux fiches d'une même personne : les demandes et les machines de l'autre passent sur celle-ci. */
+function ma_clients_fusionner(PDO $db, int $garder, int $absorber): void
+{
+    if ($garder === $absorber) {
+        return;
+    }
+    $db->prepare('UPDATE rep_demandes SET client_id = ? WHERE client_id = ?')->execute([$garder, $absorber]);
+    $db->prepare('UPDATE rep_equipements SET client_id = ? WHERE client_id = ?')->execute([$garder, $absorber]);
+    $st = $db->prepare('SELECT * FROM rep_clients WHERE id IN (?, ?)');
+    $st->execute([$garder, $absorber]);
+    $fiches = array_column($st->fetchAll(), null, 'id');
+    $g = $fiches[$garder] ?? null;
+    $a = $fiches[$absorber] ?? null;
+    if ($g && $a) {
+        // Ce qui manque à la fiche gardée est repris de l'autre ; les notes s'ajoutent.
+        $maj = [];
+        foreach (['tel', 'email', 'contact', 'societe', 'type_client', 'type_interlocuteur', 'code_postal', 'departement', 'compte_distributeur', 'statut_client'] as $k) {
+            if (trim((string) $g[$k]) === '' && trim((string) $a[$k]) !== '') {
+                $maj[$k] = $a[$k];
+            }
+        }
+        if (trim((string) $a['notes']) !== '') {
+            $maj['notes'] = trim(trim((string) $g['notes']) . "
+" . trim((string) $a['notes']));
+        }
+        if ($maj) {
+            $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+            $db->prepare("UPDATE rep_clients SET $sets WHERE id = ?")->execute([...array_values($maj), $garder]);
+        }
+    }
+    $db->prepare('DELETE FROM rep_clients WHERE id = ?')->execute([$absorber]);
+    $d = $db->prepare('SELECT id FROM rep_demandes WHERE client_id = ? ORDER BY created_at DESC LIMIT 1');
+    $d->execute([$garder]);
+    if ($did = $d->fetchColumn()) {
+        ma_client_rattacher($db, (int) $did);
+    }
 }
 
 /** Constitution de la base : toutes les demandes sans fiche client, de la plus ancienne à la plus récente. */
@@ -2560,21 +2693,15 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
         $p[] = $out['nb_demandes'] . ' demande' . ($out['nb_demandes'] > 1 ? 's' : '') . ' déjà enregistrée' . ($out['nb_demandes'] > 1 ? 's' : '')
             . ($out['fidelite'] === 'fidele' || $out['fidelite'] === 'vip' ? ' : client fidèle, à remercier de sa confiance' : '') . '.';
     }
-    // Matériels déjà signalés (les plus récents d'abord) : à proposer, jamais à supposer.
+    // Parc machines (les plus récemment citées d'abord) : à proposer, jamais à supposer.
     $materiels = [];
     if ($c) {
-        $q = $db->prepare('SELECT marque, modele, code_postal, departement FROM rep_demandes WHERE client_id = ? ORDER BY created_at DESC');
+        $q = $db->prepare('SELECT * FROM rep_equipements WHERE client_id = ? AND actif = 1 ORDER BY COALESCE(derniere_demande, created_at) DESC LIMIT 5');
         $q->execute([$c['id']]);
         foreach ($q->fetchAll() as $x) {
-            $m = trim(implode(' ', array_filter([in_array(ma_plat($x['marque']), ['inconnue', 'autre'], true) ? '' : $x['marque'], $x['modele']])));
-            if ($m === '') {
-                continue;
-            }
+            $m = trim(implode(' ', array_filter([$x['marque'], $x['modele']])));
             $site = $x['code_postal'] ?: ($x['departement'] ? 'dpt ' . $x['departement'] : '');
-            $materiels[mb_strtolower($m . $site)] = $m . ($site ? ' (site ' . $site . ')' : '');
-            if (count($materiels) >= 3) {
-                break;
-            }
+            $materiels[] = ($m ?: 'machine') . ($x['numero_serie'] ? ' n° ' . $x['numero_serie'] : '') . ($site ? ' (site ' . $site . ')' : '');
         }
     }
     $out['materiels'] = array_values($materiels);
@@ -2591,8 +2718,8 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
         $p[] = 'Dernier contact ' . $ilya($derniere['created_at']) . ' : c\'est ancien, ne présumez ni du matériel ni du site. Demandez ce qui l\'amène.';
     }
     if ($materiels && !$out['demande_ouverte']) {
-        $p[] = 'Matériel déjà signalé : ' . implode(' ; ', $materiels) . '. Pour un nouveau sujet, vous pouvez le proposer ("C\'est pour le ' . explode(' (', reset($materiels))[0]
-            . ' ou pour une autre machine ?"), sans jamais le supposer.';
+        $p[] = 'Machines connues de ce client : ' . implode(' ; ', $materiels) . '. Pour un nouveau sujet, vous pouvez les proposer ("C\'est pour le '
+            . explode(' n° ', explode(' (', reset($materiels))[0])[0] . ' ou pour une autre machine ?"), sans jamais supposer laquelle. Une machine non listée est une nouvelle machine : recueillez-la normalement.';
     }
     if ($distributeur) {
         $p[] = 'Un distributeur a plusieurs clients et machines : demandez toujours pour quel matériel et quel site il appelle, sauf s\'il relance une demande en cours.';

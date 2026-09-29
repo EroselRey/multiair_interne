@@ -842,14 +842,26 @@
         <div class="tile bleu"><b>${h(rel(c.derniere_demande))}</b><span>Dernier contact</span></div>
       </div>
       <div class="dgrid" style="margin-top:20px"><div class="dcol">
-        <section class="box2"><h2>Coordonnées</h2><div class="kvg">
+        <section class="box2"><div class="frow" style="justify-content:space-between"><h2 style="margin:0;font-size:16px">Coordonnées</h2>
+          ${ADMIN ? '<button class="btn small" id="clCorr">Corriger</button>' : ''}</div><div class="kvg">
+          ${champ('Contact', h(c.contact || ''))}${champ('Société', h(c.societe || ''))}
+          ${champ('Type', distri ? 'Distributeur' : 'Client direct')}
           ${champ('Téléphone', c.tel ? `<a href="tel:+${h(c.tel)}" style="font-weight:800">${h(telFr(c.tel))}</a>` : '')}
           ${champ('E-mail', c.email ? `<a href="mailto:${h(c.email)}">${h(c.email)}</a>` : '')}
           ${champ('Site', h([c.code_postal, c.departement && !c.code_postal ? 'dpt ' + c.departement : ''].filter(Boolean).join(' ')))}
-          ${champ('Matériel', h([c.marque, c.modele].filter(Boolean).join(' ')))}
-          ${champ('N° de série', h(c.numero_serie || ''))}
           ${champ('Compte distributeur', h(c.compte_distributeur || c.reconnaissance?.compte_distributeur || ''))}
-        </div></section>
+        </div>${c.champs_corriges ? `<span class="hint">Corrigé à la main (les prochaines demandes ne l'écraseront pas) : ${h(c.champs_corriges.split(',').map((k) => ({contact: 'contact', societe: 'société', tel: 'téléphone', email: 'e-mail', type_client: 'type', type_interlocuteur: 'type', code_postal: 'site', departement: 'site', compte_distributeur: 'compte'})[k] || k).filter((x, i, a) => a.indexOf(x) === i).join(', '))}.</span>` : ''}</section>
+        <section class="box2"><div class="frow" style="justify-content:space-between"><h2 style="margin:0;font-size:16px">Parc machines (${c.equipements.filter((e) => Number(e.actif)).length})</h2>
+          <button class="btn small" id="eqAjout">${ic('plus', 's')}Ajouter une machine</button></div>
+          <p class="hint" style="margin:0">Chaque machine citée dans une demande s'ajoute ici toute seule, sans remplacer les autres. Corrigez ou retirez-la si besoin.</p>
+          ${c.equipements.length ? `<div class="panel dl" style="border:0">${c.equipements.map((e) => `<div class="row" data-eq="${e.id}" role="button" tabindex="0" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 110px 120px;${Number(e.actif) ? '' : 'opacity:.55'}">
+            <span class="two"><b>${h(e.modele || e.marque || 'Machine')}</b><span>${h([e.modele ? e.marque : '', e.type_equipement ? L(e.type_equipement) : '', e.commentaire].filter(Boolean).join(' · '))}</span></span>
+            <span class="txt">${e.numero_serie ? 'n° ' + h(e.numero_serie) : '<span class="hint">n° de série inconnu</span>'}</span>
+            <span class="txt">${h(e.code_postal || (e.departement ? 'dpt ' + e.departement : '—'))}</span>
+            <span class="two"><b>${Number(e.nb_demandes)} demande${Number(e.nb_demandes) > 1 ? 's' : ''}</b><span>${Number(e.actif) ? (e.derniere_demande ? h(rel(e.derniere_demande)) : 'ajoutée à la main') : 'plus en service'}</span></span>
+            <span class="m1"><b>${h([e.marque, e.modele].filter(Boolean).join(' ') || 'Machine')}</b><span>${h([e.numero_serie ? 'n° ' + e.numero_serie : '', e.code_postal].filter(Boolean).join(' · '))}</span></span><span class="m2"></span>
+          </div>`).join('')}</div>` : '<div class="vide" style="border:0;padding:14px">Aucune machine connue pour l\'instant.</div>'}
+        </section>
         <section class="box2"><h2>Ses demandes (${c.demandes.length})</h2>
           <div class="panel dl" style="border:0">${c.demandes.map((d, i) => `<div class="row" data-d="${d.id}" role="link" tabindex="0" style="grid-template-columns:110px 130px 120px minmax(0,1fr)">
             <span class="two"><b>n° ${d.id}</b><span>${h(fmtDate(d.created_at, false))}</span></span>${canalHtml(canalDe(d))}<span>${etatPill(d)}</span>
@@ -867,6 +879,8 @@
             <label class="field"><span>Note pour l'équipe et pour Claire</span><textarea name="notes" class="inp" rows="4" placeholder="ex. Client historique, parc de 3 compresseurs Worthington. Préfère être rappelé le matin.">${h(c.notes || '')}</textarea></label>
             <button class="btn primary" id="clSave" style="align-self:flex-end">Enregistrer</button>` : `<p class="texte" style="margin:0">${h(c.notes || 'Aucune note.')}</p>`}
         </section>
+        ${ADMIN ? `<section class="box2"><h2>Doublon ?</h2><p class="hint" style="margin:0">Si cette personne a une autre fiche (autre numéro, autre e-mail), réunissez-les : les demandes et les machines passent sur cette fiche.</p>
+          <button class="btn" id="clFus">Fusionner avec une autre fiche</button></section>` : ''}
       </aside></div>`;
     $('[data-retour]', main).onclick = (e) => { e.preventDefault(); history.length > 1 ? history.back() : show('clients'); };
     $$('[data-d]', main).forEach((el) => { const go = () => show('demande', el.dataset.d); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); }; });
@@ -874,6 +888,68 @@
     if (b) b.onclick = async () => {
       await patch('clients/' + c.id, {statut_client: $('[name=statut_client]', main).value, notes: $('[name=notes]', main).value.trim()});
       toast('Fiche client enregistrée'); show('client', c.id, false);
+    };
+    const recharger = () => show('client', c.id, false);
+    // Corriger les coordonnées
+    const corr = $('#clCorr', main);
+    if (corr) corr.onclick = () => {
+      openDrawer('Corriger la fiche client', [
+        ligne('Contact', `<input name="contact" value="${h(c.contact)}">`),
+        ligne('Société', `<input name="societe" value="${h(c.societe)}">`),
+        ligne('Type', sel('type_client', [['direct', 'Client direct'], ['distributeur', 'Distributeur']], distri ? 'distributeur' : 'direct')),
+        ligne('Téléphone', `<input name="tel" value="${h(telFr(c.tel))}">`, 'C\'est à ce numéro que Claire le reconnaît.'),
+        ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`),
+        ligne('Code postal du site principal', `<input name="code_postal" value="${h(c.code_postal)}" inputmode="numeric">`),
+        ligne('Compte distributeur', `<input name="compte_distributeur" value="${h(c.compte_distributeur)}">`),
+        '<p class="hint" style="margin:0">Vos corrections ne seront plus écrasées par les demandes suivantes.</p>',
+      ].join(''), saveBtn());
+      $('#drawerSave').onclick = async () => {
+        const body = {};
+        ['contact', 'societe', 'tel', 'email', 'code_postal', 'compte_distributeur'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
+        body.type_client = $('#drawerBody [name="type_client"]').value;
+        body.type_interlocuteur = body.type_client === 'distributeur' ? 'distributeur' : (c.type_interlocuteur === 'distributeur' ? '' : c.type_interlocuteur);
+        try { await patch('clients/' + c.id, body); toast('Fiche corrigée'); closeDrawer(); recharger(); } catch (e) { toast(e.message, true); }
+      };
+    };
+    // Parc machines
+    const machine = (e) => {
+      openDrawer(e.id ? 'Machine — ' + h([e.marque, e.modele].filter(Boolean).join(' ') || 'sans nom') : 'Ajouter une machine', [
+        ligne('Marque', `<input name="marque" value="${h(e.marque)}" list="dlMarques"><datalist id="dlMarques">${R_MARQUES.filter(([k]) => k !== 'autre').map(([, t]) => `<option value="${h(t)}">`).join('')}</datalist>`),
+        ligne('Modèle', `<input name="modele" value="${h(e.modele)}" placeholder="ex. ROLLAIR 220">`),
+        ligne('N° de série', `<input name="numero_serie" value="${h(e.numero_serie)}">`),
+        ligne('Type', `<input name="type_equipement" value="${h(e.type_equipement)}" placeholder="compresseur à vis, sécheur, compresseur à piston…">`),
+        ligne('Code postal du site', `<input name="code_postal" value="${h(e.code_postal)}" inputmode="numeric">`),
+        ligne('Commentaire', `<input name="commentaire" value="${h(e.commentaire)}" placeholder="ex. atelier 2, contrat d'entretien">`),
+        ligne('En service', sel('actif', [['1', 'Oui'], ['0', 'Non (vendue, remplacée…)']], String(e.actif ?? 1))),
+      ].join(''), (e.id ? delBtn() : '') + saveBtn());
+      $('#drawerSave').onclick = async () => {
+        const body = {};
+        ['marque', 'modele', 'numero_serie', 'type_equipement', 'code_postal', 'commentaire', 'actif'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
+        try { await api('clients/' + c.id + '/equipements' + (e.id ? '/' + e.id : ''), {method: e.id ? 'PATCH' : 'POST', body}); toast('Parc mis à jour'); closeDrawer(); recharger(); }
+        catch (x) { toast(x.message, true); }
+      };
+      if (e.id) $('#drawerDelete').onclick = async () => { if (confirm('Retirer cette machine du parc ?')) { await api('clients/' + c.id + '/equipements/' + e.id, {method: 'DELETE'}); closeDrawer(); recharger(); } };
+    };
+    $('#eqAjout', main).onclick = () => machine({actif: 1, code_postal: c.code_postal});
+    $$('[data-eq]', main).forEach((el) => { const go = () => machine(c.equipements.find((x) => String(x.id) === el.dataset.eq)); el.onclick = go; el.onkeydown = (ev) => { if (ev.key === 'Enter') go(); }; });
+    // Fusionner deux fiches
+    const fus = $('#clFus', main);
+    if (fus) fus.onclick = async () => {
+      const autres = (await api('clients')).rows.filter((x) => Number(x.id) !== Number(c.id));
+      openDrawer('Fusionner avec une autre fiche', `<p class="hint" style="margin:0">Cherchez l'autre fiche de ${h(c.contact || c.societe || 'ce client')}. Elle sera réunie à celle-ci.</p>
+        <label class="search" style="width:100%">${ic('search', 's')}<input type="search" id="fq" placeholder="Nom, société, téléphone…" aria-label="Rechercher"></label><div id="fres"></div>`);
+      const lister = () => {
+        const q = $('#fq').value.toLowerCase();
+        const r = autres.filter((x) => !q || [x.contact, x.societe, x.email, x.tel, telFr(x.tel)].join(' ').toLowerCase().includes(q)).slice(0, 15);
+        $('#fres').innerHTML = r.map((x) => `<button class="btn block" style="justify-content:space-between;margin-top:6px" data-fus="${x.id}"><span>${h([x.contact, x.societe].filter(Boolean).join(' — ') || telFr(x.tel))}</span>
+          <span class="hint">${h(telFr(x.tel) || x.email || '')} · ${x.nb_demandes} dem.</span></button>`).join('') || '<p class="hint">Aucune fiche.</p>';
+        $$('[data-fus]').forEach((bt) => bt.onclick = async () => {
+          const x = autres.find((y) => String(y.id) === bt.dataset.fus);
+          if (!confirm(`Réunir la fiche « ${[x.contact, x.societe].filter(Boolean).join(' — ')} » dans celle-ci ? Ses ${x.nb_demandes} demande(s) et ses machines passent sur cette fiche.`)) return;
+          await api('clients/' + c.id + '/fusionner', {method: 'POST', body: {avec: x.id}}); toast('Fiches réunies'); closeDrawer(); recharger();
+        });
+      };
+      $('#fq').oninput = lister; lister(); $('#fq').focus();
     };
   };
 
