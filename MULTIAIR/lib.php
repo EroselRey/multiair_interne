@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29f';
+const MA_VERSION = '2026-09-29g';
 
 function ma_config(): array
 {
@@ -2539,30 +2539,66 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     };
     $out['derniere_demande'] = $resume($derniere);
     $out['demande_ouverte'] = $resume($ouverte);
-    // Phrase prête à l'emploi pour Claire.
+    // Phrase prête à l'emploi pour Claire. L'identité se confirme toujours ; le matériel et le site
+    // dépendent du sujet de l'appel : un distributeur ou un client équipé a plusieurs machines.
+    $jours = (int) (ma_param($db, 'rep_reco_jours', '30') ?: 30);
+    $recente = $derniere && strtotime((string) $derniere['created_at']) >= time() - $jours * 86400;
+    $ilya = function (?string $dt): string {
+        $j = $dt ? (int) floor((time() - strtotime($dt)) / 86400) : 0;
+        return $j <= 0 ? "aujourd'hui" : ($j === 1 ? 'hier' : ($j < 60 ? "il y a $j jours" : 'il y a ' . (int) round($j / 30) . ' mois'));
+    };
+    $distributeur = $out['type_interlocuteur'] === 'distributeur';
     $p = [];
     $p[] = 'Appelant connu' . ($out['contact'] ? ' : ' . $out['contact'] : '') . ($out['societe'] ? ', ' . $out['societe'] : '')
-        . ($out['type_interlocuteur'] === 'distributeur' ? ' (distributeur' . ($out['compte_distributeur'] ? ', compte ' . $out['compte_distributeur'] : '') . ')' : '') . '.';
+        . ($distributeur ? ' (distributeur' . ($out['compte_distributeur'] ? ', compte ' . $out['compte_distributeur'] : '') . ')' : '') . '.';
+    $ident = array_filter(['nom et société' => (bool) ($out['contact'] || $out['societe']), 'e-mail ' . $out['email'] => (bool) $out['email'],
+        'distributeur' => $distributeur]);
+    if ($ident) {
+        $p[] = 'Identité à faire confirmer, sans la redemander : ' . implode(', ', array_keys($ident)) . '.';
+    }
     if ($out['nb_demandes'] > 0) {
         $p[] = $out['nb_demandes'] . ' demande' . ($out['nb_demandes'] > 1 ? 's' : '') . ' déjà enregistrée' . ($out['nb_demandes'] > 1 ? 's' : '')
             . ($out['fidelite'] === 'fidele' || $out['fidelite'] === 'vip' ? ' : client fidèle, à remercier de sa confiance' : '') . '.';
     }
-    $infos = array_filter(['site ' . ($out['code_postal'] ?: ($out['departement'] ? 'département ' . $out['departement'] : '')) => $out['code_postal'] || $out['departement'],
-        'matériel ' . trim(($out['marque'] ?? '') . ' ' . ($out['modele'] ?? '')) => (bool) $out['marque'], 'e-mail ' . $out['email'] => (bool) $out['email']]);
-    if ($infos) {
-        $p[] = 'Déjà connu : ' . implode(', ', array_keys($infos)) . '. Faites-les confirmer au lieu de les redemander.';
+    // Matériels déjà signalés (les plus récents d'abord) : à proposer, jamais à supposer.
+    $materiels = [];
+    if ($c) {
+        $q = $db->prepare('SELECT marque, modele, code_postal, departement FROM rep_demandes WHERE client_id = ? ORDER BY created_at DESC');
+        $q->execute([$c['id']]);
+        foreach ($q->fetchAll() as $x) {
+            $m = trim(implode(' ', array_filter([in_array(ma_plat($x['marque']), ['inconnue', 'autre'], true) ? '' : $x['marque'], $x['modele']])));
+            if ($m === '') {
+                continue;
+            }
+            $site = $x['code_postal'] ?: ($x['departement'] ? 'dpt ' . $x['departement'] : '');
+            $materiels[mb_strtolower($m . $site)] = $m . ($site ? ' (site ' . $site . ')' : '');
+            if (count($materiels) >= 3) {
+                break;
+            }
+        }
     }
+    $out['materiels'] = array_values($materiels);
     if ($out['demande_ouverte']) {
         $o = $out['demande_ouverte'];
         $p[] = 'Demande en cours n° ' . $o['id'] . ' du ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ' : ' . $o['statut']
             . ($o['pris_par'] ? ', suivie par ' . $o['pris_par'] : '') . ($o['rappel_prevu'] ? ', rappel prévu ' . $o['rappel_prevu'] : '')
-            . '. Demandez si l\'appel concerne cette demande avant d\'en ouvrir une nouvelle.';
-    } elseif ($out['derniere_demande']) {
+            . '. Demandez si l\'appel concerne cette demande. Si oui, vous avez déjà le matériel et le site : faites-les seulement confirmer. Sinon, c\'est un nouveau sujet : demandez ce dont il a besoin.';
+    } elseif ($recente) {
         $o = $out['derniere_demande'];
-        $p[] = 'Dernière demande le ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ', traitée.';
+        $p[] = 'Dernier contact ' . $ilya($derniere['created_at']) . ($o['objet'] ? ' pour : ' . $o['objet'] : '') . ' (' . $o['statut'] . ').'
+            . ' Demandez si c\'est au sujet de cette demande. Si oui, faites confirmer le matériel et le site déjà connus ; sinon, demandez ce dont il a besoin.';
+    } elseif ($derniere) {
+        $p[] = 'Dernier contact ' . $ilya($derniere['created_at']) . ' : c\'est ancien, ne présumez ni du matériel ni du site. Demandez ce qui l\'amène.';
+    }
+    if ($materiels && !$out['demande_ouverte']) {
+        $p[] = 'Matériel déjà signalé : ' . implode(' ; ', $materiels) . '. Pour un nouveau sujet, vous pouvez le proposer ("C\'est pour le ' . explode(' (', reset($materiels))[0]
+            . ' ou pour une autre machine ?"), sans jamais le supposer.';
+    }
+    if ($distributeur) {
+        $p[] = 'Un distributeur a plusieurs clients et machines : demandez toujours pour quel matériel et quel site il appelle, sauf s\'il relance une demande en cours.';
     }
     if (trim((string) $out['notes']) !== '') {
-        $p[] = 'Note de l\'équipe : ' . trim((string) $out['notes']);
+        $p[] = 'Note de l\'équipe (ne pas lire au client) : ' . trim((string) $out['notes']);
     }
     $out['contexte'] = implode(' ', $p);
     return $out;
