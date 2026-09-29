@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29i';
+const MA_VERSION = '2026-09-29j';
 
 function ma_config(): array
 {
@@ -76,7 +76,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
         // Champs corrigés à la main sur la fiche client : les demandes suivantes ne les écrasent plus.
-        'rep_clients' => ['champs_corriges' => 'TEXT'],
+        'rep_clients' => ['champs_corriges' => 'TEXT', 'civilite' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT', 'fonction' => 'TEXT', 'service' => 'TEXT', 'acces' => 'TEXT',
             'mdp_hash' => 'TEXT', 'mdp_jeton' => 'TEXT', 'mdp_jeton_exp' => 'TEXT', 'derniere_connexion' => 'TEXT'],
         'rep_regles' => ['natures' => 'TEXT'],
@@ -195,7 +195,17 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         }
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('parc_constitue', ?)")->execute([ma_now()]);
     }
+    // Civilités : « Monsieur Mortier » noté dans une demande donne la civilité de la fiche (une seule fois).
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'civilites_reprises'");
+    $st->execute();
+    if (!$st->fetchColumn() && !$clientsAFaire && in_array('rep_clients', $present, true)) {
+        foreach ($pdo->query('SELECT derniere_demande_id FROM rep_clients WHERE derniere_demande_id IS NOT NULL')->fetchAll(PDO::FETCH_COLUMN) as $did) {
+            ma_client_rattacher($pdo, (int) $did);
+        }
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('civilites_reprises', ?)")->execute([ma_now()]);
+    }
     if ($clientsAFaire && in_array('rep_demandes', $present, true)) {
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('civilites_reprises', ?)")->execute([ma_now()]);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('parc_constitue', ?)")->execute([ma_now()]);
         $n = ma_clients_reprise($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('clients_constitues', ?)")->execute([ma_now() . ' : ' . $n . ' demande(s) rattachée(s)']);
@@ -1569,7 +1579,7 @@ function ma_rep_texte_client(PDO $db, array $dem, string $evenement): string
     if ($titre === '') {
         return '';
     }
-    $bonjour = 'Bonjour' . (trim((string) ($dem['contact'] ?? '')) !== '' ? ' ' . trim((string) $dem['contact']) : '') . ',';
+    $bonjour = ma_rep_bonjour($db, $dem);
     $fin = $etape < 3 ? "\nSuivre ma demande : " . ma_rep_liens($db, $dem)['client']
         : "\nUne question ? Standard Multiair : " . ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
     return '*' . $titre . "*\n" . $bonjour . "\n" . $phrase . $fin;
@@ -1582,7 +1592,7 @@ function ma_rep_html_client(PDO $db, array $dem, string $evenement): string
     [$materiel, $sujet] = ma_rep_objet_client($dem);
     $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
     $standard = ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
-    $bonjour = 'Bonjour' . (trim((string) ($dem['contact'] ?? '')) !== '' ? ' ' . trim((string) $dem['contact']) : '') . ',';
+    $bonjour = ma_rep_bonjour($db, $dem);
     return ma_mail_gabarit([
         'titre' => $titre,
         'corps' => '<p style="margin:0 0 10px">' . $e($bonjour) . '</p><p style="margin:0">' . $e($phrase) . '</p>',
@@ -2469,6 +2479,18 @@ function ma_client_rattacher(PDO $db, int $demandeId): ?int
         foreach ($champs as $k => $col) {
             $v = trim((string) ($x[$col] ?? ''));
             if ($v !== '' && !in_array(ma_plat($v), ['inconnue', 'autre', 'non communique', 'societe non precisee'], true)) {
+                if ($k === 'contact') {
+                    // « Monsieur Mortier » : la civilité va dans sa colonne, et un nom seul ne remplace pas
+                    // « Cyril Mortier » déjà connu.
+                    [$civ, $v] = ma_civilite_de($v);
+                    if ($civ && !in_array('civilite', $corriges, true)) {
+                        $maj['civilite'] = $civ;
+                    }
+                    $avant = mb_strtolower((string) ($maj['contact'] ?? ''));
+                    if ($v === '' || (!str_contains($v, ' ') && str_ends_with($avant, ' ' . mb_strtolower($v)))) {
+                        continue;
+                    }
+                }
                 $maj[$k] = $v;
             }
         }
@@ -2610,6 +2632,73 @@ function ma_clients_reprise(PDO $db): int
     return $n;
 }
 
+/**
+ * Comment saluer la personne : « Monsieur Mortier », « Madame Leroy » quand la civilité est connue
+ * (fiche client), sinon prénom et nom tels qu'enregistrés. Null quand on ne connaît pas son nom.
+ */
+function ma_salutation(?string $contact, ?string $civilite): ?string
+{
+    [$civDite, $contact] = ma_civilite_de($contact);
+    if ($contact === '' || !preg_match('/\p{L}/u', $contact)) {
+        return null;
+    }
+    $civ = ['M' => 'Monsieur', 'MME' => 'Madame'][strtoupper(trim((string) ($civilite ?: $civDite)))] ?? null;
+    if (!$civ) {
+        return $contact;
+    }
+    $mots = explode(' ', $contact);
+    if (count($mots) === 1) {
+        return $civ . ' ' . $mots[0];
+    }
+    // Nom écrit en capitales (« MORTIER Cyril ») : c'est lui. Sinon, tout ce qui suit le prénom.
+    $caps = array_values(array_filter($mots, fn($m) => mb_strlen($m) > 1 && $m === mb_strtoupper($m) && preg_match('/\p{L}/u', $m)));
+    $nom = $caps && count($caps) < count($mots) ? implode(' ', $caps) : implode(' ', array_slice($mots, 1));
+    $nom = $nom === mb_strtoupper($nom) ? mb_convert_case(mb_strtolower($nom), MB_CASE_TITLE) : $nom;
+    return $civ . ' ' . $nom;
+}
+
+/**
+ * « Monsieur Mortier », « Mme Sophie Leroy » : la civilité dite par la personne (ou notée par Claire)
+ * devant son nom. Rend [M|Mme|null, nom sans la civilité].
+ */
+function ma_civilite_de(?string $contact): array
+{
+    $contact = trim(preg_replace('/\s+/u', ' ', (string) $contact));
+    if (preg_match('/^(monsieur|mr\.?|m\.)\s+(.+)$/iu', $contact, $m)) {
+        return ['M', trim($m[2])];
+    }
+    if (preg_match('/^(madame|mme\.?|mlle\.?|mademoiselle)\s+(.+)$/iu', $contact, $m)) {
+        return ['Mme', trim($m[2])];
+    }
+    return [null, $contact];
+}
+
+/** « Bonjour Monsieur Mortier, » dans les messages au client (fiche client si elle existe). */
+function ma_rep_bonjour(PDO $db, array $dem): string
+{
+    $civ = null;
+    if (!empty($dem['client_id'])) {
+        $q = $db->prepare('SELECT civilite, contact FROM rep_clients WHERE id = ?');
+        $q->execute([(int) $dem['client_id']]);
+        $c = $q->fetch();
+        // La civilité ne vaut que si c'est bien la même personne que sur la fiche.
+        $nom = fn($x) => mb_strtolower(ma_civilite_de($x)[1]);
+        $a = $c ? $nom($c['contact']) : '';
+        $b = $nom($dem['contact'] ?? '');
+        if ($c && $a !== '' && $b !== '' && ($a === $b || str_ends_with($a, ' ' . $b) || str_ends_with($b, ' ' . $a))) {
+            $civ = $c['civilite'];
+        }
+    }
+    $s = ma_salutation($dem['contact'] ?? null, $civ);
+    return 'Bonjour' . ($s ? ' ' . $s : '') . ',';
+}
+
+/** Numéro de portable (06, 07) : une seule personne derrière, on peut la saluer par son nom d'emblée. */
+function ma_tel_portable(?string $tel): bool
+{
+    return (bool) preg_match('/^33[67]\d{8}$/', (string) ma_tel_cle($tel));
+}
+
 /** Libellé de fidélité : choisi par l'équipe, sinon déduit du nombre de demandes. */
 function ma_client_fidelite(array $c): string
 {
@@ -2675,6 +2764,14 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     $out['nb_demandes'] = (int) ($c['nb_demandes'] ?? 0);
     $out['fidelite'] = $c ? ma_client_fidelite($c) : ($distri ? 'distributeur' : 'nouveau');
     $out['notes'] = $c['notes'] ?? null;
+    $out['civilite'] = $c['civilite'] ?? null;
+    $out['salutation'] = ma_salutation($out['contact'], $out['civilite']);
+    // Portable : une seule personne, on la salue par son nom. Ligne fixe (standard d'une société) :
+    // c'est peut-être un collègue, on vérifie d'abord à qui on parle.
+    $out['portable'] = ma_tel_portable($tel);
+    $out['accueil'] = $out['salutation']
+        ? ($out['portable'] || !$tel ? 'Bonjour ' . $out['salutation'] . '.' : 'Bonjour, je suis bien avec ' . $out['salutation'] . ' ?')
+        : ($out['societe'] ? 'Bonjour, vous appelez bien de la part de ' . $out['societe'] . ' ?' : null);
     // Dernière demande, et celle qui serait encore ouverte : Claire peut dire où elle en est.
     $ouverte = null;
     $derniere = null;
@@ -2716,14 +2813,15 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     $p = [];
     $p[] = 'Appelant connu' . ($out['contact'] ? ' : ' . $out['contact'] : '') . ($out['societe'] ? ', ' . $out['societe'] : '')
         . ($distributeur ? ' (distributeur' . ($out['compte_distributeur'] ? ', compte ' . $out['compte_distributeur'] : '') . ')' : '') . '.';
+    if ($out['accueil']) {
+        $p[] = 'Salutation : « ' . $out['accueil'] . ' » (si le premier message l\'a déjà saluée par son nom, ne la resaluez pas).'
+            . ' Sobre et professionnel : ni remerciement pour sa fidélité, ni nombre d\'appels, ni « je vous reconnais ».'
+            . ' Si ce n\'est pas cette personne, excusez-vous brièvement et demandez son nom.';
+    }
     $ident = array_filter(['nom et société' => (bool) ($out['contact'] || $out['societe']), 'e-mail ' . $out['email'] => (bool) $out['email'],
         'distributeur' => $distributeur]);
     if ($ident) {
         $p[] = 'Identité à faire confirmer, sans la redemander : ' . implode(', ', array_keys($ident)) . '.';
-    }
-    if ($out['nb_demandes'] > 0) {
-        $p[] = $out['nb_demandes'] . ' demande' . ($out['nb_demandes'] > 1 ? 's' : '') . ' déjà enregistrée' . ($out['nb_demandes'] > 1 ? 's' : '')
-            . ($out['fidelite'] === 'fidele' || $out['fidelite'] === 'vip' ? ' : client fidèle, à remercier de sa confiance' : '') . '.';
     }
     // Parc machines (les plus récemment citées d'abord) : à proposer, jamais à supposer.
     $materiels = [];

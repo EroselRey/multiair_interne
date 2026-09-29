@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS rep_clients (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tel TEXT, email TEXT,
   contact TEXT, societe TEXT,
+  civilite TEXT,                  -- M | Mme (pour « Bonjour Monsieur Mortier »), choisie par l'équipe
   type_client TEXT,               -- direct | distributeur
   type_interlocuteur TEXT, code_postal TEXT, departement TEXT,
   marque TEXT, modele TEXT, numero_serie TEXT, compte_distributeur TEXT,

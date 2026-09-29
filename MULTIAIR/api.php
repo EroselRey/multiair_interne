@@ -754,6 +754,22 @@ try {
             if ($sub === 'vapi') {
                 $msg = $body['message'] ?? [];
                 $numero = (string) ($msg['call']['customer']['number'] ?? ($msg['customer']['number'] ?? ($body['tel'] ?? ($_GET['tel'] ?? ''))));
+                // Appel entrant (« assistant-request » du numéro VAPI) : Claire décroche en saluant
+                // l'appelant connu par son nom. Inconnu : son accueil habituel, inchangé.
+                if (($msg['type'] ?? '') === 'assistant-request') {
+                    $r = ma_client_reconnaitre($db, $numero);
+                    $rep = ['assistantId' => ma_param($db, 'vapi_assistant_id', 'db2b8de8-8dfe-4356-ac23-4710f06b4093')];
+                    if ($r['connu'] && !empty($r['accueil'])) {
+                        $ici = ma_param($db, 'vapi_presentation', 'ici Claire, de Multiair France');
+                        // « Bonjour Monsieur Mortier, ici Claire… » ; ligne fixe : « Bonjour, ici Claire… Je suis bien avec… ? »
+                        $rep['assistantOverrides'] = ['firstMessage' => str_ends_with($r['accueil'], '?')
+                            ? 'Bonjour, ' . $ici . '. ' . ucfirst(preg_replace('/^Bonjour,\s*/u', '', $r['accueil']))
+                            : 'Bonjour ' . $r['salutation'] . ', ' . $ici . '. Que puis-je faire pour vous ?'];
+                    }
+                    logEvent($db, 'repondeur', 'info', 'accueil_' . (isset($rep['assistantOverrides']) ? 'personnalise' : 'standard'),
+                        (isset($rep['assistantOverrides']) ? 'Accueil : « ' . $rep['assistantOverrides']['firstMessage'] . ' »' : 'Accueil standard') . ' — ' . ma_tel_lisible($numero));
+                    out($rep);
+                }
                 $appels = $msg['toolCallList'] ?? ($msg['toolCalls'] ?? []);
                 $args = [];
                 foreach ($appels as $a) {
@@ -816,7 +832,7 @@ try {
                     logEvent($db, 'plateforme', 'ok', 'clients_fusionnes', "Fiche client $autre fusionnée dans $id" . ($user ? ' par ' . $user['nom'] : ''));
                     $c = getOne($db, 'rep_clients', $id);
                 } elseif (($method === 'PATCH' || $method === 'POST') && $estAdmin) {
-                    $identite = ['contact', 'societe', 'tel', 'email', 'type_client', 'type_interlocuteur', 'code_postal', 'departement', 'compte_distributeur'];
+                    $identite = ['contact', 'civilite', 'societe', 'tel', 'email', 'type_client', 'type_interlocuteur', 'code_postal', 'departement', 'compte_distributeur'];
                     $d = array_intersect_key($body, array_flip([...$identite, 'statut_client', 'notes']));
                     if (array_key_exists('tel', $d)) {
                         $d['tel'] = ma_tel_cle((string) $d['tel']);

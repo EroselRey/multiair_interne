@@ -873,8 +873,9 @@
           <span>${eur(x.montant_ht)} HT ${pill(L(x.statut), cls(x.statut))}</span></div>`).join('')}</section>` : ''}
       </div><aside class="dcol">
         <section class="box2"><h2>Ce que Claire sait quand il appelle</h2>
+          ${c.reconnaissance?.accueil ? `<p class="texte" style="margin:0"><b>Accueil : « ${h(c.reconnaissance.accueil)} »</b></p>` : ''}
           <p class="texte" style="margin:0">${h(c.reconnaissance?.contexte || '—')}</p>
-          <span class="hint">Claire l'accueille par son nom et fait confirmer ces informations au lieu de les redemander.</span></section>
+          <span class="hint">Claire l'accueille par son nom et fait confirmer ces informations au lieu de les redemander.${c.civilite ? '' : ' Indiquez sa civilité (bouton Corriger) pour « Bonjour Monsieur … ».'}</span></section>
         <section class="box2"><h2>Relation client</h2>
           ${ADMIN ? `<label class="field"><span>Statut</span>${sel('statut_client', [['', 'Automatique (' + (FIDELITE[c.fidelite]?.[0] || '') + ')'], ['fidele', 'Client fidèle'], ['vip', 'Client VIP'], ['a_surveiller', 'À surveiller']], c.statut_client || '')}</label>
             <label class="field"><span>Note pour l'équipe et pour Claire</span><textarea name="notes" class="inp" rows="4" placeholder="ex. Client historique, parc de 3 compresseurs Worthington. Préfère être rappelé le matin.">${h(c.notes || '')}</textarea></label>
@@ -895,7 +896,8 @@
     const corr = $('#clCorr', main);
     if (corr) corr.onclick = () => {
       openDrawer('Corriger la fiche client', [
-        ligne('Contact', `<input name="contact" value="${h(c.contact)}">`),
+        ligne('Civilité', sel('civilite', [['', 'Non renseignée'], ['M', 'Monsieur'], ['Mme', 'Madame']], c.civilite || ''), 'Claire dira « Bonjour Monsieur Mortier ». Sans civilité : « Bonjour Cyril Mortier ».'),
+        ligne('Contact (prénom et nom)', `<input name="contact" value="${h(c.contact)}">`),
         ligne('Société', `<input name="societe" value="${h(c.societe)}">`),
         ligne('Type', sel('type_client', [['direct', 'Client direct'], ['distributeur', 'Distributeur']], distri ? 'distributeur' : 'direct')),
         ligne('Téléphone', `<input name="tel" value="${h(telFr(c.tel))}">`, 'C\'est à ce numéro que Claire le reconnaît.'),
@@ -908,6 +910,7 @@
         const body = {};
         ['contact', 'societe', 'tel', 'email', 'code_postal', 'compte_distributeur'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
         body.type_client = $('#drawerBody [name="type_client"]').value;
+        body.civilite = $('#drawerBody [name="civilite"]').value;
         body.type_interlocuteur = body.type_client === 'distributeur' ? 'distributeur' : (c.type_interlocuteur === 'distributeur' ? '' : c.type_interlocuteur);
         try { await patch('clients/' + c.id, body); toast('Fiche corrigée'); closeDrawer(); recharger(); } catch (e) { toast(e.message, true); }
       };
