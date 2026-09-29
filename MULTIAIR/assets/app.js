@@ -233,6 +233,7 @@
   const main = $('#main');
   const app = $('#app');
   let current = 'a-traiter';
+  let dernierHash = null;
   const tabs = {};
 
   async function show(tab, arg = null, push = true) {
@@ -240,6 +241,7 @@
     current = tab;
     const hash = '#' + tab + (arg !== null && arg !== undefined ? '/' + arg : '');
     if (push && location.hash !== hash) history.pushState(null, '', hash);
+    dernierHash = location.hash;
     const actif = {demande: 'demandes', appel: 'demandes'}[tab] || tab;
     $$('#side [data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === actif));
     app.classList.remove('menu');
@@ -253,7 +255,10 @@
     window.scrollTo(0, 0);
   }
   const depuisAdresse = (push) => { const [t, a] = location.hash.replace('#', '').split('/'); show(t || 'a-traiter', a ?? null, push); };
-  window.addEventListener('popstate', () => depuisAdresse(false));
+  // Retour arrière et liens internes (#demande/12) : une seule navigation par changement d'adresse.
+  const suivreAdresse = () => { if (location.hash !== dernierHash) depuisAdresse(false); };
+  window.addEventListener('popstate', suivreAdresse);
+  window.addEventListener('hashchange', suivreAdresse);
   $('#side').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) show(b.dataset.page); });
   $('#menuBtn').addEventListener('click', (e) => { e.stopPropagation(); app.classList.toggle('menu'); });
   document.addEventListener('click', (e) => { if (app.classList.contains('menu') && !e.target.closest('#side')) app.classList.remove('menu'); });
@@ -443,7 +448,7 @@
   };
 
   // ================================================================== DEMANDES (vue globale)
-  const vueDemandes = {f: {}, q: '', page: 0};
+  const vueDemandes = {f: {}, q: '', page: 0, sel: null};
   tabs.demandes = async () => {
     const toutes = await chargerDemandes();
     const PAGE_D = 50;
@@ -487,7 +492,7 @@
       main.innerHTML = `
         <div class="page-head"><div class="t"><h1>Demandes</h1><p>${SERVICE_MOI ? 'Toutes les demandes du service ' + h(SERVICES[SERVICE_MOI]) + '.' : 'Toutes les demandes, tous canaux confondus.'}</p></div>
           <label class="search">${ic('search', 's')}<input type="search" id="dq" placeholder="Nom, société, téléphone, n° de demande…" aria-label="Rechercher" value="${h(vueDemandes.q)}"></label>
-          ${ADMIN ? '<a class="btn" href="api.php?r=export/rep_demandes" download>Exporter (CSV)</a>' : ''}</div>
+          ${ADMIN ? `<button class="btn" id="selMode">${vueDemandes.sel ? 'Fin de la sélection' : 'Sélectionner'}</button><a class="btn" href="api.php?r=export/rep_demandes" download>Exporter (CSV)</a>` : ''}</div>
         <div class="panel filtres">
           <div class="frow"><span class="lab">Suivi</span>${chips('etat', [['', 'Toutes'], ['qualification', 'Avec Claire', 'st-qualification'], ['a_traiter', 'À traiter', 'st-a_traiter'],
             ['en_cours', 'En cours', 'st-en_cours'], ['traite', 'Traitées', 'st-traite']])}</div>
@@ -502,10 +507,15 @@
             ${select('client', 'Client', uniques((d) => [d.type_client]).map((c) => [c, L(c)]))}
             ${nbFiltres ? '<button class="link" id="raz" style="margin-left:auto">Effacer les filtres</button>' : ''}</div>
         </div>
+        ${vueDemandes.sel ? `<div class="panel" style="margin-top:16px;padding:12px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--info-bg);border-color:#c5d5f5">
+          <b>${vueDemandes.sel.size} sélectionnée${vueDemandes.sel.size > 1 ? 's' : ''}</b>
+          <button class="btn small" id="selPage">Tout sélectionner sur cette page</button>
+          <button class="btn small primary" id="selClore" ${vueDemandes.sel.size ? '' : 'disabled'}>Marquer traitées sans prévenir les clients</button>
+          <span class="hint">Pour faire le ménage (anciennes demandes, doublons). Cliquez sur les lignes pour les cocher.</span></div>` : ''}
         <div class="panel dl" style="margin-top:16px">
           <div class="row head"><span>REÇUE</span><span>CANAL</span><span>SUIVI</span><span>SERVICE</span><span>CLIENT</span><span>DEMANDE</span><span>QUI S'EN OCCUPE</span></div>
-          ${tranche.length ? tranche.map((d, i) => `<div class="row ${estUrgente(d) ? 'urgent' : ''}" data-i="${i}" role="link" tabindex="0">
-            <span class="two"><b>${h(quand(d.created_at))}</b><span>${h(rel(d.created_at))}</span></span>
+          ${tranche.length ? tranche.map((d, i) => { const coche = vueDemandes.sel && !d.fiche && vueDemandes.sel.has(d.id); return `<div class="row ${estUrgente(d) ? 'urgent' : ''}" data-i="${i}" role="link" tabindex="0" style="${coche ? 'background:var(--info-bg)' : ''}">
+            <span class="two">${vueDemandes.sel && !d.fiche ? `<b>${coche ? '☑' : '☐'} n° ${d.id}</b>` : `<b>${h(quand(d.created_at))}</b>`}<span>${h(rel(d.created_at))}</span></span>
             ${canalHtml(canalDe(d))}
             <span>${etatPill(d)}</span>
             <span>${svcPill(d.service)}</span>
@@ -514,7 +524,7 @@
             ${qui(d)}
             <span class="m1"><b>${h(d.societe || d.contact || '—')}</b><span>${h(sujetDe(d))}</span><span>${ic(canalDe(d), 's')} ${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></span>
             <span class="m2">${etatPill(d)}${svcPill(d.service)}</span>
-          </div>`).join('') : '<div class="vide" style="border:0">Aucune demande ne correspond.</div>'}
+          </div>`; }).join('') : '<div class="vide" style="border:0">Aucune demande ne correspond.</div>'}
           <div class="pied"><span>${rows.length} demande${rows.length > 1 ? 's' : ''}</span>${pages > 1 ? `<span>
             <button class="btn small" data-page="-1" ${vueDemandes.page === 0 ? 'disabled' : ''}>‹ Précédentes</button>
             Page ${vueDemandes.page + 1} / ${pages}
@@ -526,8 +536,20 @@
       $$('select[data-f]', main).forEach((s) => s.onchange = () => { vueDemandes.f[s.dataset.f] = s.value; vueDemandes.page = 0; render(); });
       const raz = $('#raz', main); if (raz) raz.onclick = () => { vueDemandes.f = {}; vueDemandes.q = ''; vueDemandes.page = 0; render(); };
       $$('[data-page]', main).forEach((b) => b.onclick = () => { vueDemandes.page += Number(b.dataset.page); render(); window.scrollTo(0, 0); });
+      const sm = $('#selMode', main); if (sm) sm.onclick = () => { vueDemandes.sel = vueDemandes.sel ? null : new Set(); render(); };
+      const sp = $('#selPage', main); if (sp) sp.onclick = () => { tranche.filter((d) => !d.fiche && d.statut !== 'traite').forEach((d) => vueDemandes.sel.add(d.id)); render(); };
+      const sc = $('#selClore', main); if (sc) sc.onclick = async () => {
+        const ids = [...vueDemandes.sel];
+        if (!confirm(`Marquer ${ids.length} demande${ids.length > 1 ? 's' : ''} comme traitée${ids.length > 1 ? 's' : ''} ? Les clients ne seront pas prévenus.`)) return;
+        const r = await api('rep/demandes/cloturer', {method: 'POST', body: {ids}});
+        toast(`${r.clotures} demande${r.clotures > 1 ? 's' : ''} clôturée${r.clotures > 1 ? 's' : ''}`); vueDemandes.sel = null; refreshBadges(); tabs.demandes();
+      };
       $$('.dl .row[data-i]', main).forEach((r) => {
-        const go = () => ouvrir(tranche[Number(r.dataset.i)]);
+        const go = () => {
+          const d = tranche[Number(r.dataset.i)];
+          if (vueDemandes.sel && !d.fiche) { vueDemandes.sel.has(d.id) ? vueDemandes.sel.delete(d.id) : vueDemandes.sel.add(d.id); render(); return; }
+          ouvrir(d);
+        };
         r.onclick = go; r.onkeydown = (e) => { if (e.key === 'Enter') go(); };
       });
     };
@@ -538,15 +560,15 @@
   const TYPES_HIST = {
     recue: ['Réception', 'inbox'], transmise: ['Transmission', 'envoi'], client_prevenu: ['Message au client', 'envoi'],
     prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
-    rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
+    rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
   };
   const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
-  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
+  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
   const vueHist = {f: 'tout'};
 
   function historiqueHtml(ev) {
     const liste = ev.filter((e) => vueHist.f === 'tout' || familleHist(e.type) === vueHist.f);
-    const envois = (d) => (d.envois || d.canaux || []).map((x) => `<span class="pill">${ic(x.canal === 'SMS' ? 'sms' : (x.canal === 'WhatsApp' ? 'whatsapp' : 'email'), 's')}${h(x.canal)} → ${h(x.a)}${x.role === 'copie' ? ' (copie)' : ''}</span>`).join(' ');
+    const envois = (d) => Object.values(d.envois || d.canaux || {}).map((x) => `<span class="pill">${ic(x.canal === 'SMS' ? 'sms' : (x.canal === 'WhatsApp' ? 'whatsapp' : 'email'), 's')}${h(x.canal)} → ${h(x.a)}${x.role === 'copie' ? ' (copie)' : ''}</span>`).join(' ');
     return `<div class="frow" style="margin-bottom:4px">${Object.entries(FAMILLES_HIST).map(([k, t]) => `<button class="chip ${vueHist.f === k ? 'on' : ''}" data-hist="${k}">${t}</button>`).join('')}</div>
       <ol class="tl">${liste.length ? liste.map((e) => {
         const d = e.detail || {};
@@ -563,6 +585,39 @@
           <small>${h(jourFr(e.date))}${e.qui ? ' · ' + h(e.qui) : ''}${e.via === 'lien_equipe' ? ' · depuis le lien reçu' : ''}${e.reconstitue ? ' · reconstitué' : ''}</small>
           ${extra}${texte}</span></li>`;
       }).join('') : '<li class="hint">Rien dans cette catégorie.</li>'}</ol>`;
+  }
+
+  // Transférer une demande à une personne, une boîte partagée ou un responsable de service.
+  async function transferer(d) {
+    const eq = await api('equipe');
+    const boite = (c) => c.role === 'boite' || /bo[iî]te partag/i.test(c.commentaire || '');
+    const joignable = (c) => c.joignable ?? !!c.email;
+    const actifs = eq.rows.filter((c) => Number(c.actif ?? 1) && joignable(c));
+    const resp = eq.responsables || {};
+    const nomsResp = {sav: 'Responsable SAV', finance: 'Responsable compta / finance', commercial: 'Responsable commerce', autre: 'Sujets indéterminés'};
+    const opt = (c, lib) => `<option value="${c.id}">${h(lib || c.nom)}${c.fonction && !lib ? ' — ' + h(c.fonction) : ''}</option>`;
+    const groupe = (t, liste) => liste.length ? `<optgroup label="${h(t)}">${liste.join('')}</optgroup>` : '';
+    const parSvc = (s) => actifs.filter((c) => !boite(c) && c.service_equipe === s).sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map((c) => opt(c));
+    const choix = `<select name="cible" class="inp"><option value="">— Choisir —</option>
+      ${groupe('Responsables de service', Object.entries(nomsResp).map(([k, t]) => { const c = actifs.find((x) => Number(x.id) === Number(resp[k])); return c ? opt(c, t + ' (' + c.nom + ')') : ''; }).filter(Boolean))}
+      ${groupe('Finance', parSvc('finance'))}${groupe('SAV', parSvc('sav'))}${groupe('Commerce', parSvc('commerce'))}${groupe('Direction', parSvc('direction'))}
+      ${groupe('Boîtes partagées', actifs.filter(boite).map((c) => opt(c, c.nom + (c.competences ? ' — ' + c.competences : ''))))}</select>`;
+    openDrawer('Transférer la demande n° ' + d.id, `
+      <p class="hint" style="margin:0">La personne choisie reçoit la demande par e-mail (et par SMS pour le SAV), avec le lien pour la prendre en charge.
+        La demande repasse « à traiter » chez elle. Le client n'est pas prévenu.</p>
+      <label class="field"><span>Transférer à</span>${choix}</label>
+      <label class="field"><span>Message (facultatif)</span><textarea name="message" class="inp" rows="3" placeholder="ex. Double règlement de facture, peux-tu regarder ?"></textarea></label>`,
+      '<button class="btn primary" id="transfOk">Transférer</button>');
+    $('#transfOk').onclick = async () => {
+      const cible = $('#drawerBody [name=cible]').value;
+      if (!cible) return toast('Choisissez à qui transférer', true);
+      $('#transfOk').disabled = true;
+      try {
+        const r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body: {contact_id: Number(cible), message: $('#drawerBody [name=message]').value.trim()}});
+        closeDrawer(); toast('Demande transférée — la personne est prévenue'); refreshBadges();
+        if (r.visible) show('demande', d.id, false); else show('a-traiter');
+      } catch (e) { toast(e.message, true); $('#transfOk').disabled = false; }
+    };
   }
 
   tabs.demande = async (id) => {
@@ -584,7 +639,8 @@
       ? `<button class="btn big" data-act="rouvrir">${ic('retour')}Rouvrir la demande</button>`
       : `${d.statut === 'a_traiter' ? `<button class="btn big ${urgent ? 'urgent' : 'primary'}" data-act="prendre">${ic('prendre')}Je la prends en charge</button>` : ''}
          <button class="btn big" data-act="rappel">${ic('agenda')}${d.rappel_prevu ? 'Changer le rappel' : 'Planifier un rappel'}</button>
-         <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>`;
+         <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>
+         <button class="btn big" data-act="transferer">${ic('envoi')}Transférer</button>`;
     main.innerHTML = `
       <div class="crumb"><a href="#demandes" data-retour>Demandes</a> › n° ${d.id}</div>
       <div class="dtitle"><h1>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</h1>
@@ -593,7 +649,7 @@
           <span class="hint">${h(jourFr(d.created_at))}</span></div></div>
       ${urgent ? '<div class="msg err" style="margin-bottom:16px"><b>Urgent — production arrêtée.</b> Personne n\'a encore pris cette demande en charge.</div>' : ''}
       <section class="actions" aria-label="Actions">${actions}
-        <span class="note">Chaque action prévient le client par WhatsApp et e-mail.</span>
+        <span class="note">Chaque action prévient le client ${['chat', 'email'].includes(canal) ? 'par e-mail' : 'par WhatsApp et e-mail'}.</span>
         <div class="rappel-form" id="rappelForm" hidden>
           <label for="rappelDate"><b>Rappel prévu le</b></label>
           <input type="datetime-local" id="rappelDate" value="${h(String(d.rappel_prevu || '').replace(' ', 'T').slice(0, 16))}">
@@ -651,6 +707,7 @@
       if (a === 'traiter') return act({statut: 'traite'}, 'Demande traitée — le client est prévenu');
       if (a === 'rouvrir') return act({statut: 'en_cours'}, 'Demande rouverte');
       if (a === 'rappel') { $('#rappelForm').hidden = false; $('#rappelDate').focus(); }
+      if (a === 'transferer') transferer(d);
     });
     $('#rappelNon') && ($('#rappelNon').onclick = () => { $('#rappelForm').hidden = true; });
     $('#rappelOk') && ($('#rappelOk').onclick = async () => {
@@ -1410,7 +1467,8 @@
         ${kv([['Premier contact', fmtDate(l.date)], ['Dernière mise à jour', l.nb_mises_a_jour ? `${fmtDate(l.updated_at)} <span class="hint">(${l.nb_mises_a_jour} mise${l.nb_mises_a_jour > 1 ? 's' : ''} à jour regroupée${l.nb_mises_a_jour > 1 ? 's' : ''})</span>` : ''], ['Société', h(l.societe)], ['Email', l.email ? `<a href="mailto:${h(l.email)}">${h(l.email)}</a>` : ''], ['Téléphone', h(l.telephone)],
           ['Département', h(l.departement)], ['Type interlocuteur', h(l.type_interlocuteur)], ['Marque orientée', h(l.marque_orientee)], ['Statut IA', pill(l.statut, cls(l.statut))],
           ['Catégorie', h(l.categorie)], ['Service destinataire', h(l.dest_libelle)], ['Envoyé à', h(l.dest_to)], ['À vérifier', h(l.a_verifier)],
-          ['Besoin résumé', h(l.besoin_resume)], ['Produits proposés', h(l.produits_proposes)], ['Session', l.session_id ? `<button class="link" id="goSess">${h(l.session_id)}</button>` : '']])}
+          ['Besoin résumé', h(l.besoin_resume)], ['Produits proposés', h(l.produits_proposes)], ['Session', l.session_id ? `<button class="link" id="goSess">${h(l.session_id)}</button>` : ''],
+          ['Demande', l.demande_id ? `<a href="#demande/${h(l.demande_id)}">Demande n° ${h(l.demande_id)} — à suivre dans « Demandes »</a>` : '']])}
         <h4>Suivi</h4>${editForm(fields, l)}`, saveBtn() + delBtn());
       const gs = $('#goSess'); if (gs) gs.onclick = () => conversation({session_id: l.session_id});
       $('#drawerSave').onclick = async () => { await patch('chat/leads/' + l.id, readForm($('#drawerBody'), fields)); toast('Lead enregistré'); closeDrawer(); show('chatbot'); refreshBadges(); };

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29d';
+const MA_VERSION = '2026-09-29e';
 
 function ma_config(): array
 {
@@ -56,7 +56,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [
-        'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0'],
+        'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0', 'demande_id' => 'INTEGER'],
         'adv_demandes' => ['commentaire' => 'TEXT'],
         'cso_devis' => ['commentaire' => 'TEXT', 'contact_interne' => 'TEXT'],
         'cee_leads' => ['commentaire' => 'TEXT'],
@@ -65,7 +65,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             'code_postal' => 'TEXT', 'marque_norm' => 'TEXT', 'type_client' => 'TEXT', 'type_equipement' => 'TEXT',
             'regle_id' => 'INTEGER', 'regle_libelle' => 'TEXT', 'destinataires' => 'TEXT',
             'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT', 'nature' => 'TEXT',
-            'type_interlocuteur' => 'TEXT',
+            'type_interlocuteur' => 'TEXT', 'traite_par' => 'TEXT',
             // Suivi : un lien secret pour l'équipe, un autre pour le client (sa demande uniquement).
             'jeton_interne' => 'TEXT', 'jeton_client' => 'TEXT', 'pris_par' => 'TEXT', 'rappel_prevu' => 'TEXT',
             // Par où la demande est arrivée : telephone | whatsapp | chat | email.
@@ -167,6 +167,14 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     if (!$st->fetchColumn() && in_array('rep_contacts', $present, true)) {
         ma_equipe_initiale($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('equipe_initiale', ?)")->execute([ma_now()]);
+    }
+
+    // Les leads du chat d'avant le circuit commun deviennent des demandes, une seule fois, sans rien envoyer.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'chat_leads_repris'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('chat_leads', $present, true)) {
+        $n = ma_chat_reprise($pdo);
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('chat_leads_repris', ?)")->execute([ma_now() . ' : ' . $n . ' lead(s)']);
     }
 
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
@@ -1204,14 +1212,15 @@ function ma_rep_message(array $d, array $x): array
     $site = trim((string) ($d['code_postal'] ?? '')) ?: ($x['departement'] ?? '');
     $lien = (string) ($x['lien_interne'] ?? '');
     $html = ma_mail_gabarit([
-        'surtitre' => 'Nouvelle demande ' . $svc,
+        'surtitre' => !empty($x['transfert']) ? 'Demande transférée' : 'Nouvelle demande ' . $svc,
         'bandeau' => $x['urgent'] ? 'URGENT — production arrêtée · à rappeler tout de suite' : '',
         'etiquettes' => [
             $x['urgent'] ? ['URGENT', '#b3261e', '#ffffff'] : ['À rappeler', '#fff1e0', '#9a4a06'],
             ['Reçue ' . (MA_CANAUX[$canal][1] ?? 'par téléphone'), '#eef1f4', '#334155'],
         ],
         'titre' => $titre,
-        'corps' => '',
+        'corps' => !empty($x['transfert']) ? '<p style="margin:0;background:#e5edfb;color:#1d4ed8;border-radius:10px;padding:10px 14px;font-weight:600">'
+            . $e($x['transfert']) . '</p>' : '',
         'fiche' => ma_mail_fiche([
             ['Téléphone', $telLisible ? '<a href="tel:+' . $e($telBrut) . '" style="color:#0f2f52;font-weight:800;font-size:16px;text-decoration:none">' . $e($telLisible) . '</a>' : '', true],
             ['Client', $societe . ' · ' . mb_strtolower($client), false],
@@ -1570,7 +1579,8 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
         'contact' => $dem['contact'] ?? '',
         'societe' => $dem['societe'] ?? '',
         'tel' => $tel,
-        'mobile' => (bool) preg_match('/^33[67]\d{8}$/', $tel),
+        // WhatsApp n'autorise pas d'écrire en premier à quelqu'un venu par le chat du site ou par e-mail.
+        'mobile' => (bool) preg_match('/^33[67]\d{8}$/', $tel) && in_array(ma_canal($dem), ['telephone', 'whatsapp'], true),
         'email' => str_contains((string) ($dem['email'] ?? ''), '@') ? $dem['email'] : '',
         'lien' => ma_rep_liens($db, $dem)['client'],
         // Sans guillemets doubles ni antislash : le texte est inséré tel quel dans le JSON WhatsApp de Make.
@@ -2047,7 +2057,288 @@ function ma_rep_historique(PDO $db, array $dem): array
             }
         }
     }
+    // Conversation sur le chat du site : celle de la session du visiteur.
+    $st = $db->prepare('SELECT DISTINCT session_id FROM chat_leads WHERE demande_id = ? AND session_id IS NOT NULL AND session_id != \'\'');
+    $st->execute([$id]);
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $sess) {
+        $sm = $db->prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY date, id');
+        $sm->execute([$sess]);
+        foreach ($sm->fetchAll() as $m) {
+            if (trim((string) $m['message']) !== '') {
+                $ev[] = ['date' => $m['date'], 'type' => 'message_client', 'qui' => $dem['contact'] ?: 'Visiteur', 'via' => 'chat', 'resume' => 'Message du visiteur (chat du site)', 'detail' => ['texte' => $m['message']]];
+            }
+            if (trim((string) $m['reponse']) !== '') {
+                $ev[] = ['date' => $m['date'], 'type' => 'reponse_claire', 'qui' => 'Claire', 'via' => 'chat', 'resume' => 'Réponse de Claire (chat du site)', 'detail' => ['texte' => $m['reponse']]];
+            }
+        }
+    }
     $ordre = ['recue' => 0, 'transmise' => 1, 'client_prevenu' => 2];
     usort($ev, fn($a, $b) => strcmp((string) $a['date'], (string) $b['date']) ?: (($ordre[$a['type']] ?? 5) <=> ($ordre[$b['type']] ?? 5)));
     return $ev;
+}
+
+// ------------------------------------------------------------------ Création d'une demande (tous canaux)
+
+/** Insère une ligne en ne gardant que les colonnes qui existent. */
+function ma_inserer(PDO $db, string $table, array $data): int
+{
+    $cols = array_diff(array_column($db->query("PRAGMA table_info($table)")->fetchAll(), 'name'), ['id']);
+    $data = array_intersect_key($data, array_flip($cols));
+    $keys = array_keys($data);
+    $db->prepare("INSERT INTO $table (" . implode(',', $keys) . ') VALUES (' . implode(',', array_fill(0, count($keys), '?')) . ')')
+        ->execute(array_values($data));
+    return (int) $db->lastInsertId();
+}
+
+/**
+ * Crée une demande, quel que soit son canal (appel, chat du site, e-mail), et la route vers les bonnes
+ * personnes. Options : notifier (prévenir le client, oui par défaut), statut / traite_at / pris_at (reprise
+ * d'une demande existante), reprise (texte : la demande vient d'un ancien outil, rien n'a été envoyé).
+ */
+function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
+{
+    $now = ma_now();
+    $svc = strtoupper(ma_plat(ma_str($d['service'] ?? null) ?? ''));
+    $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'COMMERCE' => 'COMMERCIAL', 'FINANCE' => 'FINANCE',
+        'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE'];
+    // Sujet que personne n'a su classer : il part au responsable des sujets indéterminés.
+    $d['service'] = $map[$svc] ?? 'AUTRE';
+    $d['canal'] = ma_canal($d);
+    $d['priorite'] = $d['service'] === 'SAV'
+        && (ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT') ? 'URGENT' : 'Normal';
+    $tel = ma_tel((string) ($d['tel'] ?? $d['telephone'] ?? ''));
+    $d['tel'] = $tel && preg_match('/^\d{9,15}$/', $tel) ? $tel : null;
+    $d['societe'] = ma_str($d['societe'] ?? $d['distributeur'] ?? null);
+    $d['created_at'] = ma_date($d['date'] ?? ($d['created_at'] ?? null)) ?? $now;
+    $d['fiche_id'] = !empty($d['fiche_id']) ? (int) $d['fiche_id'] : null;
+    $d['type_panne'] = ma_str($d['type_panne'] ?? $d['description'] ?? null);
+    // Une demande créée après la qualification WhatsApp ne connaît que la fiche :
+    // on y reprend ce que Claire a recueilli au téléphone (type d'appelant, site, etc.).
+    $fiche = null;
+    if ($d['fiche_id']) {
+        $st = $db->prepare('SELECT * FROM rep_fiches WHERE id = ?');
+        $st->execute([$d['fiche_id']]);
+        $fiche = $st->fetch() ?: null;
+    }
+    foreach (['code_postal', 'type_interlocuteur', 'nature', 'type_equipement', 'departement'] as $c) {
+        if (trim((string) ($d[$c] ?? '')) === '' && $fiche && trim((string) ($fiche[$c] ?? '')) !== '') {
+            $d[$c] = $fiche[$c];
+        }
+    }
+    if (!str_contains((string) ($d['email'] ?? ''), '@')) {
+        $d['email'] = $fiche['email'] ?? null;
+    }
+    // Claire écrit toujours « Site : 69003 » dans son résumé : filet si le champ n'est pas arrivé.
+    if (trim((string) ($d['code_postal'] ?? '')) === '' && preg_match('/Site\s*:\s*(\d{5})\b/u', (string) ($d['resume'] ?? ''), $m)) {
+        $d['code_postal'] = $m[1];
+    }
+    // Une demande naît « à traiter » : seul un humain la fait avancer (sauf reprise d'un ancien outil).
+    $d['statut'] = $opt['statut'] ?? 'a_traiter';
+    foreach (['pris_at', 'pris_par', 'traite_at', 'traite_par'] as $c) {
+        if (isset($opt[$c])) {
+            $d[$c] = $opt[$c];
+        }
+    }
+    $d['jeton_interne'] = ma_jeton();
+    $d['jeton_client'] = ma_jeton();
+    $rt = ma_rep_router($db, $d);
+    $d['marque_norm'] = $rt['marque'];
+    $d['nature'] = $rt['nature'] ?: null;
+    $d['type_client'] = $rt['type_client'];
+    $d['type_equipement'] = ma_str($d['type_equipement'] ?? null) ?? ($rt['type_equipement'] ?: null);
+    $d['departement'] = $rt['departement'] ?? ma_str($d['departement'] ?? null);
+    $d['regle_id'] = $rt['regle_id'];
+    $d['regle_libelle'] = $rt['regle_libelle'];
+    $d['destinataires'] = implode(', ', array_map(fn($p) => $p['nom'], $rt['personnes'])) ?: null;
+    $d['dest_to'] = $rt['to'];
+    $d['dest_cc'] = $rt['cc'];
+    $d['dest_sms'] = $rt['sms'];
+    $id = ma_inserer($db, 'rep_demandes', $d);
+    if ($d['fiche_id']) {
+        $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, $d['fiche_id']]);
+    }
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$id]);
+    $cree = $st->fetch();
+    if (!empty($opt['reprise'])) {
+        ma_rep_evenement($db, $id, 'recue', 'Claire', $cree['canal'], 'Demande reçue ' . (MA_CANAUX[$cree['canal']][1] ?? ''), ['source' => $cree['source']], $cree['created_at']);
+        ma_rep_evenement($db, $id, 'modifiee', 'Plateforme', 'plateforme', $opt['reprise'] . ' — attribuée à ' . ($cree['destinataires'] ?: 'personne')
+            . ', sans nouvel envoi', ['regle' => $rt['regle_libelle']]);
+    } else {
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
+            ->execute([$cree['canal'] === 'chat' ? 'chatbot' : 'repondeur', $now, 'ok', ($rt['urgent'] ? 'urgence_' : 'demande_') . strtolower($cree['service']),
+                ($rt['urgent'] ? 'URGENT — ' : '') . ($cree['societe'] ?? '') . ' → ' . ($cree['destinataires'] ?? $rt['to'])
+                    . ' [' . $rt['regle_libelle'] . ']' . ($rt['notes'] ? ' — ' . implode(' ; ', $rt['notes']) : ''),
+                json_encode(['id' => $id, 'to' => $rt['to'], 'sms' => $rt['sms']], JSON_UNESCAPED_UNICODE)]);
+        ma_rep_evenements_creation($db, $cree, $rt);
+        if ($opt['notifier'] ?? true) {
+            ma_rep_notifier_client($db, $cree, 'recue');
+        }
+    }
+    return ['id' => $id, 'demande' => $cree, 'rt' => $rt, 'liens' => ma_rep_liens($db, $cree)];
+}
+
+// ------------------------------------------------------------------ Chatbot du site : chaque lead est une demande
+
+/** Service d'une demande du chat : la catégorie donnée par Claire, sinon les mots de la demande. */
+function ma_chat_service(array $l): string
+{
+    $cat = ma_plat($l['categorie'] ?? null);
+    $parCat = ['sav' => 'SAV', 'technique' => 'SAV', 'finance' => 'FINANCE', 'compta' => 'FINANCE', 'comptabilite' => 'FINANCE',
+        'equipement' => 'COMMERCIAL', 'pieces' => 'COMMERCIAL', 'commercial' => 'COMMERCIAL', 'commerce' => 'COMMERCIAL'];
+    if (isset($parCat[$cat])) {
+        return $parCat[$cat];
+    }
+    $t = ma_plat(($l['besoin_resume'] ?? '') . ' ' . ($l['statut'] ?? ''));
+    foreach (['FINANCE' => ['factur', 'reglement', 'paiement', 'compta', 'avoir', 'relance de paiement', 'impaye'],
+        'SAV' => ['panne', 'fuite', 'depann', 'intervention', 'ne demarre', 'alarme', 'reparation', 'probleme technique', 'entretien', 'maintenance', 'sav'],
+        'COMMERCIAL' => ['devis', 'prix', 'tarif', 'achat', 'commande', 'piece', 'compresseur', 'secheur', 'documentation', 'livraison']] as $svc => $mots) {
+        foreach ($mots as $m) {
+            if (str_contains($t, $m)) {
+                return $svc;
+            }
+        }
+    }
+    return 'AUTRE';
+}
+
+/** Ce que le chat transmet, traduit en champs de demande. Les « non communiqué » sont écartés. */
+function ma_chat_vers_demande(array $l): array
+{
+    $vide = fn($v) => in_array(ma_plat($v), ['', 'non communique', 'noncommunique', 'non renseigne', 'a qualifier', 'indetermine', 'inconnu', 'nc', 'n/a', '-'], true);
+    $propre = fn($v) => $vide($v) ? null : trim((string) $v);
+    $cat = ma_plat($l['categorie'] ?? null);
+    $interloc = ma_plat($l['type_interlocuteur'] ?? null);
+    $dep = strtoupper(trim((string) ($l['departement'] ?? '')));
+    return [
+        'service' => ma_chat_service($l),
+        'canal' => 'chat',
+        'source' => 'chatbot',
+        'date' => $l['date'] ?? null,
+        'societe' => $propre($l['societe'] ?? null),
+        'contact' => trim(implode(' ', array_filter([$propre($l['prenom'] ?? null), $propre($l['nom'] ?? null)]))) ?: null,
+        'telephone' => $propre($l['telephone'] ?? null),
+        'email' => str_contains((string) ($l['email'] ?? ''), '@') ? trim((string) $l['email']) : null,
+        'marque' => $propre($l['marque_orientee'] ?? ($l['marque'] ?? null)),
+        'departement' => preg_match('/^(\d{2,3}|2A|2B)$/', $dep) ? $dep : null,
+        'code_postal' => preg_match('/\b(\d{5})\b/', (string) ($l['code_postal'] ?? ''), $m) ? $m[1] : null,
+        'type_interlocuteur' => str_contains($interloc, 'distri') ? 'distributeur' : (str_contains($interloc, 'final') || str_contains($interloc, 'utilisateur') ? 'utilisateur_final'
+            : (str_contains($interloc, 'install') ? 'installateur' : (str_contains($interloc, 'particulier') ? 'particulier' : null))),
+        'nature' => ['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? ($l['nature'] ?? null),
+        'besoin_commercial' => in_array($cat, ['equipement', 'pieces', 'commercial'], true) ? $propre($l['besoin_resume'] ?? null) : null,
+        'type_panne' => $cat === 'sav' ? $propre($l['besoin_resume'] ?? null) : null,
+        'resume' => $propre($l['besoin_resume'] ?? null),
+        'urgence' => $l['urgence'] ?? false,
+        'justification_urgence' => $l['justification_urgence'] ?? null,
+    ];
+}
+
+/**
+ * Le lead du chat devient une demande (ou met à jour la sienne, si le visiteur complète sa demande dans
+ * l'heure). Même routage que le répondeur. Le client n'est prévenu par la plateforme que lorsque le
+ * paramètre chat_notifier_client vaut 1 : tant que le scénario du chatbot envoie son propre e-mail au
+ * visiteur, on évite le doublon.
+ */
+function ma_chat_demande(PDO $db, int $leadId): ?array
+{
+    $st = $db->prepare('SELECT * FROM chat_leads WHERE id = ?');
+    $st->execute([$leadId]);
+    $l = $st->fetch();
+    if (!$l) {
+        return null;
+    }
+    $d = ma_chat_vers_demande($l);
+    if (!empty($l['demande_id'])) {
+        $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+        $st->execute([(int) $l['demande_id']]);
+        if ($dem = $st->fetch()) {
+            $maj = [];
+            foreach (['societe', 'contact', 'email', 'marque', 'departement', 'resume', 'besoin_commercial', 'type_panne'] as $c) {
+                if (($d[$c] ?? null) !== null && (string) $d[$c] !== (string) $dem[$c]) {
+                    $maj[$c] = $d[$c];
+                }
+            }
+            $tel = ma_tel((string) ($d['telephone'] ?? ''));
+            if ($tel && preg_match('/^\d{9,15}$/', $tel) && $tel !== $dem['tel']) {
+                $maj['tel'] = $tel;
+            }
+            if ($maj) {
+                $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+                $db->prepare("UPDATE rep_demandes SET $sets WHERE id = ?")->execute([...array_values($maj), $dem['id']]);
+                ma_rep_evenement($db, (int) $dem['id'], 'modifiee', 'Claire', 'chat', 'Le visiteur a complété sa demande sur le chat : ' . implode(', ', array_keys($maj)), $maj);
+            }
+            $rt = ma_rep_router($db, array_merge($dem, $maj, ['jeton_interne' => $dem['jeton_interne']]));
+            $st->execute([(int) $dem['id']]);
+            $dem = $st->fetch();
+            return ['id' => (int) $dem['id'], 'demande' => $dem, 'rt' => $rt, 'liens' => ma_rep_liens($db, $dem), 'nouvelle' => false];
+        }
+    }
+    $r = ma_rep_creer_demande($db, $d, ['notifier' => ma_param($db, 'chat_notifier_client') === '1']);
+    $db->prepare('UPDATE chat_leads SET demande_id = ? WHERE id = ?')->execute([$r['id'], $leadId]);
+    return $r + ['nouvelle' => true];
+}
+
+/** Reprise, une seule fois, des leads du chat enregistrés avant le circuit commun. Rien n'est envoyé. */
+function ma_chat_reprise(PDO $db): int
+{
+    $n = 0;
+    foreach ($db->query('SELECT * FROM chat_leads WHERE demande_id IS NULL ORDER BY date, id')->fetchAll() as $l) {
+        $suivi = ma_plat($l['suivi'] ?? 'nouveau');
+        $quand = $l['updated_at'] ?: $l['date'];
+        $opt = ['reprise' => 'Reprise du chatbot'];
+        if ($suivi === 'contacte') {
+            $opt += ['statut' => 'en_cours', 'pris_at' => $quand];
+        } elseif (in_array($suivi, ['converti', 'perdu'], true)) {
+            $opt += ['statut' => 'traite', 'traite_at' => $quand, 'traite_par' => $suivi === 'converti' ? 'Converti (chatbot)' : 'Perdu (chatbot)'];
+        }
+        $d = ma_chat_vers_demande($l);
+        if (trim((string) ($l['commentaire'] ?? '')) !== '') {
+            $d['commentaire'] = trim((string) $l['commentaire']);
+        }
+        $r = ma_rep_creer_demande($db, $d, $opt);
+        $db->prepare('UPDATE chat_leads SET demande_id = ? WHERE id = ?')->execute([$r['id'], $l['id']]);
+        $n++;
+    }
+    return $n;
+}
+
+// ------------------------------------------------------------------ Transfert d'une demande
+
+/**
+ * Transfère une demande à une personne ou une boîte de l'équipe : elle change de service si besoin,
+ * repart « à traiter » chez son nouveau destinataire, qui reçoit l'e-mail (et le SMS pour le SAV).
+ * Le client n'est pas prévenu : c'est une affaire interne.
+ */
+function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, string $message = ''): array
+{
+    $svcCible = ['sav' => 'SAV', 'finance' => 'FINANCE', 'commerce' => 'COMMERCIAL'][ma_contact_service($cible)] ?? $dem['service'];
+    $sms = $svcCible === 'SAV' ? (ma_mobile_sms($cible['mobile'] ?? null) ?? '') : '';
+    $maj = ['service' => $svcCible, 'destinataires' => $cible['nom'], 'dest_to' => implode(';', ma_liste_emails($cible['email'] ?? null)),
+        'dest_cc' => '', 'dest_sms' => $sms, 'statut' => 'a_traiter', 'pris_par' => null, 'pris_at' => null,
+        'regle_libelle' => 'Transférée par ' . ($par ?: 'l\'équipe')];
+    $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+    $db->prepare("UPDATE rep_demandes SET $sets WHERE id = ?")->execute([...array_values($maj), $dem['id']]);
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$dem['id']]);
+    $apres = $st->fetch();
+    $lien = ma_rep_liens($db, $apres)['interne'];
+    $contenu = ma_rep_message($apres, [
+        'marque_libelle' => $apres['marque'] ?? '', 'nature_libelle' => '', 'service' => ma_rep_service($svcCible), 'marque' => $apres['marque_norm'] ?? '',
+        'type_client' => $apres['type_client'] ?? 'direct', 'urgent' => $apres['priorite'] === 'URGENT' && $svcCible === 'SAV',
+        'departement' => $apres['departement'], 'personnes' => [$cible], 'url' => ma_url_base($db), 'lien_interne' => $lien,
+        'transfert' => 'Transférée par ' . ($par ?: 'l\'équipe') . ($message !== '' ? ' : « ' . $message . ' »' : '.'),
+    ]);
+    $envoi = 'aucune adresse';
+    if ($maj['dest_to'] !== '') {
+        $envoi = ma_webhook_suivi($db, ['evenement' => 'transfert', 'demande_id' => (int) $apres['id'], 'mobile' => false, 'tel' => '',
+            'email' => str_replace(';', ',', $maj['dest_to']), 'objet' => 'Demande transférée — ' . $contenu['objet'], 'html' => $contenu['mail_html'],
+            'texte' => '', 'lien' => $lien, 'sms' => $sms, 'sms_texte' => $contenu['sms_texte']]);
+    }
+    $envois = array_values(array_map(fn($a) => ['canal' => 'E-mail', 'a' => $a], ma_liste_emails($cible['email'] ?? null)));
+    if ($sms !== '') {
+        $envois[] = ['canal' => 'SMS', 'a' => ma_tel_lisible($sms)];
+    }
+    ma_rep_evenement($db, (int) $apres['id'], 'transferee', $par ?: null, 'plateforme', 'Transférée à ' . $cible['nom'] . ($svcCible !== $dem['service'] ? ', passée au ' . ma_rep_service_libelle($svcCible) : ''),
+        ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
+    return $apres;
 }

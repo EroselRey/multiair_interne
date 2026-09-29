@@ -445,69 +445,32 @@ try {
                 out(['ok' => true, 'rows' => $st->fetchAll()]);
             }
             if ($sub === 'demandes') {
-                if ($method === 'POST' && $sub2 === null) {
-                    $d = $body;
-                    $svc = strtoupper(ma_str($d['service'] ?? null) ?? '');
-                    $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'COMMERCE' => 'COMMERCIAL', 'FINANCE' => 'FINANCE',
-                        'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE'];
-                    // Sujet que personne n'a su classer : il part au responsable des sujets indéterminés.
-                    $d['service'] = $map[$svc] ?? 'AUTRE';
-                    $d['canal'] = ma_canal($d);
-                    $d['priorite'] = $d['service'] === 'SAV'
-                        && (ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT') ? 'URGENT' : 'Normal';
-                    $d['tel'] = ma_tel((string) ($d['tel'] ?? $d['telephone'] ?? ''));
-                    $d['societe'] = ma_str($d['societe'] ?? $d['distributeur'] ?? null);
-                    $d['created_at'] = ma_date($d['date'] ?? null) ?? $now;
-                    $d['fiche_id'] = isset($d['fiche_id']) ? (int) $d['fiche_id'] : null;
-                    $d['type_panne'] = ma_str($d['type_panne'] ?? $d['description'] ?? null);
-                    // Une demande créée après la qualification WhatsApp ne connaît que la fiche :
-                    // on y reprend ce que Claire a recueilli au téléphone (type d'appelant, site, etc.).
-                    $fiche = $d['fiche_id'] ? getOne($db, 'rep_fiches', $d['fiche_id']) : null;
-                    foreach (['code_postal', 'type_interlocuteur', 'nature', 'type_equipement', 'departement'] as $c) {
-                        if (trim((string) ($d[$c] ?? '')) === '' && $fiche && trim((string) ($fiche[$c] ?? '')) !== '') {
-                            $d[$c] = $fiche[$c];
+                if ($method === 'POST' && $sub2 === 'cloturer') {
+                    // Clôture groupée (anciennes demandes importées, doublons) : sans prévenir les clients.
+                    if (!$estAdmin) {
+                        fail('Réservé aux administrateurs', 403);
+                    }
+                    $n = 0;
+                    foreach ((array) ($body['ids'] ?? []) as $cid) {
+                        $dm = getOne($db, 'rep_demandes', (int) $cid);
+                        if ($dm && $dm['statut'] !== 'traite') {
+                            $db->prepare("UPDATE rep_demandes SET statut = 'traite', traite_at = ?, traite_par = ? WHERE id = ?")
+                                ->execute([$now, $user['nom'] ?? 'Administrateur', $dm['id']]);
+                            ma_rep_evenement($db, (int) $dm['id'], 'traitee', $user['nom'] ?? null, 'plateforme', 'Clôturée (clôture groupée, client non prévenu)', []);
+                            $n++;
                         }
                     }
-                    if (!str_contains((string) ($d['email'] ?? ''), '@')) {
-                        $d['email'] = $fiche['email'] ?? null;
-                    }
-                    // Claire écrit toujours « Site : 69003 » dans son résumé : filet si le champ n'est pas arrivé.
-                    if (trim((string) ($d['code_postal'] ?? '')) === '' && preg_match('/Site\s*:\s*(\d{5})\b/u', (string) ($d['resume'] ?? ''), $m)) {
-                        $d['code_postal'] = $m[1];
-                    }
-                    // Une demande naît toujours « à traiter » : seul un humain la fait avancer.
-                    $d['statut'] = 'a_traiter';
-                    $d['jeton_interne'] = ma_jeton();
-                    $d['jeton_client'] = ma_jeton();
-                    $rt = ma_rep_router($db, $d);
-                    $d['marque_norm'] = $rt['marque'];
-                    $d['nature'] = $rt['nature'] ?: null;
-                    $d['type_client'] = $rt['type_client'];
-                    $d['type_equipement'] = ma_str($d['type_equipement'] ?? null) ?? ($rt['type_equipement'] ?: null);
-                    $d['departement'] = $rt['departement'] ?? ma_str($d['departement'] ?? null);
-                    $d['regle_id'] = $rt['regle_id'];
-                    $d['regle_libelle'] = $rt['regle_libelle'];
-                    $d['destinataires'] = implode(', ', array_map(fn($p) => $p['nom'], $rt['personnes'])) ?: null;
-                    $d['dest_to'] = $rt['to'];
-                    $d['dest_cc'] = $rt['cc'];
-                    $d['dest_sms'] = $rt['sms'];
-                    $id = insert($db, 'rep_demandes', $d);
-                    if ($d['fiche_id']) {
-                        $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, $d['fiche_id']]);
-                    }
-                    logEvent($db, 'repondeur', 'ok', ($rt['urgent'] ? 'urgence_' : 'demande_') . strtolower($d['service']),
-                        ($rt['urgent'] ? 'URGENT — ' : '') . ($d['societe'] ?? '') . ' → ' . ($d['destinataires'] ?? $rt['to'])
-                            . ' [' . $rt['regle_libelle'] . ']' . ($rt['notes'] ? ' — ' . implode(' ; ', $rt['notes']) : ''),
-                        ['id' => $id, 'to' => $rt['to'], 'sms' => $rt['sms']]);
-                    $cree = getOne($db, 'rep_demandes', $id);
-                    ma_rep_evenements_creation($db, $cree, $rt);
-                    $liens = ma_rep_liens($db, $cree);
-                    ma_rep_notifier_client($db, $cree, 'recue');
-                    out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'], 'urgent' => $rt['urgent'],
-                        'lien_interne' => $liens['interne'], 'lien_client' => $liens['client'],
+                    logEvent($db, 'plateforme', 'ok', 'cloture_groupee', "$n demande(s) clôturée(s) sans prévenir les clients" . ($user ? ' par ' . $user['nom'] : ''));
+                    out(['ok' => true, 'clotures' => $n]);
+                }
+                if ($method === 'POST' && $sub2 === null) {
+                    $r = ma_rep_creer_demande($db, $body);
+                    $rt = $r['rt'];
+                    out(['ok' => true, 'id' => $r['id'], 'service' => $r['demande']['service'], 'priorite' => $r['demande']['priorite'], 'urgent' => $rt['urgent'],
+                        'lien_interne' => $r['liens']['interne'], 'lien_client' => $r['liens']['client'],
                         // Champs historiques, lus par le scénario Make actuel : ils suivent désormais les règles.
                         'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => $rt['regle_libelle'],
-                        'sms' => $rt['sms'], 'destinataires' => $d['destinataires'], 'notes' => $rt['notes'],
+                        'sms' => $rt['sms'], 'destinataires' => $r['demande']['destinataires'], 'notes' => $rt['notes'],
                         'objet' => $rt['objet'], 'mail_html' => $rt['mail_html'], 'sms_texte' => $rt['sms_texte']]);
                 }
                 if ($sub2 !== null) {
@@ -515,6 +478,17 @@ try {
                     $dem = getOne($db, 'rep_demandes', $id) ?? fail('Demande introuvable', 404);
                     if ($portee !== null && $dem['service'] !== $portee) {
                         fail('Cette demande relève d\'un autre service', 403);
+                    }
+                    if ($method === 'POST' && ($parts[3] ?? null) === 'transferer') {
+                        $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
+                        $st->execute([(int) ($body['contact_id'] ?? 0)]);
+                        $cible = $st->fetch() ?: fail('Choisissez à qui transférer la demande');
+                        if (!ma_liste_emails($cible['email'] ?? null)) {
+                            fail($cible['nom'] . ' n\'a pas d\'adresse e-mail : complétez sa fiche dans « Équipe et accès »');
+                        }
+                        $apres = ma_rep_transferer($db, $dem, $cible, (string) ($user['nom'] ?? ''), trim((string) ($body['message'] ?? '')));
+                        logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
+                        out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin || $apres['service'] === $portee]);
                     }
                     if ($method === 'PATCH' || $method === 'POST') {
                         $d = $body;
@@ -673,9 +647,11 @@ try {
         case 'equipe':
             if (!$estAdmin) {
                 // Un service n'a besoin que des noms (« pris en charge par »).
-                $rows = $db->query("SELECT * FROM rep_contacts WHERE actif = 1 AND role != 'boite' ORDER BY nom")->fetchAll();
-                out(['ok' => true, 'rows' => array_map(fn($c) => ['id' => (int) $c['id'], 'nom' => $c['nom'], 'fonction' => $c['fonction'],
-                    'service_equipe' => ma_contact_service($c)], $rows)]);
+                $rows = $db->query("SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom")->fetchAll();
+                out(['ok' => true, 'rows' => array_map(fn($c) => ['id' => (int) $c['id'], 'nom' => $c['nom'], 'fonction' => $c['fonction'], 'role' => $c['role'],
+                    'commentaire' => $c['commentaire'], 'competences' => $c['competences'], 'service_equipe' => ma_contact_service($c),
+                    'joignable' => (bool) ma_liste_emails($c['email'] ?? null)], $rows),
+                    'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, ma_responsables($db))]);
             }
             $normEquipe = function (array $d) use ($db): array {
                 $d = array_intersect_key($d, array_flip(['nom', 'fonction', 'service', 'acces', 'email', 'mobile', 'role', 'departements',
@@ -844,9 +820,16 @@ try {
                     $r = ma_chat_lead_upsert($db, $d);
                     logEvent($db, 'chatbot', 'ok', $r['action'] === 'created' ? 'lead' : 'lead_maj',
                         ($d['societe'] ?? '') . ' - ' . ($d['prenom'] ?? '') . ' ' . ($d['nom'] ?? '') . ' [' . ($d['categorie'] ?? '') . ']' . ($r['action'] === 'merged' ? ' (mise à jour n°' . $r['nb_mises_a_jour'] . ')' : ''), ['id' => $r['id']]);
-                    $rt = ma_routage($db, 'chatbot', strtolower((string) ($d['categorie'] ?? '')));
-                    out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $r['action'] === 'created', 'nb_mises_a_jour' => $r['nb_mises_a_jour'],
-                        'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
+                    // Le lead devient une demande, routée comme celles du répondeur : le scénario du chatbot
+                    // envoie son e-mail interne aux destinataires renvoyés ici.
+                    $dm = ma_chat_demande($db, $r['id']);
+                    $rt = $dm['rt'] ?? ['to' => '', 'cc' => '', 'regle_libelle' => '', 'sms' => '', 'urgent' => false, 'objet' => '', 'mail_html' => '', 'sms_texte' => ''];
+                    out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $r['action'] === 'created' || !empty($dm['nouvelle']),
+                        'nb_mises_a_jour' => $r['nb_mises_a_jour'], 'demande_id' => $dm['id'] ?? null,
+                        'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => ($dm['demande']['destinataires'] ?? '') ?: $rt['regle_libelle'],
+                        'service' => $dm['demande']['service'] ?? null, 'urgent' => $rt['urgent'], 'sms' => $rt['sms'], 'sms_texte' => $rt['sms_texte'],
+                        'objet' => $rt['objet'], 'mail_html' => $rt['mail_html'],
+                        'lien_interne' => $dm['liens']['interne'] ?? '', 'lien_client' => $dm['liens']['client'] ?? '']);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
