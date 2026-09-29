@@ -22,6 +22,7 @@ $ic = [
     'cpu' => '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>',
     'logout' => '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
     'menu' => '<path d="M3 6h18M3 12h18M3 18h18"/>',
+    'carnet' => '<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/><circle cx="12" cy="10" r="3"/><path d="M7.5 17a4.5 4.5 0 0 1 9 0"/>',
 ];
 $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $ic[$n] . '</svg>';
 ?><!DOCTYPE html>
@@ -94,6 +95,7 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
     <div class="logo">MULTIAIR</div>
     <button class="nav" data-page="a-traiter"><?= $icone('inbox') ?><span>À traiter</span><span class="n zero" data-badge="a-traiter">0</span></button>
     <button class="nav" data-page="demandes"><?= $icone('list') ?><span>Demandes</span></button>
+    <button class="nav" data-page="clients"><?= $icone('carnet') ?><span>Clients</span></button>
     <button class="nav" data-page="stats"><?= $icone('chart') ?><span>Statistiques</span></button>
 <?php if ($admin): ?>
     <div class="grp">RÉGLAGES</div>

@@ -106,7 +106,8 @@ if (!$estAdmin) {
     $permis = $portee !== null && (
         ($r0 === 'rep' && $r1 === 'demandes' && ($lecture || (($method === 'PATCH' || $method === 'POST') && isset($parts[2]))))
         || ($r0 === 'rep' && in_array($r1, ['fiches', 'messages', 'listes'], true) && $lecture)
-        || ($r0 === 'equipe' && $lecture && !isset($parts[1])));
+        || ($r0 === 'equipe' && $lecture && !isset($parts[1]))
+        || ($r0 === 'clients' && $lecture));
     if (!$permis) {
         fail('Accès réservé aux administrateurs', 403);
     }
@@ -525,6 +526,10 @@ try {
                         out(['ok' => true]);
                     }
                     $dem['liens'] = ma_rep_liens($db, $dem);
+                    if (!empty($dem['client_id']) && ($cl = getOne($db, 'rep_clients', (int) $dem['client_id']))) {
+                        $dem['client'] = ['id' => (int) $cl['id'], 'nb_demandes' => (int) $cl['nb_demandes'], 'fidelite' => ma_client_fidelite($cl),
+                            'premiere_demande' => $cl['premiere_demande'], 'notes' => $cl['notes']];
+                    }
                     if ($sub3 = ($parts[3] ?? null)) {
                         if ($sub3 === 'historique') {
                             out(['ok' => true, 'historique' => ma_rep_historique($db, $dem)]);
@@ -742,6 +747,69 @@ try {
                 'acces' => MA_ACCES, 'services' => MA_SERVICES,
                 'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel')")
                     ->fetchAll(PDO::FETCH_KEY_PAIR)]);
+
+        // ============================================================ Clients (base et reconnaissance)
+        case 'clients':
+            // Claire (VAPI) appelle cet outil en début d'appel : le numéro de l'appelant est dans l'appel.
+            if ($sub === 'vapi') {
+                $msg = $body['message'] ?? [];
+                $numero = (string) ($msg['call']['customer']['number'] ?? ($msg['customer']['number'] ?? ($body['tel'] ?? ($_GET['tel'] ?? ''))));
+                $appels = $msg['toolCallList'] ?? ($msg['toolCalls'] ?? []);
+                $args = [];
+                foreach ($appels as $a) {
+                    $x = $a['function']['arguments'] ?? ($a['arguments'] ?? []);
+                    $args = is_string($x) ? (json_decode($x, true) ?: []) : (array) $x;
+                }
+                $r = ma_client_reconnaitre($db, (string) ($args['telephone'] ?? '') ?: $numero, (string) ($args['email'] ?? ''));
+                logEvent($db, 'repondeur', 'info', 'appelant_' . ($r['connu'] ? 'reconnu' : 'inconnu'),
+                    ($r['connu'] ? 'Appelant reconnu : ' . ($r['contact'] ?? '') . ($r['societe'] ? ' (' . $r['societe'] . ')' : '') : 'Appelant inconnu') . ' — ' . ma_tel_lisible($numero));
+                $texte = $r['contexte'];
+                if ($appels) {
+                    out(['results' => array_map(fn($a) => ['toolCallId' => $a['id'] ?? ($a['toolCallId'] ?? ''), 'result' => $texte], $appels)]);
+                }
+                out(['ok' => true] + $r);
+            }
+            if ($sub === 'reconnaitre') {
+                out(['ok' => true] + ma_client_reconnaitre($db, (string) ($_GET['tel'] ?? ($body['tel'] ?? '')), (string) ($_GET['email'] ?? ($body['email'] ?? ''))));
+            }
+            if ($sub === 'reconstruire' && $method === 'POST' && $estAdmin) {
+                out(['ok' => true, 'rattachees' => ma_clients_reprise($db)]);
+            }
+            if ($sub !== null) {
+                $id = idFrom($parts, 1);
+                $c = getOne($db, 'rep_clients', $id) ?? fail('Client introuvable', 404);
+                if (($method === 'PATCH' || $method === 'POST') && $estAdmin) {
+                    $d = array_intersect_key($body, array_flip(['contact', 'societe', 'type_client', 'type_interlocuteur', 'code_postal', 'departement',
+                        'marque', 'modele', 'numero_serie', 'compte_distributeur', 'statut_client', 'notes', 'email']));
+                    $d['updated_at'] = $now;
+                    update($db, 'rep_clients', $id, $d);
+                    logEvent($db, 'plateforme', 'ok', 'client_modifie', 'Fiche client ' . $id . ' modifiée' . ($user ? ' par ' . $user['nom'] : ''));
+                    $c = getOne($db, 'rep_clients', $id);
+                }
+                $q = 'SELECT * FROM rep_demandes WHERE client_id = ?' . ($portee !== null ? ' AND service = ?' : '') . ' ORDER BY created_at DESC';
+                $st = $db->prepare($q);
+                $st->execute($portee !== null ? [$id, $portee] : [$id]);
+                $c['demandes'] = $st->fetchAll();
+                $c['fidelite'] = ma_client_fidelite($c);
+                // Devis CSO au même e-mail ou au même numéro : ce que le client achète chez nous.
+                $st = $db->prepare("SELECT id, n_offre, date_offre, montant_ht, statut, commercial FROM cso_devis
+                    WHERE (email_client IS NOT NULL AND lower(email_client) = lower(?)) OR (tel_client IS NOT NULL AND tel_client != '' AND ? != '' AND replace(replace(tel_client, ' ', ''), '.', '') LIKE ?)
+                    ORDER BY date_traitement DESC");
+                $local = preg_match('/^33(\d{9})$/', (string) $c['tel'], $m) ? '0' . $m[1] : (string) $c['tel'];
+                $st->execute([(string) $c['email'], $local, '%' . substr($local, -9)]);
+                $c['devis'] = $estAdmin ? $st->fetchAll() : [];
+                $c['reconnaissance'] = ma_client_reconnaitre($db, $c['tel'], $c['email']);
+                out(['ok' => true, 'client' => $c]);
+            }
+            $rows = $db->query('SELECT c.*, (SELECT COUNT(*) FROM rep_demandes d WHERE d.client_id = c.id AND d.statut != \'traite\') AS nb_ouvertes,
+                (SELECT group_concat(DISTINCT d.service) FROM rep_demandes d WHERE d.client_id = c.id) AS services,
+                (SELECT group_concat(DISTINCT d.canal) FROM rep_demandes d WHERE d.client_id = c.id) AS canaux
+                FROM rep_clients c WHERE c.nb_demandes > 0 ORDER BY c.derniere_demande DESC')->fetchAll();
+            foreach ($rows as &$r) {
+                $r['fidelite'] = ma_client_fidelite($r);
+            }
+            unset($r);
+            out(['ok' => true, 'rows' => $rows]);
 
         case 'distributeurs':
             if ($sub === 'find') {

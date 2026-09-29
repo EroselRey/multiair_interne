@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS rep_demandes (
 );
 CREATE INDEX IF NOT EXISTS idx_rep_demandes_date ON rep_demandes(created_at);
 
+-- Clients et contacts qui nous sollicitent : un par numéro de téléphone (sinon par e-mail).
+-- Alimentée par chaque demande, quel que soit le canal. Sert à reconnaître un appelant et aux statistiques.
+CREATE TABLE IF NOT EXISTS rep_clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tel TEXT, email TEXT,
+  contact TEXT, societe TEXT,
+  type_client TEXT,               -- direct | distributeur
+  type_interlocuteur TEXT, code_postal TEXT, departement TEXT,
+  marque TEXT, modele TEXT, numero_serie TEXT, compte_distributeur TEXT,
+  nb_demandes INTEGER NOT NULL DEFAULT 0, nb_urgences INTEGER NOT NULL DEFAULT 0,
+  premiere_demande TEXT, derniere_demande TEXT, derniere_demande_id INTEGER,
+  statut_client TEXT,             -- '' | fidele | vip | a_surveiller (choisi par l'équipe)
+  notes TEXT,
+  created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rep_clients_tel ON rep_clients(tel);
+CREATE INDEX IF NOT EXISTS idx_rep_clients_email ON rep_clients(email);
+
 -- Historique d'une demande, pour la traçabilité : réception, transmission (à qui, par quel
 -- canal), messages envoyés au client, prise en charge, rappels, notes, clôture.
 CREATE TABLE IF NOT EXISTS rep_evenements (

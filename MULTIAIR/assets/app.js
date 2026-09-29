@@ -229,7 +229,7 @@
   const moi = MA.user || {nom: '', acces: ''};
   const ADMIN = !!MA.admin;
   const SERVICE_MOI = {sav: 'SAV', commerce: 'COMMERCIAL', finance: 'FINANCE'}[moi.acces] || null;
-  const PAGES_SERVICE = ['a-traiter', 'demandes', 'demande', 'appel', 'stats'];
+  const PAGES_SERVICE = ['a-traiter', 'demandes', 'demande', 'appel', 'stats', 'clients', 'client'];
   const main = $('#main');
   const app = $('#app');
   let current = 'a-traiter';
@@ -242,7 +242,7 @@
     const hash = '#' + tab + (arg !== null && arg !== undefined ? '/' + arg : '');
     if (push && location.hash !== hash) history.pushState(null, '', hash);
     dernierHash = location.hash;
-    const actif = {demande: 'demandes', appel: 'demandes'}[tab] || tab;
+    const actif = {demande: 'demandes', appel: 'demandes', client: 'clients'}[tab] || tab;
     $$('#side [data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === actif));
     app.classList.remove('menu');
     closeDrawer();
@@ -666,7 +666,10 @@
             ${champ('E-mail', d.email ? `<a href="mailto:${h(d.email)}">${h(d.email)}</a>` : '')}
             ${champ('Site', h([d.code_postal, d.departement && !d.code_postal ? 'dpt ' + d.departement : ''].filter(Boolean).join(' ')))}
             ${champ('Compte distributeur', h(d.compte_distributeur || ''))}
-          </div></section>
+          </div>
+          ${d.client ? `<a class="clientconnu" href="#client/${d.client.id}">${FIDELITE[d.client.fidelite] ? `<span class="pill ${FIDELITE[d.client.fidelite][1]}">${h(FIDELITE[d.client.fidelite][0])}</span>` : ''}
+            ${d.client.nb_demandes > 1 ? `Client connu : ${d.client.nb_demandes} demandes depuis le ${h(fmtDate(d.client.premiere_demande, false))}` : 'Première demande de ce client'} · voir sa fiche →</a>
+            ${d.client.notes ? `<p class="texte" style="margin:0">${h(d.client.notes)}</p>` : ''}` : ''}</section>
           <section class="box2"><h2>La demande</h2><div class="kvg">
             ${champ('Marque / modèle', h(materielDe(d)))}
             ${champ('N° de série', h(d.numero_serie || ''))}
@@ -755,6 +758,125 @@
     $('[data-retour]', main).onclick = (e) => { e.preventDefault(); history.length > 1 ? history.back() : show('demandes'); };
   };
 
+  // ================================================================== CLIENTS
+  const FIDELITE = {vip: ['Client VIP', 'admin'], fidele: ['Client fidèle', 'ok'], recurrent: ['Revient', 'info'], nouveau: ['Nouveau', 'muted'],
+    a_surveiller: ['À surveiller', 'danger'], distributeur: ['Distributeur', 'info']};
+  const fidPill = (f) => FIDELITE[f] ? `<span class="pill ${FIDELITE[f][1]}">${h(FIDELITE[f][0])}</span>` : '';
+  const vueClients = {f: '', q: '', tri: 'recent', page: 0};
+  tabs.clients = async () => {
+    const r = await api('clients');
+    const tous = r.rows;
+    const FILTRES = {
+      '': () => true,
+      fideles: (c) => ['fidele', 'vip'].includes(c.fidelite),
+      reviennent: (c) => Number(c.nb_demandes) >= 2,
+      nouveaux: (c) => Number(c.nb_demandes) === 1,
+      distributeurs: (c) => c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur',
+      directs: (c) => c.type_client !== 'distributeur' && c.type_interlocuteur !== 'distributeur',
+      ouvertes: (c) => Number(c.nb_ouvertes) > 0,
+    };
+    const render = () => {
+      let rows = tous.filter(FILTRES[vueClients.f] || FILTRES['']).filter((c) => !vueClients.q
+        || [c.contact, c.societe, c.email, c.tel, telFr(c.tel), c.departement, c.code_postal, c.marque].join(' ').toLowerCase().includes(vueClients.q.toLowerCase()));
+      rows = rows.sort(vueClients.tri === 'nombre' ? (a, b) => b.nb_demandes - a.nb_demandes || String(b.derniere_demande).localeCompare(String(a.derniere_demande))
+        : (a, b) => String(b.derniere_demande).localeCompare(String(a.derniere_demande)));
+      const pages = Math.max(1, Math.ceil(rows.length / 50));
+      vueClients.page = Math.min(vueClients.page, pages - 1);
+      const tranche = rows.slice(vueClients.page * 50, (vueClients.page + 1) * 50);
+      const n = (f) => tous.filter(FILTRES[f]).length;
+      main.innerHTML = `
+        <div class="page-head"><div class="t"><h1>Clients</h1><p>Tous ceux qui nous ont contactés, reconnus par leur numéro ou leur e-mail. Claire les reconnaît quand ils rappellent.</p></div>
+          <label class="search">${ic('search', 's')}<input type="search" id="cq" placeholder="Nom, société, téléphone, e-mail…" aria-label="Rechercher" value="${h(vueClients.q)}"></label></div>
+        <div class="tiles">
+          <button class="tile" data-cf=""><b>${tous.length}</b><span>Clients et contacts</span></button>
+          <button class="tile bleu" data-cf="reviennent"><b>${n('reviennent')}</b><span>Nous ont contactés plusieurs fois</span></button>
+          <button class="tile vert" data-cf="fideles"><b>${n('fideles')}</b><span>Clients fidèles (3 demandes ou plus)</span></button>
+          <button class="tile orange" data-cf="distributeurs"><b>${n('distributeurs')}</b><span>Distributeurs</span></button>
+        </div>
+        <div class="panel filtres" style="margin-top:16px"><div class="frow"><span class="lab">Afficher</span>
+          ${[['', 'Tous'], ['reviennent', 'Qui reviennent'], ['fideles', 'Fidèles'], ['nouveaux', 'Nouveaux'], ['distributeurs', 'Distributeurs'], ['directs', 'Clients directs'], ['ouvertes', 'Avec une demande ouverte']]
+            .map(([v, t]) => `<button class="chip ${vueClients.f === v ? 'on' : ''}" data-cf="${v}">${t} · ${n(v)}</button>`).join('')}
+          <select id="ctri" aria-label="Trier" style="margin-left:auto"><option value="recent" ${vueClients.tri === 'recent' ? 'selected' : ''}>Contact le plus récent</option>
+            <option value="nombre" ${vueClients.tri === 'nombre' ? 'selected' : ''}>Le plus de demandes</option></select></div></div>
+        <div class="panel dl cl" style="margin-top:16px">
+          <div class="row head"><span>CLIENT</span><span>TYPE</span><span>DEMANDES</span><span>SERVICES</span><span>CANAUX</span><span>SITE · MATÉRIEL</span><span>DERNIER CONTACT</span></div>
+          ${tranche.map((c, i) => `<div class="row" data-i="${i}" role="link" tabindex="0">
+            <span class="two"><b>${h(c.societe || c.contact || telFr(c.tel) || c.email)}</b><span>${h([c.societe ? c.contact : '', telFr(c.tel) || c.email].filter(Boolean).join(' · '))}</span></span>
+            <span>${fidPill(c.fidelite)}${c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur' ? ' <span class="pill">Distributeur</span>' : ''}</span>
+            <span class="two"><b>${c.nb_demandes}</b><span>${Number(c.nb_ouvertes) ? c.nb_ouvertes + ' ouverte' + (c.nb_ouvertes > 1 ? 's' : '') : 'toutes traitées'}${Number(c.nb_urgences) ? ' · ' + c.nb_urgences + ' urgence' + (c.nb_urgences > 1 ? 's' : '') : ''}</span></span>
+            <span class="txt">${h(String(c.services || '').split(',').filter(Boolean).map((x) => SERVICES[x] || x).join(', '))}</span>
+            <span style="display:flex;gap:6px">${String(c.canaux || '').split(',').filter(Boolean).map((k) => `<span title="${h(CANAUX[k] || k)}">${ic(k, 's')}</span>`).join('')}</span>
+            <span class="txt">${h([c.code_postal || c.departement, [c.marque, c.modele].filter(Boolean).join(' ')].filter(Boolean).join(' · ') || '—')}</span>
+            <span class="two"><b>${h(quand(c.derniere_demande))}</b><span>${h(rel(c.derniere_demande))}</span></span>
+            <span class="m1"><b>${h(c.societe || c.contact || telFr(c.tel))}</b><span>${c.nb_demandes} demande${c.nb_demandes > 1 ? 's' : ''} · ${h(rel(c.derniere_demande))}</span></span>
+            <span class="m2">${fidPill(c.fidelite)}</span>
+          </div>`).join('') || '<div class="vide" style="border:0">Aucun client ne correspond.</div>'}
+          <div class="pied"><span>${rows.length} client${rows.length > 1 ? 's' : ''}</span>${pages > 1 ? `<span>
+            <button class="btn small" data-cpage="-1" ${vueClients.page === 0 ? 'disabled' : ''}>‹ Précédents</button> Page ${vueClients.page + 1} / ${pages}
+            <button class="btn small" data-cpage="1" ${vueClients.page >= pages - 1 ? 'disabled' : ''}>Suivants ›</button></span>` : ''}</div>
+        </div>`;
+      const q = $('#cq', main);
+      q.oninput = () => { vueClients.q = q.value; vueClients.page = 0; clearTimeout(q._t); q._t = setTimeout(() => { render(); const x = $('#cq', main); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }, 200); };
+      $$('[data-cf]', main).forEach((b) => b.onclick = () => { vueClients.f = b.dataset.cf; vueClients.page = 0; render(); });
+      $('#ctri', main).onchange = (e) => { vueClients.tri = e.target.value; render(); };
+      $$('[data-cpage]', main).forEach((b) => b.onclick = () => { vueClients.page += Number(b.dataset.cpage); render(); window.scrollTo(0, 0); });
+      $$('.cl .row[data-i]', main).forEach((el) => { const go = () => show('client', tranche[Number(el.dataset.i)].id); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); }; });
+    };
+    render();
+  };
+
+  tabs.client = async (id) => {
+    const [r] = await Promise.all([api('clients/' + id), chargerListes().catch(() => {})]);
+    const c = r.client;
+    const distri = c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur';
+    const champ = (k, v) => v ? `<div><span>${h(k)}</span><b>${v}</b></div>` : '';
+    main.innerHTML = `
+      <div class="crumb"><a href="#clients" data-retour>Clients</a> › ${h(c.societe || c.contact || '')}</div>
+      <div class="dtitle"><h1>${h([c.contact, c.societe].filter(Boolean).join(' — ') || telFr(c.tel) || c.email)}</h1>
+        <div class="tags">${fidPill(c.fidelite)}${distri ? '<span class="pill">Distributeur</span>' : '<span class="pill">Client direct</span>'}
+          <span class="hint">Premier contact ${h(jourFr(c.premiere_demande))}</span></div></div>
+      <div class="tiles">
+        <div class="tile"><b>${c.nb_demandes}</b><span>Demande${c.nb_demandes > 1 ? 's' : ''}</span></div>
+        <div class="tile ${c.demandes.some((x) => x.statut !== 'traite') ? 'orange' : 'vert'}"><b>${c.demandes.filter((x) => x.statut !== 'traite').length}</b><span>En cours ou à traiter</span></div>
+        <div class="tile ${Number(c.nb_urgences) ? 'rouge' : ''}"><b>${c.nb_urgences}</b><span>Urgence${c.nb_urgences > 1 ? 's' : ''}</span></div>
+        <div class="tile bleu"><b>${h(rel(c.derniere_demande))}</b><span>Dernier contact</span></div>
+      </div>
+      <div class="dgrid" style="margin-top:20px"><div class="dcol">
+        <section class="box2"><h2>Coordonnées</h2><div class="kvg">
+          ${champ('Téléphone', c.tel ? `<a href="tel:+${h(c.tel)}" style="font-weight:800">${h(telFr(c.tel))}</a>` : '')}
+          ${champ('E-mail', c.email ? `<a href="mailto:${h(c.email)}">${h(c.email)}</a>` : '')}
+          ${champ('Site', h([c.code_postal, c.departement && !c.code_postal ? 'dpt ' + c.departement : ''].filter(Boolean).join(' ')))}
+          ${champ('Matériel', h([c.marque, c.modele].filter(Boolean).join(' ')))}
+          ${champ('N° de série', h(c.numero_serie || ''))}
+          ${champ('Compte distributeur', h(c.compte_distributeur || c.reconnaissance?.compte_distributeur || ''))}
+        </div></section>
+        <section class="box2"><h2>Ses demandes (${c.demandes.length})</h2>
+          <div class="panel dl" style="border:0">${c.demandes.map((d, i) => `<div class="row" data-d="${d.id}" role="link" tabindex="0" style="grid-template-columns:110px 130px 120px minmax(0,1fr)">
+            <span class="two"><b>n° ${d.id}</b><span>${h(fmtDate(d.created_at, false))}</span></span>${canalHtml(canalDe(d))}<span>${etatPill(d)}</span>
+            <span class="txt">${h([SERVICES[d.service], sujetDe(d)].filter(Boolean).join(' — '))}</span>
+            <span class="m1"><b>n° ${d.id} — ${h(sujetDe(d))}</b><span>${h(fmtDate(d.created_at, false))}</span></span><span class="m2">${etatPill(d)}</span></div>`).join('') || '<div class="vide" style="border:0">Aucune demande visible pour votre service.</div>'}</div></section>
+        ${ADMIN && c.devis && c.devis.length ? `<section class="box2"><h2>Devis CSO (${c.devis.length})</h2>${c.devis.map((x) => `<div class="frow" style="justify-content:space-between;border-top:1px solid #eef1f4;padding-top:8px">
+          <span><b>Offre ${h(x.n_offre)}</b> <span class="hint">${h(fmtDate(x.date_offre, false))}${x.commercial ? ' · ' + h(x.commercial) : ''}</span></span>
+          <span>${eur(x.montant_ht)} HT ${pill(L(x.statut), cls(x.statut))}</span></div>`).join('')}</section>` : ''}
+      </div><aside class="dcol">
+        <section class="box2"><h2>Ce que Claire sait quand il appelle</h2>
+          <p class="texte" style="margin:0">${h(c.reconnaissance?.contexte || '—')}</p>
+          <span class="hint">Claire l'accueille par son nom et fait confirmer ces informations au lieu de les redemander.</span></section>
+        <section class="box2"><h2>Relation client</h2>
+          ${ADMIN ? `<label class="field"><span>Statut</span>${sel('statut_client', [['', 'Automatique (' + (FIDELITE[c.fidelite]?.[0] || '') + ')'], ['fidele', 'Client fidèle'], ['vip', 'Client VIP'], ['a_surveiller', 'À surveiller']], c.statut_client || '')}</label>
+            <label class="field"><span>Note pour l'équipe et pour Claire</span><textarea name="notes" class="inp" rows="4" placeholder="ex. Client historique, parc de 3 compresseurs Worthington. Préfère être rappelé le matin.">${h(c.notes || '')}</textarea></label>
+            <button class="btn primary" id="clSave" style="align-self:flex-end">Enregistrer</button>` : `<p class="texte" style="margin:0">${h(c.notes || 'Aucune note.')}</p>`}
+        </section>
+      </aside></div>`;
+    $('[data-retour]', main).onclick = (e) => { e.preventDefault(); history.length > 1 ? history.back() : show('clients'); };
+    $$('[data-d]', main).forEach((el) => { const go = () => show('demande', el.dataset.d); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); }; });
+    const b = $('#clSave', main);
+    if (b) b.onclick = async () => {
+      await patch('clients/' + c.id, {statut_client: $('[name=statut_client]', main).value, notes: $('[name=notes]', main).value.trim()});
+      toast('Fiche client enregistrée'); show('client', c.id, false);
+    };
+  };
+
   // ================================================================== STATISTIQUES
   tabs.stats = async () => {
     const toutes = (await chargerDemandes()).filter((d) => !d.fiche);
@@ -780,7 +902,7 @@
         <div class="card"><h3>Demandes par jour et par canal</h3><div class="chart-wrap"><canvas id="c_jours"></canvas></div></div>
         <div class="grid3" style="grid-template-columns:1fr">${distCard('Par canal', grouper((d) => CANAUX[canalDe(d)]))}${SERVICE_MOI ? '' : distCard('Par service', grouper((d) => SERVICES[d.service]))}</div>
       </div>
-      <div class="grid3" style="margin-top:16px">${distCard('Prises en charge par', grouper((d) => d.pris_par, false))}${distCard('Par marque', grouper((d) => d.marque_norm ? nomDe(R_MARQUES, d.marque_norm) : ''))}${distCard('Type de client', grouper((d) => d.type_client ? L(d.type_client) : ''))}</div>`;
+      <div class="grid3" style="margin-top:16px">${distCard('Qui nous contacte le plus', grouper((d) => d.client_id ? (d.societe || d.contact || telFr(d.tel)) : '', false))}${distCard('Prises en charge par', grouper((d) => d.pris_par, false))}${distCard('Par marque', grouper((d) => d.marque_norm ? nomDe(R_MARQUES, d.marque_norm) : ''))}${distCard('Type de client', grouper((d) => d.type_client ? L(d.type_client) : ''))}</div>`;
     const couleurs = {telephone: '#0f2f52', chat: '#1d4ed8', whatsapp: '#1f6b47', email: '#e8720c'};
     chart('c_jours', {type: 'bar', data: {labels: jours.map((j) => j.slice(8, 10) + '/' + j.slice(5, 7)),
       datasets: Object.entries(CANAUX).map(([k, l]) => ({label: l, backgroundColor: couleurs[k], borderRadius: 3,

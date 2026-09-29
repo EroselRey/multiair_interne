@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29e';
+const MA_VERSION = '2026-09-29f';
 
 function ma_config(): array
 {
@@ -52,7 +52,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
 {
     // Tables et colonnes attendues par le code. Toute absence déclenche la mise à niveau.
     $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
-        'rep_contacts', 'rep_regles', 'rep_evenements',
+        'rep_contacts', 'rep_regles', 'rep_evenements', 'rep_clients',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [
@@ -69,7 +69,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Suivi : un lien secret pour l'équipe, un autre pour le client (sa demande uniquement).
             'jeton_interne' => 'TEXT', 'jeton_client' => 'TEXT', 'pris_par' => 'TEXT', 'rappel_prevu' => 'TEXT',
             // Par où la demande est arrivée : telephone | whatsapp | chat | email.
-            'canal' => 'TEXT'],
+            'canal' => 'TEXT', 'client_id' => 'INTEGER'],
         // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
         'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
@@ -169,12 +169,22 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('equipe_initiale', ?)")->execute([ma_now()]);
     }
 
+    // Base clients : constituée une seule fois à partir de toutes les demandes, puis tenue à jour à chaque demande.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'clients_constitues'");
+    $st->execute();
+    $clientsAFaire = !$st->fetchColumn();
+
     // Les leads du chat d'avant le circuit commun deviennent des demandes, une seule fois, sans rien envoyer.
     $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'chat_leads_repris'");
     $st->execute();
     if (!$st->fetchColumn() && in_array('chat_leads', $present, true)) {
         $n = ma_chat_reprise($pdo);
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('chat_leads_repris', ?)")->execute([ma_now() . ' : ' . $n . ' lead(s)']);
+    }
+
+    if ($clientsAFaire && in_array('rep_demandes', $present, true)) {
+        $n = ma_clients_reprise($pdo);
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('clients_constitues', ?)")->execute([ma_now() . ' : ' . $n . ' demande(s) rattachée(s)']);
     }
 
     $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('schema_version', ?)")
@@ -2157,6 +2167,7 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
     if ($d['fiche_id']) {
         $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, $d['fiche_id']]);
     }
+    ma_client_rattacher($db, $id);
     $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
     $st->execute([$id]);
     $cree = $st->fetch();
@@ -2266,6 +2277,7 @@ function ma_chat_demande(PDO $db, int $leadId): ?array
                 $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
                 $db->prepare("UPDATE rep_demandes SET $sets WHERE id = ?")->execute([...array_values($maj), $dem['id']]);
                 ma_rep_evenement($db, (int) $dem['id'], 'modifiee', 'Claire', 'chat', 'Le visiteur a complété sa demande sur le chat : ' . implode(', ', array_keys($maj)), $maj);
+                ma_client_rattacher($db, (int) $dem['id']);
             }
             $rt = ma_rep_router($db, array_merge($dem, $maj, ['jeton_interne' => $dem['jeton_interne']]));
             $st->execute([(int) $dem['id']]);
@@ -2341,4 +2353,217 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
     ma_rep_evenement($db, (int) $apres['id'], 'transferee', $par ?: null, 'plateforme', 'Transférée à ' . $cible['nom'] . ($svcCible !== $dem['service'] ? ', passée au ' . ma_rep_service_libelle($svcCible) : ''),
         ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
     return $apres;
+}
+
+// ------------------------------------------------------------------ Base clients et reconnaissance
+
+/** Numéro utilisable pour reconnaître quelqu'un (chiffres uniquement, 9 à 15), sinon null. */
+function ma_tel_cle(?string $tel): ?string
+{
+    $t = ma_tel($tel);
+    return $t && preg_match('/^\d{9,15}$/', $t) ? $t : null;
+}
+
+/**
+ * Rattache une demande à la fiche de son client (même numéro, sinon même e-mail), crée la fiche au
+ * besoin, et la met à jour avec ce que la demande apprend de plus récent. Les compteurs sont recalculés.
+ */
+function ma_client_rattacher(PDO $db, int $demandeId): ?int
+{
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$demandeId]);
+    $d = $st->fetch();
+    if (!$d) {
+        return null;
+    }
+    $tel = ma_tel_cle($d['tel'] ?? null);
+    $email = str_contains((string) ($d['email'] ?? ''), '@') ? mb_strtolower(trim((string) $d['email'])) : null;
+    if (!$tel && !$email) {
+        return null;
+    }
+    $c = null;
+    if ($tel) {
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE tel = ? ORDER BY id LIMIT 1');
+        $q->execute([$tel]);
+        $c = $q->fetch() ?: null;
+    }
+    if (!$c && $email) {
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY id LIMIT 1');
+        $q->execute([$email]);
+        $c = $q->fetch() ?: null;
+        // Même e-mail mais un autre numéro déjà connu : c'est une autre personne de la même maison.
+        if ($c && $tel && $c['tel'] && $c['tel'] !== $tel) {
+            $c = null;
+        }
+    }
+    $now = ma_now();
+    if (!$c) {
+        $id = ma_inserer($db, 'rep_clients', ['tel' => $tel, 'email' => $email, 'created_at' => $now, 'updated_at' => $now]);
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE id = ?');
+        $q->execute([$id]);
+        $c = $q->fetch();
+    }
+    $cid = (int) $c['id'];
+    $db->prepare('UPDATE rep_demandes SET client_id = ? WHERE id = ?')->execute([$cid, $demandeId]);
+
+    // Ce que l'on sait de plus récent, demande après demande (la plus récente l'emporte, les vides n'effacent rien).
+    $q = $db->prepare('SELECT * FROM rep_demandes WHERE client_id = ? ORDER BY created_at, id');
+    $q->execute([$cid]);
+    $liste = $q->fetchAll();
+    $maj = ['tel' => $c['tel'] ?: $tel, 'email' => $c['email'] ?: $email];
+    $champs = ['contact' => 'contact', 'societe' => 'societe', 'type_client' => 'type_client', 'type_interlocuteur' => 'type_interlocuteur',
+        'code_postal' => 'code_postal', 'departement' => 'departement', 'marque' => 'marque', 'modele' => 'modele', 'numero_serie' => 'numero_serie',
+        'compte_distributeur' => 'compte_distributeur'];
+    foreach ($liste as $x) {
+        foreach ($champs as $k => $col) {
+            $v = trim((string) ($x[$col] ?? ''));
+            if ($v !== '' && !in_array(ma_plat($v), ['inconnue', 'autre', 'non communique', 'societe non precisee'], true)) {
+                $maj[$k] = $v;
+            }
+        }
+    }
+    $der = end($liste);
+    $maj += [
+        'nb_demandes' => count($liste),
+        'nb_urgences' => count(array_filter($liste, fn($x) => $x['priorite'] === 'URGENT')),
+        'premiere_demande' => $liste[0]['created_at'] ?? null,
+        'derniere_demande' => $der['created_at'] ?? null,
+        'derniere_demande_id' => $der['id'] ?? null,
+        'updated_at' => $now,
+    ];
+    $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+    $db->prepare("UPDATE rep_clients SET $sets WHERE id = ?")->execute([...array_values($maj), $cid]);
+    return $cid;
+}
+
+/** Constitution de la base : toutes les demandes sans fiche client, de la plus ancienne à la plus récente. */
+function ma_clients_reprise(PDO $db): int
+{
+    $n = 0;
+    foreach ($db->query('SELECT id FROM rep_demandes WHERE client_id IS NULL ORDER BY created_at, id')->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        if (ma_client_rattacher($db, (int) $id)) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Libellé de fidélité : choisi par l'équipe, sinon déduit du nombre de demandes. */
+function ma_client_fidelite(array $c): string
+{
+    $s = ma_plat($c['statut_client'] ?? '');
+    if ($s !== '') {
+        return $s;
+    }
+    return ((int) ($c['nb_demandes'] ?? 0)) >= 3 ? 'fidele' : (((int) ($c['nb_demandes'] ?? 0)) >= 2 ? 'recurrent' : 'nouveau');
+}
+
+/**
+ * Qui appelle ? Cherche le numéro (ou l'e-mail) dans la base clients, puis dans les appels passés, les
+ * distributeurs et les devis. Rend ce qu'il faut à Claire pour accueillir la personne par son nom et ne
+ * pas redemander ce qu'on sait déjà. Jamais de coordonnée d'un collaborateur.
+ */
+function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): array
+{
+    $tel = ma_tel_cle($tel);
+    $email = str_contains((string) $email, '@') ? mb_strtolower(trim((string) $email)) : null;
+    $out = ['connu' => false, 'tel' => $tel];
+    $c = null;
+    if ($tel) {
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE tel = ? ORDER BY derniere_demande DESC LIMIT 1');
+        $q->execute([$tel]);
+        $c = $q->fetch() ?: null;
+    }
+    if (!$c && $email) {
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY derniere_demande DESC LIMIT 1');
+        $q->execute([$email]);
+        $c = $q->fetch() ?: null;
+    }
+    // Distributeur de l'annuaire : reconnu même s'il n'a jamais appelé.
+    $distri = null;
+    $tous = $db->query("SELECT * FROM distributeurs WHERE (telephone IS NOT NULL AND telephone != '') OR (email IS NOT NULL AND email != '')")->fetchAll();
+    foreach ($tous as $x) {
+        if (($tel && ma_tel_cle($x['telephone']) === $tel) || ($email && mb_strtolower(trim((string) $x['email'])) === $email)) {
+            $distri = $x;
+            break;
+        }
+    }
+    $fiche = null;
+    if (!$c && $tel) {
+        $q = $db->prepare('SELECT * FROM rep_fiches WHERE tel_norm = ? ORDER BY created_at DESC LIMIT 1');
+        $q->execute([$tel]);
+        $fiche = $q->fetch() ?: null;
+    }
+    if (!$c && !$distri && !$fiche) {
+        $out['contexte'] = 'Appelant inconnu : première prise de contact. Recueillez toutes les informations.';
+        return $out;
+    }
+    $out['connu'] = true;
+    $out['client_id'] = $c ? (int) $c['id'] : null;
+    $out['contact'] = $c['contact'] ?? ($fiche['contact'] ?? ($distri ? trim(($distri['prenom'] ?? '') . ' ' . ($distri['nom'] ?? '')) : null));
+    $out['societe'] = $c['societe'] ?? ($fiche['societe'] ?? ($distri['raison_sociale'] ?? null));
+    $out['type_interlocuteur'] = $distri ? 'distributeur' : ($c['type_interlocuteur'] ?? ($c && $c['type_client'] === 'distributeur' ? 'distributeur' : null));
+    $out['email'] = $c['email'] ?? ($fiche['email'] ?? ($distri['email'] ?? null));
+    $out['code_postal'] = $c['code_postal'] ?? ($fiche['code_postal'] ?? null);
+    $out['departement'] = $c['departement'] ?? ($fiche['departement'] ?? null);
+    $out['marque'] = $c['marque'] ?? ($fiche['marque'] ?? ($distri['marque'] ?? null));
+    $out['modele'] = $c['modele'] ?? ($fiche['modele'] ?? null);
+    $out['numero_serie'] = $c['numero_serie'] ?? null;
+    $out['compte_distributeur'] = $distri['compte'] ?? ($c['compte_distributeur'] ?? null);
+    $out['nb_demandes'] = (int) ($c['nb_demandes'] ?? 0);
+    $out['fidelite'] = $c ? ma_client_fidelite($c) : ($distri ? 'distributeur' : 'nouveau');
+    $out['notes'] = $c['notes'] ?? null;
+    // Dernière demande, et celle qui serait encore ouverte : Claire peut dire où elle en est.
+    $ouverte = null;
+    $derniere = null;
+    if ($c) {
+        $q = $db->prepare("SELECT * FROM rep_demandes WHERE client_id = ? ORDER BY created_at DESC LIMIT 5");
+        $q->execute([$c['id']]);
+        $dems = $q->fetchAll();
+        $derniere = $dems[0] ?? null;
+        foreach ($dems as $x) {
+            if ($x['statut'] !== 'traite') {
+                $ouverte = $x;
+                break;
+            }
+        }
+    }
+    $resume = function (?array $x): ?array {
+        if (!$x) {
+            return null;
+        }
+        [$materiel, $sujet] = ma_rep_objet_client($x);
+        return ['id' => (int) $x['id'], 'date' => ma_date_fr($x['created_at'], false), 'service' => $x['service'], 'objet' => trim($materiel . ($materiel && $sujet ? ' — ' : '') . $sujet),
+            'statut' => ['a_traiter' => 'pas encore prise en charge', 'en_cours' => 'en cours', 'traite' => 'traitée'][$x['statut']] ?? $x['statut'],
+            'pris_par' => $x['pris_par'] ?: null, 'rappel_prevu' => $x['rappel_prevu'] ? ma_date_fr($x['rappel_prevu']) : null];
+    };
+    $out['derniere_demande'] = $resume($derniere);
+    $out['demande_ouverte'] = $resume($ouverte);
+    // Phrase prête à l'emploi pour Claire.
+    $p = [];
+    $p[] = 'Appelant connu' . ($out['contact'] ? ' : ' . $out['contact'] : '') . ($out['societe'] ? ', ' . $out['societe'] : '')
+        . ($out['type_interlocuteur'] === 'distributeur' ? ' (distributeur' . ($out['compte_distributeur'] ? ', compte ' . $out['compte_distributeur'] : '') . ')' : '') . '.';
+    if ($out['nb_demandes'] > 0) {
+        $p[] = $out['nb_demandes'] . ' demande' . ($out['nb_demandes'] > 1 ? 's' : '') . ' déjà enregistrée' . ($out['nb_demandes'] > 1 ? 's' : '')
+            . ($out['fidelite'] === 'fidele' || $out['fidelite'] === 'vip' ? ' : client fidèle, à remercier de sa confiance' : '') . '.';
+    }
+    $infos = array_filter(['site ' . ($out['code_postal'] ?: ($out['departement'] ? 'département ' . $out['departement'] : '')) => $out['code_postal'] || $out['departement'],
+        'matériel ' . trim(($out['marque'] ?? '') . ' ' . ($out['modele'] ?? '')) => (bool) $out['marque'], 'e-mail ' . $out['email'] => (bool) $out['email']]);
+    if ($infos) {
+        $p[] = 'Déjà connu : ' . implode(', ', array_keys($infos)) . '. Faites-les confirmer au lieu de les redemander.';
+    }
+    if ($out['demande_ouverte']) {
+        $o = $out['demande_ouverte'];
+        $p[] = 'Demande en cours n° ' . $o['id'] . ' du ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ' : ' . $o['statut']
+            . ($o['pris_par'] ? ', suivie par ' . $o['pris_par'] : '') . ($o['rappel_prevu'] ? ', rappel prévu ' . $o['rappel_prevu'] : '')
+            . '. Demandez si l\'appel concerne cette demande avant d\'en ouvrir une nouvelle.';
+    } elseif ($out['derniere_demande']) {
+        $o = $out['derniere_demande'];
+        $p[] = 'Dernière demande le ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ', traitée.';
+    }
+    if (trim((string) $out['notes']) !== '') {
+        $p[] = 'Note de l\'équipe : ' . trim((string) $out['notes']);
+    }
+    $out['contexte'] = implode(' ', $p);
+    return $out;
 }
