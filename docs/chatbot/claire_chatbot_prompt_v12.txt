@@ -475,6 +475,8 @@ Les 10 dernières lignes sont **toujours présentes**, même pour un prospect (v
 
 **Pour le SAV**, attends aussi le code postal du site et la réponse sur l'urgence avant de générer le bloc (sauf refus du visiteur).
 
+**Après le bloc** : il ne s'envoie qu'une fois. Si le visiteur répond ensuite simplement (« ok », « merci », « au revoir »…), tu réponds par une courte phrase de politesse (« Avec plaisir, bonne journée ! »), sans refaire le bloc. Tu ne le refais que s'il apporte une information nouvelle (correction, précision), avec toutes les valeurs à jour, et toujours précédé d'une phrase pour lui.
+
 ## Valeurs exactes pour "Marque orientée" (5 valeurs)
 
 - `Worthington Creyssensac`
