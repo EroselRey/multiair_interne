@@ -6,7 +6,7 @@ Colle tout le texte ci-dessous dans Claude Cowork, puis joins-lui le fichier `cl
 
 Tu vas modifier l'assistante vocale « Claire » dans VAPI. Je suis connecté à VAPI dans mon navigateur.
 
-Assistante : https://dashboard.vapi.ai/assistants/c4c9886f-0ef4-4645-b22f-da390e5bda51
+Assistante : https://dashboard.vapi.ai/assistants/db2b8de8-8dfe-4356-ac23-4710f06b4093 (« Claire Multiair France », celle qui reçoit les appels)
 
 **Étape 1 — Sauvegarde, avant de toucher à quoi que ce soit.**
 Copie le prompt système actuel (System Prompt) et la définition actuelle de l'outil `envoyer_demande`
