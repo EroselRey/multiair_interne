@@ -318,7 +318,8 @@
   const ETATS = {qualification: 'Avec Claire', a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traitée'};
   const etatDe = (d) => (d.fiche ? 'qualification' : d.statut);
   const estUrgente = (d) => !d.fiche && d.priorite === 'URGENT' && d.statut === 'a_traiter';
-  const etatPill = (d) => estUrgente(d) ? '<span class="st urgent">URGENT</span>' : `<span class="st ${etatDe(d)}">${h(ETATS[etatDe(d)] || etatDe(d))}</span>`;
+  const etatPill = (d) => (estUrgente(d) ? '<span class="st urgent">URGENT</span>' : `<span class="st ${etatDe(d)}">${h(ETATS[etatDe(d)] || etatDe(d))}</span>`)
+    + (Number(d.nb_relances) && d.statut !== 'traite' ? ` <span class="pill danger" title="Le client a rappelé">Relancée${Number(d.nb_relances) > 1 ? ' ×' + d.nb_relances : ''}</span>` : '');
   const svcPill = (s) => `<span class="pill">${h(SERVICES[s] || s || '—')}</span>`;
   const telFr = (t) => { const m = String(t || '').match(/^33(\d{9})$/); return m ? ('0' + m[1]).replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
   const sujetDe = (d) => d.type_panne || d.besoin_commercial || (d.nature ? nomDe(R_NATURES, d.nature) : '')
@@ -560,10 +561,10 @@
   const TYPES_HIST = {
     recue: ['Réception', 'inbox'], transmise: ['Transmission', 'envoi'], client_prevenu: ['Message au client', 'envoi'],
     prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
-    rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
+    rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], relance: ['Relance du client', 'retour'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
   };
   const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
-  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
+  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
   const vueHist = {f: 'tout'};
 
   function historiqueHtml(ev) {

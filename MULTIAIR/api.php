@@ -467,7 +467,7 @@ try {
                 if ($method === 'POST' && $sub2 === null) {
                     $r = ma_rep_creer_demande($db, $body);
                     $rt = $r['rt'];
-                    out(['ok' => true, 'id' => $r['id'], 'service' => $r['demande']['service'], 'priorite' => $r['demande']['priorite'], 'urgent' => $rt['urgent'],
+                    out(['ok' => true, 'id' => $r['id'], 'relance' => $r['relance'] ?? null, 'service' => $r['demande']['service'], 'priorite' => $r['demande']['priorite'], 'urgent' => $rt['urgent'],
                         'lien_interne' => $r['liens']['interne'], 'lien_client' => $r['liens']['client'],
                         // Champs historiques, lus par le scénario Make actuel : ils suivent désormais les règles.
                         'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => $rt['regle_libelle'],

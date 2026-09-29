@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29h';
+const MA_VERSION = '2026-09-29i';
 
 function ma_config(): array
 {
@@ -69,7 +69,9 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Suivi : un lien secret pour l'équipe, un autre pour le client (sa demande uniquement).
             'jeton_interne' => 'TEXT', 'jeton_client' => 'TEXT', 'pris_par' => 'TEXT', 'rappel_prevu' => 'TEXT',
             // Par où la demande est arrivée : telephone | whatsapp | chat | email.
-            'canal' => 'TEXT', 'client_id' => 'INTEGER', 'equipement_id' => 'INTEGER'],
+            'canal' => 'TEXT', 'client_id' => 'INTEGER', 'equipement_id' => 'INTEGER',
+            // Le client rappelle pour la même demande : relances comptées, demande liée si nouvelle.
+            'nb_relances' => 'INTEGER NOT NULL DEFAULT 0', 'derniere_relance' => 'TEXT', 'demande_liee_id' => 'INTEGER'],
         // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
         'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
@@ -1549,6 +1551,13 @@ function ma_rep_message_client(PDO $db, array $dem, string $evenement): array
                 . ($qui !== '' ? ', par ' . $qui . ', ' . $role : '') . '.', 2];
         case 'traitee':
             return ['Demande traitée', 'Votre demande ' . $num . ' est traitée. Merci de votre confiance.', 3];
+        case 'relance_client':
+            $futur = !empty($dem['rappel_prevu']) && strtotime((string) $dem['rappel_prevu']) > time();
+            return ['Demande toujours en cours', 'Votre demande ' . $num . ' est toujours en cours' . ($qui !== '' ? ', suivie par ' . $qui . ', ' . $role : '') . '. '
+                . ($futur ? 'Votre rappel reste prévu ' . ma_date_parlee($dem['rappel_prevu']) . ', et nous avons prévenu l\'équipe de votre appel.'
+                    : 'Nous avons relancé l\'équipe pour qu\'elle vous recontacte au plus vite.'), 2];
+        case 'rouverte':
+            return ['Demande rouverte', 'Votre demande ' . $num . ' a été rouverte et transmise à nouveau à notre équipe. Nous vous recontactons au plus vite.', 1];
     }
     return ['', '', 1];
 }
@@ -2120,6 +2129,26 @@ function ma_inserer(PDO $db, string $table, array $data): int
 function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
 {
     $now = ma_now();
+    // Le client rappelle au sujet d'une demande existante (Claire écrit « Relance de la demande n° 37 »).
+    if (empty($opt['reprise'])) {
+        $relanceId = (int) ($d['relance_demande_id'] ?? 0);
+        if (!$relanceId && preg_match('/relance\s+(?:de\s+)?(?:la\s+)?demande\s+n\W{0,2}\s*(\d+)/iu', (string) ($d['resume'] ?? ''), $m)) {
+            $relanceId = (int) $m[1];
+        }
+        if ($relanceId && ($x = ma_rep_demande_du_client($db, $relanceId, $d))) {
+            $jours = (int) (ma_param($db, 'rep_reouverture_jours', '15') ?: 15);
+            if ($x['statut'] !== 'traite') {
+                return ma_rep_relancer($db, $x, $d, 'relance');
+            }
+            if (strtotime((string) ($x['traite_at'] ?: $x['created_at'])) >= time() - $jours * 86400) {
+                return ma_rep_relancer($db, $x, $d, 'reouverture');
+            }
+            // Fermée depuis longtemps : nouvelle demande, liée à l'ancienne pour garder le fil.
+            $d['demande_liee_id'] = $relanceId;
+            $d['resume'] = 'Suite de la demande n° ' . $relanceId . ' (traitée le ' . ma_date_fr($x['traite_at'], false) . '). '
+                . trim(preg_replace('/relance\s+(?:de\s+)?(?:la\s+)?demande\s+n\W{0,2}\s*\d+\.?/iu', '', (string) ($d['resume'] ?? '')));
+        }
+    }
     $svc = strtoupper(ma_plat(ma_str($d['service'] ?? null) ?? ''));
     $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'COMMERCE' => 'COMMERCIAL', 'FINANCE' => 'FINANCE',
         'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE'];
@@ -2667,8 +2696,11 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
         }
         [$materiel, $sujet] = ma_rep_objet_client($x);
         return ['id' => (int) $x['id'], 'date' => ma_date_fr($x['created_at'], false), 'service' => $x['service'], 'objet' => trim($materiel . ($materiel && $sujet ? ' — ' : '') . $sujet),
-            'statut' => ['a_traiter' => 'pas encore prise en charge', 'en_cours' => 'en cours', 'traite' => 'traitée'][$x['statut']] ?? $x['statut'],
-            'pris_par' => $x['pris_par'] ?: null, 'rappel_prevu' => $x['rappel_prevu'] ? ma_date_fr($x['rappel_prevu']) : null];
+            'statut' => ['a_traiter' => 'pas encore prise en charge', 'en_cours' => 'prise en charge' . ($x['pris_at'] ? ' ' . ma_date_parlee($x['pris_at']) : ''),
+                'traite' => 'traitée' . ($x['traite_at'] ? ' ' . ma_date_parlee($x['traite_at']) : '')][$x['statut']] ?? $x['statut'],
+            'pris_par' => $x['pris_par'] ?: null, 'rappel_prevu' => $x['rappel_prevu'] ? ma_date_parlee($x['rappel_prevu']) : null,
+            'rappel_depasse' => $x['rappel_prevu'] && $x['statut'] !== 'traite' && strtotime((string) $x['rappel_prevu']) < time(),
+            'traite_at' => $x['traite_at'], 'nb_relances' => (int) ($x['nb_relances'] ?? 0)];
     };
     $out['derniere_demande'] = $resume($derniere);
     $out['demande_ouverte'] = $resume($ouverte);
@@ -2705,11 +2737,23 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
         }
     }
     $out['materiels'] = array_values($materiels);
+    $p[] = 'Nous sommes ' . ma_date_parlee(ma_now(), true) . '.';
     if ($out['demande_ouverte']) {
         $o = $out['demande_ouverte'];
-        $p[] = 'Demande en cours n° ' . $o['id'] . ' du ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ' : ' . $o['statut']
-            . ($o['pris_par'] ? ', suivie par ' . $o['pris_par'] : '') . ($o['rappel_prevu'] ? ', rappel prévu ' . $o['rappel_prevu'] : '')
-            . '. Demandez si l\'appel concerne cette demande. Si oui, vous avez déjà le matériel et le site : faites-les seulement confirmer. Sinon, c\'est un nouveau sujet : demandez ce dont il a besoin.';
+        $p[] = 'Demande encore ouverte n° ' . $o['id'] . ' du ' . $o['date'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ' : ' . $o['statut']
+            . ($o['pris_par'] ? ', suivie par ' . $o['pris_par'] : '') . '.'
+            . ($o['rappel_prevu'] ? ($o['rappel_depasse']
+                ? ' Le rappel était prévu ' . $o['rappel_prevu'] . ' et n\'a pas encore eu lieu : excusez-vous du retard.'
+                : ' Rappel prévu ' . $o['rappel_prevu'] . ' : dites-le au client.') : '')
+            . ($o['nb_relances'] ? ' Le client a déjà relancé ' . $o['nb_relances'] . ' fois.' : '')
+            . ' Demandez si l\'appel concerne cette demande. Si oui : confirmez-lui qu\'elle est toujours ouverte, dites où elle en est, dites que vous relancez l\'équipe,'
+            . ' faites confirmer le matériel et le site déjà connus, et transmettez avec « Relance de la demande n° ' . $o['id'] . '. » au début de resume.'
+            . ' Sinon, c\'est un nouveau sujet : demandez ce dont il a besoin.';
+    } elseif ($derniere && $derniere['statut'] === 'traite' && strtotime((string) ($derniere['traite_at'] ?: $derniere['created_at'])) >= time() - (int) (ma_param($db, 'rep_reouverture_jours', '15') ?: 15) * 86400) {
+        $o = $out['derniere_demande'];
+        $p[] = 'Dernière demande n° ' . $o['id'] . ($o['objet'] ? ' (' . $o['objet'] . ')' : '') . ' : ' . $o['statut'] . '.'
+            . ' Si le client revient pour le même problème (il n\'est pas réglé, il revient), dites-lui que vous rouvrez sa demande et transmettez avec'
+            . ' « Relance de la demande n° ' . $o['id'] . '. » au début de resume. Sinon, c\'est un nouveau sujet.';
     } elseif ($recente) {
         $o = $out['derniere_demande'];
         $p[] = 'Dernier contact ' . $ilya($derniere['created_at']) . ($o['objet'] ? ' pour : ' . $o['objet'] : '') . ' (' . $o['statut'] . ').'
@@ -2729,4 +2773,149 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     }
     $out['contexte'] = implode(' ', $p);
     return $out;
+}
+
+// ------------------------------------------------------------------ Relances : le client rappelle pour une demande existante
+
+/** La demande n° $id, si elle appartient bien à ce client (même numéro, même e-mail ou même fiche client). */
+function ma_rep_demande_du_client(PDO $db, int $id, array $d): ?array
+{
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$id]);
+    $x = $st->fetch();
+    if (!$x) {
+        return null;
+    }
+    $tel = ma_tel_cle($d['tel'] ?? $d['telephone'] ?? null);
+    $email = str_contains((string) ($d['email'] ?? ''), '@') ? mb_strtolower(trim((string) $d['email'])) : null;
+    if (($tel && $tel === ma_tel_cle($x['tel'])) || ($email && $email === mb_strtolower(trim((string) $x['email'])))) {
+        return $x;
+    }
+    if ($tel && $x['client_id']) {
+        $c = $db->prepare('SELECT tel FROM rep_clients WHERE id = ?');
+        $c->execute([$x['client_id']]);
+        if ($tel === (string) $c->fetchColumn()) {
+            return $x;
+        }
+    }
+    return null;
+}
+
+/**
+ * Le client revient sur une demande : si elle est ouverte, on relance l'équipe ; si elle a été fermée
+ * récemment, on la rouvre. Pas de doublon : ce que le client a dit s'ajoute à la demande existante.
+ * Rend la même forme que ma_rep_creer_demande : le scénario Make envoie l'e-mail et le SMS de relance.
+ */
+function ma_rep_relancer(PDO $db, array $x, array $d, string $mode): array
+{
+    $now = ma_now();
+    $id = (int) $x['id'];
+    $canal = ma_canal($d);
+    $dit = trim(preg_replace('/relance\s+(?:de\s+)?(?:la\s+)?demande\s+n\W{0,2}\s*\d+\.?/iu', '', (string) ($d['resume'] ?? ($d['type_panne'] ?? ''))));
+    $maj = ['nb_relances' => (int) $x['nb_relances'] + 1, 'derniere_relance' => $now];
+    $urgentMaintenant = $x['service'] === 'SAV' && ma_rep_urgent($d);
+    if ($urgentMaintenant && $x['priorite'] !== 'URGENT') {
+        $maj['priorite'] = 'URGENT';
+        $maj['justification_urgence'] = ma_str($d['justification_urgence'] ?? null) ?? $x['justification_urgence'];
+    }
+    if ($mode === 'reouverture') {
+        $maj['statut'] = 'a_traiter';
+    }
+    foreach (['email', 'code_postal', 'numero_serie', 'modele'] as $k) {
+        if (trim((string) ($x[$k] ?? '')) === '' && trim((string) ($d[$k] ?? '')) !== '' && ($k !== 'email' || str_contains((string) $d[$k], '@'))) {
+            $maj[$k] = trim((string) $d[$k]);
+        }
+    }
+    $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+    $db->prepare("UPDATE rep_demandes SET $sets WHERE id = ?")->execute([...array_values($maj), $id]);
+    if (!empty($d['fiche_id'])) {
+        $db->prepare("UPDATE rep_fiches SET transmis_at = COALESCE(transmis_at, ?) WHERE id = ?")->execute([$now, (int) $d['fiche_id']]);
+    }
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$id]);
+    $apres = $st->fetch();
+
+    // Qui relancer : ceux qui ont la demande, et la personne qui l'a prise ou fermée.
+    $personnes = [];
+    $noms = array_filter(array_unique([$apres['pris_par'], $apres['traite_par']]));
+    foreach ($noms as $nom) {
+        $q = $db->prepare("SELECT * FROM rep_contacts WHERE actif = 1 AND (lower(nom) = lower(?) OR lower(nom) LIKE lower(?)) ORDER BY length(nom) LIMIT 1");
+        $q->execute([$nom, $nom . ' %']);
+        if ($p = $q->fetch()) {
+            $personnes[$p['id']] = $p;
+        }
+    }
+    $to = ma_liste_emails($apres['dest_to']);
+    $sms = [];
+    foreach (array_filter(explode(';', (string) $apres['dest_sms'])) as $m) {
+        $sms[$m] = $m;
+    }
+    foreach ($personnes as $p) {
+        $to += ma_liste_emails($p['email'] ?? null);
+        if ($apres['service'] === 'SAV' && ($m = ma_mobile_sms($p['mobile'] ?? null))) {
+            $sms[$m] = $m;
+        }
+    }
+    $nomsListe = implode(', ', array_unique(array_filter(array_merge(array_column($personnes, 'nom'), [$apres['destinataires']]))));
+    $quand = ma_date_fr($now);
+    $intro = ($mode === 'reouverture'
+            ? 'Demande rouverte : le client a rappelé ' . $quand . ' (' . (MA_CANAUX[$canal][1] ?? '') . '), le problème n\'est pas réglé.'
+            : 'Relance du client : il a rappelé ' . $quand . ' (' . (MA_CANAUX[$canal][1] ?? '') . '), sa demande est toujours ouverte'
+                . ($apres['pris_par'] ? ' (prise par ' . $apres['pris_par'] . ')' : ' et personne ne l\'a encore prise') . '.')
+        . ($apres['rappel_prevu'] && $mode !== 'reouverture' ? (strtotime((string) $apres['rappel_prevu']) < time()
+            ? ' Le rappel prévu ' . ma_date_parlee($apres['rappel_prevu']) . ' n\'a pas eu lieu.' : ' Rappel prévu ' . ma_date_parlee($apres['rappel_prevu']) . '.') : '')
+        . ((int) $apres['nb_relances'] > 1 ? ' ' . $apres['nb_relances'] . 'e relance.' : '')
+        . ($dit !== '' ? ' Ce qu\'il dit : « ' . $dit . ' »' : '');
+    $contenu = ma_rep_message($apres, [
+        'marque_libelle' => $apres['marque'] ?? '', 'nature_libelle' => '', 'service' => ma_rep_service($apres['service']), 'marque' => $apres['marque_norm'] ?? '',
+        'type_client' => $apres['type_client'] ?? 'direct', 'urgent' => $apres['priorite'] === 'URGENT' && $apres['service'] === 'SAV',
+        'departement' => $apres['departement'], 'personnes' => array_values($personnes) ?: [['nom' => $apres['destinataires'] ?: '']],
+        'url' => ma_url_base($db), 'lien_interne' => ma_rep_liens($db, $apres)['interne'], 'transfert' => $intro,
+    ]);
+    $objet = ($mode === 'reouverture' ? 'ROUVERTE' : 'RELANCE CLIENT') . ' — demande n° ' . $id . ' — ' . $contenu['objet'];
+    $smsTexte = ($mode === 'reouverture' ? 'Demande ROUVERTE' : 'RELANCE client') . ' n° ' . $id . ' - ' . $contenu['sms_texte'];
+    if (mb_strlen($smsTexte) > 320) {
+        $smsTexte = mb_substr($smsTexte, 0, 317) . '...';
+    }
+    $envois = array_values(array_map(fn($a) => ['canal' => 'E-mail', 'a' => $a], $to));
+    foreach ($sms as $m) {
+        $envois[] = ['canal' => 'SMS', 'a' => ma_tel_lisible($m)];
+    }
+    ma_rep_evenement($db, $id, $mode === 'reouverture' ? 'rouverte' : 'relance', $d['contact'] ?? 'Client', $canal,
+        ($mode === 'reouverture' ? 'Rouverte : le client a rappelé, le problème n\'est pas réglé' : 'Le client a rappelé : relance de l\'équipe')
+        . ($urgentMaintenant && $x['priorite'] !== 'URGENT' ? ' — passée en URGENT' : ''),
+        ['texte' => $dit, 'envois' => $envois]);
+    $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+        ->execute([$canal === 'chat' ? 'chatbot' : 'repondeur', $now, 'ok', $mode === 'reouverture' ? 'demande_rouverte' : 'demande_relancee',
+            'Demande ' . $id . ' ' . ($mode === 'reouverture' ? 'rouverte' : 'relancée') . ' par le client → ' . ($nomsListe ?: implode(', ', $to))]);
+    ma_rep_notifier_client($db, $apres, $mode === 'reouverture' ? 'rouverte' : 'relance_client');
+    $rt = ['to' => implode(';', array_values($to)), 'cc' => '', 'sms' => implode(';', array_values($sms)), 'urgent' => $apres['priorite'] === 'URGENT',
+        'regle_libelle' => $mode === 'reouverture' ? 'Demande rouverte' : 'Relance du client', 'notes' => [], 'personnes' => array_values($personnes),
+        'objet' => $objet, 'mail_html' => $contenu['mail_html'], 'sms_texte' => $smsTexte, 'marque' => $apres['marque_norm'], 'nature' => $apres['nature'],
+        'type_client' => $apres['type_client'], 'type_equipement' => $apres['type_equipement'], 'departement' => $apres['departement'], 'regle_id' => null];
+    $st->execute([$id]);
+    $apres = $st->fetch();
+    return ['id' => $id, 'demande' => $apres, 'rt' => $rt, 'liens' => ma_rep_liens($db, $apres), 'relance' => $mode];
+}
+
+/** Date dite à voix haute, par rapport à maintenant : « aujourd'hui à 15h », « demain mercredi 30/09 à 10h », « hier ». */
+function ma_date_parlee(?string $dt, bool $jourComplet = false): string
+{
+    $t = $dt ? strtotime($dt) : false;
+    if (!$t) {
+        return '';
+    }
+    $jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+    $j = $jours[(int) date('w', $t)] . ' ' . date('d/m', $t);
+    $heure = date('H:i', $t) !== '00:00' ? ' à ' . date('G\hi', $t) : '';
+    $ecart = (int) round((strtotime(date('Y-m-d', $t)) - strtotime(date('Y-m-d'))) / 86400);
+    if ($jourComplet) {
+        return $j . $heure;
+    }
+    return match ($ecart) {
+        0 => "aujourd'hui" . $heure,
+        1 => 'demain ' . $j . $heure,
+        -1 => 'hier ' . $j . $heure,
+        default => 'le ' . $j . $heure,
+    };
 }
