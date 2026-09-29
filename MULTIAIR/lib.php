@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29l';
+const MA_VERSION = '2026-09-29m';
 
 function ma_config(): array
 {
@@ -2207,10 +2207,6 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
     $d['jeton_interne'] = ma_jeton();
     $d['jeton_client'] = ma_jeton();
     $rt = ma_rep_router($db, $d);
-    // Chat : le SMS à l'équipe ne part que pour un SAV urgent (le scénario ne l'envoie pas sinon).
-    if ($d['canal'] === 'chat' && !$rt['urgent']) {
-        $rt['sms'] = '';
-    }
     $d['marque_norm'] = $rt['marque'];
     $d['nature'] = $rt['nature'] ?: null;
     $d['type_client'] = $rt['type_client'];

@@ -969,13 +969,14 @@ try {
                     // envoie son e-mail interne aux destinataires renvoyés ici.
                     $dm = ma_chat_demande($db, $r['id']);
                     $rt = $dm['rt'] ?? ['to' => '', 'cc' => '', 'regle_libelle' => '', 'sms' => '', 'urgent' => false, 'objet' => '', 'mail_html' => '', 'sms_texte' => ''];
-                    // Qui prévenir : l'e-mail à l'équipe part pour une nouvelle demande ou une relance ; le SMS
-                    // (SAV urgent) aussi, ou quand la demande devient urgente en cours de conversation.
+                    // Qui prévenir : l'e-mail à l'équipe part pour une nouvelle demande ou une relance ; le SMS,
+                    // comme au téléphone, pour toute demande SAV (et quand elle devient urgente en cours de route).
                     $nouvelle = !empty($dm['nouvelle']) && empty($dm['relance']);
                     $envoyer = !empty($dm['nouvelle']) || !empty($dm['devient_urgente']);
+                    $sav = strtoupper((string) ($dm['demande']['service'] ?? '')) === 'SAV';
                     out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $nouvelle,
                         'relance' => $dm['relance'] ?? null, 'envoyer_equipe' => $envoyer,
-                        'alerte_sms' => $envoyer && $rt['urgent'] && trim((string) $rt['sms']) !== '',
+                        'alerte_sms' => $envoyer && ($sav || $rt['urgent']) && trim((string) $rt['sms']) !== '',
                         'nb_mises_a_jour' => $r['nb_mises_a_jour'], 'demande_id' => $dm['id'] ?? null,
                         'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => ($dm['demande']['destinataires'] ?? '') ?: $rt['regle_libelle'],
                         'service' => $dm['demande']['service'] ?? null, 'urgent' => $rt['urgent'], 'sms' => $rt['sms'], 'sms_texte' => $rt['sms_texte'],

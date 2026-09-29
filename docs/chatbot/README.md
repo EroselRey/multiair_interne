@@ -24,6 +24,6 @@ Le texte des consignes en service est `claire_chatbot_prompt_v12.txt` (champ « 
    (`page_url`, `page_title`). La plateforme lit tout le bloc elle-même.
 2. E-mail à l'équipe : gabarit de la plateforme (`mail_html`, `objet`), aux destinataires calculés, réponse
    directe au visiteur. Envoyé pour une nouvelle demande et pour une relance.
-3. SAV urgent : SMS aux portables renvoyés par la plateforme (`alerte_sms`, `sms`, `sms_texte`).
+3. SAV (urgent ou non, comme au téléphone) : SMS aux portables renvoyés par la plateforme (`alerte_sms`, `sms`, `sms_texte`).
 4. Visiteur : e-mail de confirmation envoyé par la plateforme (n° de demande + lien de suivi,
    paramètre `chat_notifier_client = 1`) ; SMS de courtoisie conservé pour les portables.
