@@ -405,8 +405,8 @@
           </div>
           <div style="margin-top:10px"><button class="btn primary" id="simGo">Qui reçoit ?</button></div>
           <div class="route-res" id="simRes"></div>`)}
-        ${bloc('Adresse de repli', 'Reçoit ce qu\'aucun tableau ne couvre, et les demandes dont personne n\'est joignable.', `
-          <input name="rep_repli_email" value="${h(params.rep_repli_email)}" style="width:100%">
+        ${bloc('Adresses de secours', 'Reçoivent ce qu\'aucun tableau ne couvre, et les demandes dont personne n\'est joignable. Une ou plusieurs adresses, séparées par ;', `
+          <input name="rep_repli_email" value="${h(params.rep_repli_email)}" placeholder="ex. cyril.mortier@airwco.com; service.clients@multiairfrance.store" style="width:100%">
           <div style="margin-top:10px"><button class="btn small primary" id="saveRepli">Enregistrer</button></div>`)}
         <details><summary class="hint" style="cursor:pointer">WhatsApp non identifiés (aiguilleur)</summary><div id="oldRoutage" style="margin-top:10px"></div></details>`,
     };
