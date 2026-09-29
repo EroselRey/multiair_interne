@@ -188,6 +188,7 @@
   const editForm = (fields, obj) => fields.map((f) => `<div class="editrow"><label>${h(f.label)}</label>${
     f.type === 'select' ? `<select name="${h(f.key)}">${f.options.map((o) => { const v = Array.isArray(o) ? o[0] : o, t = Array.isArray(o) ? o[1] : o; return `<option value="${h(v)}" ${String(obj[f.key] ?? '') === String(v) ? 'selected' : ''}>${h(t)}</option>`; }).join('')}</select>`
     : f.type === 'textarea' ? `<textarea name="${h(f.key)}">${h(obj[f.key])}</textarea>`
+    : f.type === 'datetime' ? `<input type="datetime-local" name="${h(f.key)}" value="${h(String(obj[f.key] || '').replace(' ', 'T').slice(0, 16))}">`
     : `<input name="${h(f.key)}" value="${h(obj[f.key])}">`}</div>`).join('');
   const readForm = (root, fields) => Object.fromEntries(fields.map((f) => [f.key, $(`[name="${f.key}"]`, root).value]));
   const saveBtn = (label = 'Enregistrer') => `<button class="btn primary" id="drawerSave">${h(label)}</button>`;
@@ -595,11 +596,13 @@
       $('#drawerSave').onclick = async () => { await patch('rep/fiches/' + f.id, readForm($('#drawerBody'), fields)); toast('Fiche enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette fiche ?')) { await api('rep/fiches/' + f.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
     };
+    const suiviBase = location.origin + location.pathname.replace(/[^/]*$/, '');
     const telFr = (t) => { const m = String(t || '').match(/^33(\d{9})$/); return m ? ('0' + m[1]).replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
     const demande = (d) => {
       const fields = [
         {key: 'statut', label: 'Suivi du rappel', type: 'select', options: [['a_traiter', 'À traiter'], ['en_cours', 'En cours (pris en charge)'], ['traite', 'Traitée (client rappelé)']]},
-        {key: 'traite_par', label: 'Pris en charge par'}, {key: 'commentaire', label: 'Commentaire', type: 'textarea'},
+        {key: 'pris_par', label: 'Pris en charge par'}, {key: 'rappel_prevu', label: 'Rappel / intervention prévu', type: 'datetime'},
+        {key: 'commentaire', label: 'Commentaire interne', type: 'textarea'},
       ];
       const urgent = d.priorite === 'URGENT';
       openDrawer(`${urgent ? '🔴 ' : ''}${h(d.service)} — ${h(d.societe || d.contact || '')}`, `
@@ -613,8 +616,13 @@
         <h4>Transmission</h4>
         ${kv([['Transmise à', h(d.destinataires)], ['Mails', h((d.dest_to || '').replace(/;/g, ', '))], ['Copie', h((d.dest_cc || '').replace(/;/g, ', '))],
           ['SMS', h((d.dest_sms || '').replace(/;/g, ', '))], ['Règle appliquée', h(d.regle_libelle)],
-          ['Prise en charge', fmtDate(d.pris_at)], ['Traitée le', fmtDate(d.traite_at)]])}
-        <h4>Suivi</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
+          ['Prise en charge', fmtDate(d.pris_at) + (d.pris_par ? ' — ' + h(d.pris_par) : '')], ['Rappel prévu', fmtDate(d.rappel_prevu)],
+          ['Traitée le', fmtDate(d.traite_at) + (d.traite_par ? ' — ' + h(d.traite_par) : '')]])}
+        ${d.jeton_interne ? `<h4>Liens de suivi</h4>${kv([
+          ['Page équipe', `<a href="${h(suiviBase + 'demande.php?t=' + d.jeton_interne)}" target="_blank" rel="noopener">ouvrir</a> — envoyée dans le mail et le SMS de transmission`],
+          ['Page client', `<a href="${h(suiviBase + 'suivi.php?c=' + d.jeton_client)}" target="_blank" rel="noopener">ouvrir</a> — ce que voit le client (sa demande uniquement)`]])}` : ''}
+        <h4>Suivi</h4>${editForm(fields, d)}
+        <p class="hint">Changer le statut ou la date de rappel prévient le client (WhatsApp / e-mail).</p>`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('rep/demandes/' + d.id, readForm($('#drawerBody'), fields)); toast('Demande enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette demande ?')) { await api('rep/demandes/' + d.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
     };

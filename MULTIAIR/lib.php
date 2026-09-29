@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29a';
+const MA_VERSION = '2026-09-29b';
 
 function ma_config(): array
 {
@@ -65,7 +65,9 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             'code_postal' => 'TEXT', 'marque_norm' => 'TEXT', 'type_client' => 'TEXT', 'type_equipement' => 'TEXT',
             'regle_id' => 'INTEGER', 'regle_libelle' => 'TEXT', 'destinataires' => 'TEXT',
             'dest_to' => 'TEXT', 'dest_cc' => 'TEXT', 'dest_sms' => 'TEXT', 'pris_at' => 'TEXT', 'nature' => 'TEXT',
-            'type_interlocuteur' => 'TEXT'],
+            'type_interlocuteur' => 'TEXT',
+            // Suivi : un lien secret pour l'équipe, un autre pour le client (sa demande uniquement).
+            'jeton_interne' => 'TEXT', 'jeton_client' => 'TEXT', 'pris_par' => 'TEXT', 'rappel_prevu' => 'TEXT'],
         // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
         'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT'],
@@ -101,6 +103,12 @@ function ma_migrate(PDO $pdo, bool $fresh): void
                     FROM chat_routage WHERE categorie IS NOT NULL AND categorie != ''");
     }
 
+    // Toute demande a ses deux liens de suivi, y compris celles d'avant la fonctionnalité.
+    if (in_array('rep_demandes', $present, true)) {
+        $pdo->exec("UPDATE rep_demandes SET jeton_interne = lower(hex(randomblob(16))) WHERE jeton_interne IS NULL OR jeton_interne = ''");
+        $pdo->exec("UPDATE rep_demandes SET jeton_client = lower(hex(randomblob(16))) WHERE jeton_client IS NULL OR jeton_client = ''");
+    }
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('rep_standard_tel', '01 34 32 95 00')");
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store')");
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('domaines_internes',
         'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr')");
@@ -1120,6 +1128,7 @@ function ma_rep_router(PDO $db, array $d): array
         'service' => $service, 'marque' => $marque, 'type_client' => $typeClient, 'urgent' => $urgent,
         'departement' => $dep, 'personnes' => $personnes, 'url' => $params['url_tableau_de_bord']
             ?? 'https://multiairfrance.store/calculateurs/interne/MULTIAIR/',
+        'lien_interne' => !empty($d['jeton_interne']) ? ma_url_base($db) . 'demande.php?t=' . $d['jeton_interne'] : '',
     ]);
 
     return [
@@ -1166,7 +1175,7 @@ function ma_rep_message(array $d, array $x): array
         . '<p style="font-family:system-ui,sans-serif;font-size:16px"><b>À rappeler :</b> ' . $e($contact ?: 'contact non précisé')
         . ($telLisible ? ' au <a href="tel:' . $e($tel) . '">' . $e($telLisible) . '</a>' : '') . '</p>'
         . '<table style="font-family:system-ui,sans-serif;font-size:14px;border-collapse:collapse">'
-        . $ligne('Type de client', $client . (trim((string) ($d['compte_distributeur'] ?? '')) !== '' ? ' — compte ' . $d['compte_distributeur'] : ''))
+        . $ligne('Type de client', $client)
         . $ligne('Nature de la demande', $nature)
         . $ligne('Département du site', $x['departement'] ?? '')
         . $ligne('Marque', $marque)
@@ -1181,14 +1190,25 @@ function ma_rep_message(array $d, array $x): array
         . $ligne('Email du client', $d['email'] ?? '')
         . $ligne('Transmis à', $qui)
         . '</table>'
-        . '<p style="font-family:system-ui,sans-serif;font-size:14px;margin-top:18px">Une fois le client rappelé, passez la demande '
-        . '« En cours » puis « Traitée » dans le <a href="' . $e($x['url']) . '#repondeur">tableau de bord MULTIAIR</a>.</p>';
+        . (($x['lien_interne'] ?? '') !== ''
+            ? '<p style="margin:22px 0 6px"><a href="' . $e($x['lien_interne']) . '" style="background:#1f5f8b;color:#fff;padding:12px 20px;'
+              . 'border-radius:6px;font-family:system-ui,sans-serif;font-weight:700;text-decoration:none;display:inline-block">'
+              . 'Ouvrir la demande — je la prends en charge</a></p>'
+              . '<p style="font-family:system-ui,sans-serif;font-size:13px;color:#5f6b7a">Le client est prévenu à chaque étape '
+              . '(prise en charge, rappel prévu, traitée). Ce lien est réservé à l\'équipe Multiair.</p>'
+            : '<p style="font-family:system-ui,sans-serif;font-size:14px;margin-top:18px">Une fois le client rappelé, passez la demande '
+              . '« En cours » puis « Traitée » dans le <a href="' . $e($x['url']) . '#repondeur">tableau de bord MULTIAIR</a>.</p>');
 
     $sms = ($x['urgent'] ? 'URGENT prod arretee - ' : '') . 'Multiair ' . $svc . ($marque ? ' ' . $marque : '')
         . ' : ' . $societe . $dep . ' - rappeler ' . ($contact ?: 'le client') . ($telLisible ? ' au ' . $telLisible : '')
         . (trim((string) ($d['type_panne'] ?? $d['resume'] ?? '')) !== '' ? ' - ' . trim((string) ($d['type_panne'] ?? $d['resume'])) : '');
-    if (mb_strlen($sms) > 300) {
-        $sms = mb_substr($sms, 0, 297) . '...';
+    $lienSms = (string) ($x['lien_interne'] ?? '');
+    $max = $lienSms !== '' ? 300 - mb_strlen($lienSms) - 3 : 300;
+    if (mb_strlen($sms) > $max) {
+        $sms = mb_substr($sms, 0, $max - 3) . '...';
+    }
+    if ($lienSms !== '') {
+        $sms .= ' - ' . $lienSms;
     }
     return ['objet' => $objet, 'mail_html' => $html, 'sms_texte' => $sms];
 }
@@ -1347,4 +1367,215 @@ function ma_rep_routage_initial(PDO $db): void
         'acquisitions' => $b['acq'],
         'reste' => null,
     ]);
+}
+
+// ------------------------------------------------------------------ Suivi des demandes du répondeur
+// Deux liens secrets par demande : l'un pour l'équipe (voir et faire avancer la demande sans
+// compte), l'autre pour le client (voir où en est SA demande, rien d'autre). Aucun des deux ne
+// montre le portable ni l'e-mail d'un collaborateur.
+
+function ma_url_base(PDO $db): string
+{
+    $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'url_tableau_de_bord'");
+    $st->execute();
+    $url = trim((string) ($st->fetchColumn() ?: 'https://multiairfrance.store/calculateurs/interne/MULTIAIR/'));
+    $url = preg_replace('/[#?].*$/', '', $url);
+    return rtrim(preg_replace('#/index\.php$#', '/', $url), '/') . '/';
+}
+
+function ma_param(PDO $db, string $cle, string $defaut = ''): string
+{
+    $st = $db->prepare('SELECT valeur FROM parametres WHERE cle = ?');
+    $st->execute([$cle]);
+    $v = $st->fetchColumn();
+    return $v === false || $v === null || trim((string) $v) === '' ? $defaut : (string) $v;
+}
+
+function ma_jeton(): string
+{
+    return bin2hex(random_bytes(16));
+}
+
+/** Liens de suivi d'une demande (vides si la demande n'a pas encore ses jetons). */
+function ma_rep_liens(PDO $db, array $dem): array
+{
+    $base = ma_url_base($db);
+    return [
+        'interne' => !empty($dem['jeton_interne']) ? $base . 'demande.php?t=' . $dem['jeton_interne'] : '',
+        'client' => !empty($dem['jeton_client']) ? $base . 'suivi.php?c=' . $dem['jeton_client'] : '',
+    ];
+}
+
+function ma_date_fr(?string $dt, bool $heure = true): string
+{
+    $t = $dt ? strtotime($dt) : false;
+    if (!$t) {
+        return '';
+    }
+    $jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+    return $jours[(int) date('w', $t)] . ' ' . date('d/m', $t) . ($heure && date('H:i', $t) !== '00:00' ? ' à ' . date('G\hi', $t) : '');
+}
+
+function ma_rep_service_libelle(?string $svc): string
+{
+    return ['SAV' => 'service après-vente', 'COMMERCIAL' => 'service commercial', 'FINANCE' => 'service comptabilité'][strtoupper((string) $svc)]
+        ?? 'service client';
+}
+
+/**
+ * Personnes qui peuvent prendre la demande en charge : les destinataires, et pour une boîte
+ * partagée, les personnes qui la lisent. Sert à la liste « Qui êtes-vous ? » de la page interne.
+ */
+function ma_rep_personnes_demande(PDO $db, array $dem): array
+{
+    $noms = [];
+    foreach (ma_csv($dem['destinataires'] ?? null) as $nom) {
+        $st = $db->prepare('SELECT role, membres FROM rep_contacts WHERE nom = ? LIMIT 1');
+        $st->execute([$nom]);
+        $c = $st->fetch();
+        if ($c && $c['role'] === 'boite' && trim((string) $c['membres']) !== '') {
+            foreach (ma_csv($c['membres']) as $m) {
+                $noms[$m] = $m;
+            }
+        } else {
+            $noms[$nom] = $nom;
+        }
+    }
+    return array_values($noms);
+}
+
+/** Texte envoyé au client (WhatsApp ou e-mail). Jamais de coordonnée interne. */
+function ma_rep_texte_client(PDO $db, array $dem, string $evenement): string
+{
+    $lien = ma_rep_liens($db, $dem)['client'];
+    $standard = ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
+    $bonjour = 'Bonjour' . (trim((string) ($dem['contact'] ?? '')) !== '' ? ' ' . trim((string) $dem['contact']) : '') . ',';
+    $num = 'n° ' . $dem['id'];
+    $qui = trim((string) ($dem['pris_par'] ?? ''));
+    $role = strtoupper((string) $dem['service']) === 'SAV' ? 'responsable technique Multiair' : 'de l\'équipe Multiair';
+    $rappel = ma_date_fr($dem['rappel_prevu'] ?? null);
+    switch ($evenement) {
+        case 'recue':
+            return $bonjour . "\nvotre demande Multiair " . $num . ' est bien enregistrée et transmise à notre '
+                . ma_rep_service_libelle($dem['service']) . '.'
+                . (($dem['priorite'] ?? '') === 'URGENT' ? ' Elle est traitée en priorité.' : '')
+                . "\nSuivez son avancement ici : " . $lien;
+        case 'prise_en_charge':
+            return $bonjour . "\n" . ($qui !== '' ? $qui . ', ' . $role . ',' : 'Notre équipe') . ' a pris en charge votre demande ' . $num
+                . ($rappel !== '' ? ' et vous rappelle ' . $rappel : ' et va vous recontacter') . '.'
+                . "\nSuivi : " . $lien;
+        case 'rappel':
+            return $bonjour . "\nun rappel est prévu " . $rappel . ' pour votre demande Multiair ' . $num . '.'
+                . "\nSuivi : " . $lien;
+        case 'traitee':
+            return $bonjour . "\nvotre demande Multiair " . $num . ' est traitée. Merci de votre confiance.'
+                . "\nUne question ? Standard Multiair : " . $standard;
+    }
+    return '';
+}
+
+/**
+ * Prévient le client d'une étape (reçue, prise en charge, rappel prévu, traitée). Le texte est
+ * préparé ici ; l'envoi (WhatsApp, e-mail) est fait par le scénario Make dont l'adresse est dans
+ * le paramètre rep_webhook_suivi. Sans ce paramètre, rien ne part : la plateforme reste la référence.
+ */
+function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
+{
+    $tel = (string) ($dem['tel'] ?? '');
+    $payload = [
+        'evenement' => $evenement,
+        'demande_id' => (int) $dem['id'],
+        'service' => $dem['service'] ?? '',
+        'contact' => $dem['contact'] ?? '',
+        'societe' => $dem['societe'] ?? '',
+        'tel' => $tel,
+        'mobile' => (bool) preg_match('/^33[67]\d{8}$/', $tel),
+        'email' => str_contains((string) ($dem['email'] ?? ''), '@') ? $dem['email'] : '',
+        'lien' => ma_rep_liens($db, $dem)['client'],
+        'texte' => ma_rep_texte_client($db, $dem, $evenement),
+        'objet' => 'Multiair — votre demande n° ' . $dem['id'],
+    ];
+    $webhook = ma_param($db, 'rep_webhook_suivi');
+    $statut = 'non configuré';
+    if ($webhook !== '' && function_exists('curl_init')) {
+        $ch = curl_init($webhook);
+        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 5,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+        $rep = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        $statut = $rep !== false && $code >= 200 && $code < 300 ? 'envoyé' : 'échec (' . $code . ')';
+    }
+    $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
+        ->execute(['repondeur', ma_now(), str_starts_with($statut, 'échec') ? 'erreur' : 'info', 'suivi_client_' . $evenement,
+            'Demande ' . $dem['id'] . ' — client prévenu : ' . $statut, json_encode(['texte' => $payload['texte']], JSON_UNESCAPED_UNICODE)]);
+    return $payload + ['envoi' => $statut];
+}
+
+/**
+ * Fait avancer une demande : prise en charge, rappel prévu, traitée, commentaire. Même logique
+ * depuis le tableau de bord et depuis la page interne ; le client est prévenu à chaque étape.
+ */
+function ma_rep_avancer(PDO $db, int $id, array $chg, string $par = ''): array
+{
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$id]);
+    $avant = $st->fetch();
+    if (!$avant) {
+        throw new RuntimeException('Demande introuvable');
+    }
+    $now = ma_now();
+    $maj = [];
+    $evenements = [];
+    $statut = $chg['statut'] ?? null;
+    if ($statut === 'en_cours' && $avant['statut'] !== 'en_cours') {
+        $maj['statut'] = 'en_cours';
+        $maj['pris_at'] = $avant['pris_at'] ?: $now;
+        if (trim((string) ($chg['pris_par'] ?? $par)) !== '') {
+            $maj['pris_par'] = trim((string) ($chg['pris_par'] ?? $par));
+        }
+        $evenements[] = 'prise_en_charge';
+    } elseif ($statut === 'traite' && $avant['statut'] !== 'traite') {
+        $maj['statut'] = 'traite';
+        $maj['traite_at'] = $now;
+        $maj['traite_par'] = trim((string) ($chg['traite_par'] ?? $par)) ?: null;
+        $evenements[] = 'traitee';
+    } elseif ($statut === 'a_traiter' && $avant['statut'] !== 'a_traiter') {
+        $maj['statut'] = 'a_traiter';
+    }
+    foreach (['pris_par', 'traite_par'] as $c) {
+        if (!array_key_exists($c, $maj) && array_key_exists($c, $chg) && trim((string) $chg[$c]) !== (string) $avant[$c]) {
+            $maj[$c] = trim((string) $chg[$c]) ?: null;
+        }
+    }
+    if (array_key_exists('rappel_prevu', $chg)) {
+        $r = trim((string) $chg['rappel_prevu']);
+        $r = $r === '' ? null : date('Y-m-d H:i:s', strtotime(str_replace('T', ' ', $r)) ?: time());
+        if ($r !== $avant['rappel_prevu']) {
+            $maj['rappel_prevu'] = $r;
+            if ($r && !$evenements) {
+                $evenements[] = 'rappel';
+            }
+        }
+    }
+    if (trim((string) ($chg['note'] ?? '')) !== '') {
+        $ligne = '[' . date('d/m H:i') . ($par !== '' ? ' — ' . $par : '') . '] ' . trim((string) $chg['note']);
+        $maj['commentaire'] = trim(((string) $avant['commentaire']) . "\n" . $ligne);
+    }
+    if ($maj) {
+        $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+        $db->prepare("UPDATE rep_demandes SET $sets WHERE id = ?")->execute([...array_values($maj), $id]);
+    }
+    $st->execute([$id]);
+    $apres = $st->fetch();
+    foreach ($evenements as $e) {
+        ma_rep_notifier_client($db, $apres, $e);
+    }
+    if ($maj) {
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+            ->execute(['repondeur', $now, 'info', 'demande_mise_a_jour', 'Demande ' . $id . ' : ' . implode(', ', array_keys($maj))
+                . ($par !== '' ? ' (par ' . $par . ')' : '')]);
+    }
+    return $apres;
 }

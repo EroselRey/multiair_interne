@@ -445,6 +445,8 @@ try {
                     }
                     // Une demande naît toujours « à traiter » : seul un humain la fait avancer.
                     $d['statut'] = 'a_traiter';
+                    $d['jeton_interne'] = ma_jeton();
+                    $d['jeton_client'] = ma_jeton();
                     $rt = ma_rep_router($db, $d);
                     $d['marque_norm'] = $rt['marque'];
                     $d['nature'] = $rt['nature'] ?: null;
@@ -465,7 +467,11 @@ try {
                         ($rt['urgent'] ? 'URGENT — ' : '') . ($d['societe'] ?? '') . ' → ' . ($d['destinataires'] ?? $rt['to'])
                             . ' [' . $rt['regle_libelle'] . ']' . ($rt['notes'] ? ' — ' . implode(' ; ', $rt['notes']) : ''),
                         ['id' => $id, 'to' => $rt['to'], 'sms' => $rt['sms']]);
+                    $cree = getOne($db, 'rep_demandes', $id);
+                    $liens = ma_rep_liens($db, $cree);
+                    ma_rep_notifier_client($db, $cree, 'recue');
                     out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'], 'urgent' => $rt['urgent'],
+                        'lien_interne' => $liens['interne'], 'lien_client' => $liens['client'],
                         // Champs historiques, lus par le scénario Make actuel : ils suivent désormais les règles.
                         'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => $rt['regle_libelle'],
                         'sms' => $rt['sms'], 'destinataires' => $d['destinataires'], 'notes' => $rt['notes'],
@@ -475,14 +481,19 @@ try {
                     $id = idFrom($parts, 2);
                     if ($method === 'PATCH' || $method === 'POST') {
                         $d = $body;
-                        if (($d['statut'] ?? '') === 'traite') {
-                            $d['traite_at'] = $now;
+                        // Statut, rappel prévu, note : même logique que la page interne, client prévenu.
+                        $etapes = array_intersect_key($d, array_flip(['statut', 'rappel_prevu', 'note', 'pris_par', 'traite_par']));
+                        $autres = array_diff_key($d, $etapes + ['jeton_interne' => 1, 'jeton_client' => 1, 'pris_at' => 1, 'traite_at' => 1]);
+                        if ($autres) {
+                            update($db, 'rep_demandes', $id, $autres);
                         }
-                        if (($d['statut'] ?? '') === 'en_cours') {
-                            $deja = getOne($db, 'rep_demandes', $id)['pris_at'] ?? null;
-                            $d['pris_at'] = $deja ?: $now;
+                        if ($etapes) {
+                            try {
+                                ma_rep_avancer($db, $id, $etapes, (string) ($d['pris_par'] ?? $d['traite_par'] ?? ''));
+                            } catch (RuntimeException $e) {
+                                fail($e->getMessage(), 404);
+                            }
                         }
-                        update($db, 'rep_demandes', $id, $d);
                         out(['ok' => true, 'demande' => getOne($db, 'rep_demandes', $id)]);
                     }
                     if ($method === 'DELETE') {
