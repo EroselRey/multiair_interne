@@ -117,7 +117,8 @@
         data = data.filter((r) => cols.some((c) => String(c.search ? c.search(r) : r[c.key] ?? '').toLowerCase().includes(q)));
       }
       for (const [k, v] of Object.entries(state.filter)) {
-        if (v !== '') data = data.filter((r) => String(r[k] ?? '') === v);
+        const f = filterDefs.find((x) => x.key === k);
+        if (v !== '') data = data.filter((r) => (f && f.test ? f.test(r, v) : String(r[k] ?? '') === v));
       }
       if (state.sort) {
         const c = cols.find((x) => x.key === state.sort);
@@ -136,8 +137,8 @@
       el.innerHTML = `
         <div class="filters">
           <input type="search" placeholder="Rechercher…" value="${h(state.q)}" data-role="q">
-          ${filterDefs.map((f) => `<select data-filter="${h(f.key)}"><option value="">${h(f.label)} : tous</option>${uniq(rows, f.key).map((v) =>
-            `<option value="${h(v)}" ${state.filter[f.key] === v ? 'selected' : ''}>${h(f.map ? f.map(v) : v)}</option>`).join('')}</select>`).join('')}
+          ${filterDefs.map((f) => `<select data-filter="${h(f.key)}"><option value="">${h(f.label)} : tous</option>${(f.options || uniq(rows, f.key).map((v) => [v, f.map ? f.map(v) : v])).map(([v, t]) =>
+            `<option value="${h(v)}" ${state.filter[f.key] === v ? 'selected' : ''}>${h(t)}</option>`).join('')}</select>`).join('')}
           <span class="hint">${num(data.length)} ligne${data.length > 1 ? 's' : ''}</span>
           ${opts.tools || ''}
         </div>
@@ -536,7 +537,17 @@
       return m.set(cle, f);
     }, new Map()).values()];
     const k = s.kpi;
-    const st = subtabs([['demandes', `Demandes à rappeler (${k.demandes_a_traiter} à traiter)`], ['fiches', `Fiches d'appel (${fiches.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['routage', 'Routage et annuaire'], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
+    // Vue globale : toutes les demandes transmises, plus les appels encore en qualification WhatsApp (pas encore de demande).
+    const SVC_FICHE = {technique: 'SAV', commercial: 'COMMERCIAL', finance: 'FINANCE'};
+    const avecDemande = new Set(demandes.rows.map((d) => d.fiche_id).filter(Boolean));
+    const toutes = [
+      ...demandes.rows.map((d) => ({...d, etape: d.statut})),
+      ...fiches.rows.filter((f) => ['En attente', 'Urgent'].includes(f.statut) && !avecDemande.has(f.id)).map((f) => ({
+        fiche: f, fiche_id: f.id, etape: 'qualification', created_at: f.created_at, service: SVC_FICHE[String(f.service || '').trim().toLowerCase()] || '',
+        priorite: f.urgence ? 'URGENT' : 'NORMAL', societe: f.societe, contact: f.contact, tel: f.tel_norm, marque: f.marque, modele: f.modele,
+        departement: f.departement, source: 'en_qualification', type_panne: f.type_panne, resume: f.resume})),
+    ];
+    const st = subtabs([['demandes', `Toutes les demandes (${toutes.length})`], ['fiches', `Fiches d'appel (${fiches.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['routage', 'Routage et annuaire'], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
     main.innerHTML = `
       <div class="section-title"><h2>Répondeur IA — appels VAPI et suivi WhatsApp</h2><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
       <div class="kpis">
@@ -622,7 +633,11 @@
           ['Page équipe', `<a href="${h(suiviBase + 'demande.php?t=' + d.jeton_interne)}" target="_blank" rel="noopener">ouvrir</a> — envoyée dans le mail et le SMS de transmission`],
           ['Page client', `<a href="${h(suiviBase + 'suivi.php?c=' + d.jeton_client)}" target="_blank" rel="noopener">ouvrir</a> — ce que voit le client (sa demande uniquement)`]])}` : ''}
         <h4>Suivi</h4>${editForm(fields, d)}
-        <p class="hint">Changer le statut ou la date de rappel prévient le client (WhatsApp / e-mail).</p>`, saveBtn() + delBtn());
+        <p class="hint">Changer le statut ou la date de rappel prévient le client (WhatsApp / e-mail).</p>
+        ${(() => {
+          const e = conv.rows.filter((m) => d.fiche_id && m.fiche_id === d.fiche_id).sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.id - b.id));
+          return e.length ? `<h4>Conversation WhatsApp avec Claire (${e.length})</h4>${bulles(e)}` : '';
+        })()}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('rep/demandes/' + d.id, readForm($('#drawerBody'), fields)); toast('Demande enregistrée'); closeDrawer(); show('repondeur'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer cette demande ?')) { await api('rep/demandes/' + d.id, {method: 'DELETE'}); closeDrawer(); show('repondeur'); } };
     };
@@ -650,40 +665,64 @@
           {key: 'resume', label: 'Résumé', render: (r) => clip(r.resume, true)},
         ], {sort: 'created_at', filters: [{key: 'statut', label: 'Statut'}, {key: 'service', label: 'Service'}], onRow: fiche});
       } else if (repSub.v === 'demandes') {
-        // Ordre de travail : urgences non prises, puis ce qui reste à rappeler, puis le reste ; récent d'abord.
-        const rang = (r) => (r.statut === 'a_traiter' ? (r.priorite === 'URGENT' ? 0 : 1) : (r.statut === 'en_cours' ? 2 : 3));
-        const rows = [...demandes.rows].sort((a, b) => rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
-        const urgentNonPris = (r) => r.priorite === 'URGENT' && r.statut === 'a_traiter';
-        // Chaque équipe voit d'abord ses demandes : un bouton par service, avec ce qui reste à rappeler.
+        // Ordre de travail : urgences non prises, appels en qualification, ce qui reste à rappeler, puis le reste ; récent d'abord.
+        const rang = (r) => (r.etape === 'a_traiter' && r.priorite === 'URGENT' ? 0 : ({qualification: 1, a_traiter: 2, en_cours: 3}[r.etape] ?? 4));
+        const rows = [...toutes].sort((a, b) => rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
+        const urgentNonPris = (r) => r.priorite === 'URGENT' && r.etape === 'a_traiter';
+        const ETAPES = [['qualification', 'En qualification WhatsApp'], ['a_traiter', 'À traiter'], ['en_cours', 'En cours'], ['traite', 'Traitée']];
+        const nomEtape = (v) => (ETAPES.find((e) => e[0] === v) || [0, v])[1];
+        const SERVICES = [['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance']];
+        const jours = (r) => (Date.now() - new Date(String(r.created_at).replace(' ', 'T')).getTime()) / 86400000;
+        const noms = (r) => String(r.destinataires || '').split(/\s*[,;]\s*/).filter(Boolean);
+        const tousNoms = [...new Set(toutes.flatMap(noms))].sort((a, b) => a.localeCompare(b, 'fr'));
         const tbl = {};
-        const aFaire = (svc) => demandes.rows.filter((r) => r.statut === 'a_traiter' && (!svc || r.service === svc)).length;
-        const puces = [['', 'Tous les services'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance']]
-          .map(([v, t]) => `<button class="btn small" data-svc="${v}">${t} · ${aFaire(v)} à traiter</button>`).join(' ');
+        const puce = (champ, v, t) => {
+          const n = toutes.filter((r) => (!v || String(r[champ]) === v) && (champ === 'etape' || !tbl.t || !tbl.t.state.filter.etape || r.etape === tbl.t.state.filter.etape)).length;
+          return `<button class="btn small" data-puce="${champ}" data-v="${h(v)}">${t} · ${n}</button>`;
+        };
         tbl.t = table(root, rows, [
           {key: 'created_at', label: 'Reçue', render: (r) => `${fmtDate(r.created_at)}<br><span class="hint">${rel(r.created_at)}</span>`},
           {key: 'priorite', label: 'Priorité', render: (r) => r.priorite === 'URGENT' ? pill('🔴 URGENT', 'danger') : pill('Normal', 'muted')},
-          {key: 'statut', label: 'Suivi', render: (r) => `<select class="inline" data-dem="${r.id}"><option value="a_traiter" ${r.statut === 'a_traiter' ? 'selected' : ''}>À traiter</option><option value="en_cours" ${r.statut === 'en_cours' ? 'selected' : ''}>En cours</option><option value="traite" ${r.statut === 'traite' ? 'selected' : ''}>Traitée</option></select>`},
-          {key: 'service', label: 'Service', render: (r) => pill(r.service, 'info')},
+          {key: 'etape', label: 'Suivi', sortVal: rang, render: (r) => r.etape === 'qualification' ? pill('En qualification WhatsApp', 'warn')
+            : `<select class="inline" data-dem="${r.id}"><option value="a_traiter" ${r.statut === 'a_traiter' ? 'selected' : ''}>À traiter</option><option value="en_cours" ${r.statut === 'en_cours' ? 'selected' : ''}>En cours</option><option value="traite" ${r.statut === 'traite' ? 'selected' : ''}>Traitée</option></select>`},
+          {key: 'service', label: 'Service', render: (r) => r.service ? pill(r.service, 'info') : ''},
           {key: 'marque', label: 'Marque', render: (r) => h(r.marque_norm ? nomDe(R_MARQUES, r.marque_norm) : (r.marque || ''))
             + (r.nature ? `<br><span class="hint">${h(nomDe(R_NATURES, r.nature))}</span>` : '')},
           {key: 'type_client', label: 'Client', render: (r) => r.type_client ? h(L(r.type_client)) : ''},
           {key: 'departement', label: 'Dpt'},
           {key: 'societe', label: 'Société', render: (r) => clip(r.societe)},
-          {key: 'contact', label: 'À rappeler', render: (r) => `${h(r.contact || '')}${r.tel ? `<br><span class="hint">${h(telFr(r.tel))}</span>` : ''}`},
-          {key: 'destinataires', label: 'Transmise à', render: (r) => clip(r.destinataires || (r.dest_to || '').replace(/;/g, ', '))},
-          {key: 'resume', label: 'Problème', render: (r) => clip(r.type_panne || r.resume, true)},
-        ], {filters: [{key: 'statut', label: 'Suivi', map: L}, {key: 'priorite', label: 'Priorité'}, {key: 'service', label: 'Service'}, {key: 'type_client', label: 'Client', map: L}, {key: 'marque_norm', label: 'Marque', map: (v) => nomDe(R_MARQUES, v)}], onRow: demande,
-          tools: `<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">${puces}</span>`,
+          {key: 'contact', label: 'À rappeler', search: (r) => `${r.contact || ''} ${r.tel || ''} ${telFr(r.tel)} ${r.email || ''}`,
+            render: (r) => `${h(r.contact || '')}${r.tel ? `<br><span class="hint">${h(telFr(r.tel))}</span>` : ''}`},
+          {key: 'destinataires', label: 'Transmise à', render: (r) => clip(r.destinataires || (r.dest_to || '').replace(/;/g, ', '))
+            + (r.pris_par ? `<br><span class="hint">pris par ${h(r.pris_par)}</span>` : '')},
+          {key: 'resume', label: 'Problème', search: (r) => `${r.type_panne || ''} ${r.besoin_commercial || ''} ${r.reference_facture || ''} ${r.resume || ''} ${r.commentaire || ''}`,
+            render: (r) => clip(r.type_panne || r.besoin_commercial || r.resume, true)},
+        ], {filters: [
+          {key: 'etape', label: 'Suivi', options: ETAPES},
+          {key: 'service', label: 'Service', options: SERVICES},
+          {key: 'priorite', label: 'Priorité', options: [['URGENT', 'Urgent'], ['NORMAL', 'Normal']], test: (r, v) => (r.priorite === 'URGENT') === (v === 'URGENT')},
+          {key: 'periode', label: 'Période', options: [['1', 'Dernières 24 h'], ['7', '7 derniers jours'], ['30', '30 derniers jours'], ['90', '3 derniers mois']], test: (r, v) => jours(r) <= Number(v)},
+          {key: 'destinataires', label: 'Transmise à', options: tousNoms.map((n) => [n, n]), test: (r, v) => noms(r).includes(v)},
+          {key: 'pris_par', label: 'Pris en charge par'},
+          {key: 'marque_norm', label: 'Marque', map: (v) => nomDe(R_MARQUES, v)},
+          {key: 'type_client', label: 'Client', map: L},
+          {key: 'source', label: 'Origine', map: (v) => (v === 'en_qualification' ? 'En qualification WhatsApp' : L(v))},
+        ], onRow: (r) => (r.fiche ? fiche(r.fiche) : demande(r)),
+          tools: `<div style="flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <span class="hint">Suivi :</span> ${puce('etape', '', 'Toutes')} ${ETAPES.map(([v, t]) => puce('etape', v, t)).join(' ')}
+            <span class="hint" style="margin-left:12px">Service :</span> ${puce('service', '', 'Tous')} ${SERVICES.map(([v, t]) => puce('service', v, t)).join(' ')}
+            <button class="btn small" id="repRaz" style="margin-left:auto">Effacer les filtres</button></div>`,
           afterRender: (el) => {
-            const actif = tbl.t ? (tbl.t.state.filter.service || '') : '';
-            $$('[data-svc]', el).forEach((b) => {
-              b.classList.toggle('primary', b.dataset.svc === actif);
-              b.onclick = () => { tbl.t.state.filter.service = b.dataset.svc; tbl.t.state.page = 0; tbl.t.render(); };
+            const f = tbl.t ? tbl.t.state.filter : {};
+            $$('[data-puce]', el).forEach((b) => {
+              b.classList.toggle('primary', (f[b.dataset.puce] || '') === b.dataset.v);
+              b.onclick = () => { tbl.t.state.filter[b.dataset.puce] = b.dataset.v; tbl.t.state.page = 0; tbl.t.render(); };
             });
+            $('#repRaz', el).onclick = () => { tbl.t.state.filter = {}; tbl.t.state.q = ''; tbl.t.state.page = 0; tbl.t.render(); };
             $$('tbody tr[data-i]', el).forEach((tr) => tr.classList.toggle('urgent', urgentNonPris(rows[Number(tr.dataset.i)])));
             $$('[data-dem]', el).forEach((sel) => sel.addEventListener('change', async () => {
               await patch('rep/demandes/' + sel.dataset.dem, {statut: sel.value}); toast('Suivi mis à jour');
-              const d = demandes.rows.find((x) => x.id == sel.dataset.dem); if (d) d.statut = sel.value;
+              const d = rows.find((x) => !x.fiche && x.id == sel.dataset.dem); if (d) { d.statut = sel.value; d.etape = sel.value; }
               sel.closest('tr').classList.toggle('urgent', !!d && urgentNonPris(d)); refreshBadges();
             }));
           }});
