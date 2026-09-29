@@ -1,6 +1,6 @@
 <?php
-// MULTIAIR — une demande du répondeur, pour l'équipe : ouverte depuis l'e-mail ou le SMS de
-// transmission, sans compte. Le lien secret ne donne accès qu'à cette demande.
+// MULTIAIR — une demande, pour l'équipe : ouverte depuis l'e-mail ou le SMS de transmission, sans
+// mot de passe. Le lien secret ne donne accès qu'à cette demande. Pensée d'abord pour le téléphone.
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
@@ -17,6 +17,7 @@ if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
     $dem = $st->fetch() ?: null;
 }
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+$connecte = ma_user();
 
 if ($dem && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $qui = trim((string) ($_POST['qui'] ?? ''));
@@ -25,57 +26,65 @@ if ($dem && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $qui = mb_substr($qui, 0, 80);
     if ($qui !== '') {
-        setcookie('ma_qui', $qui, ['expires' => time() + 180 * 86400, 'path' => '/', 'secure' => true, 'httponly' => true, 'samesite' => 'Lax']);
+        setcookie('ma_qui', $qui, ['expires' => time() + 180 * 86400, 'path' => '/', 'secure' => !empty($_SERVER['HTTPS']), 'httponly' => true, 'samesite' => 'Lax']);
     }
+    $action = (string) ($_POST['action'] ?? '');
     $chg = [];
-    switch ($_POST['action'] ?? '') {
+    $message = 'Enregistré.';
+    switch ($action) {
         case 'prendre':
             $chg = ['statut' => 'en_cours', 'pris_par' => $qui];
+            $message = 'Demande prise en charge. Le client est prévenu.';
+            break;
+        case 'rappel':
+            if (trim((string) ($_POST['rappel_prevu'] ?? '')) !== '') {
+                $chg['rappel_prevu'] = (string) $_POST['rappel_prevu'];
+                if ($dem['statut'] === 'a_traiter') {
+                    $chg += ['statut' => 'en_cours', 'pris_par' => $qui];
+                }
+                $message = 'Rappel enregistré. Le client est prévenu.';
+            }
             break;
         case 'traiter':
             $chg = ['statut' => 'traite', 'traite_par' => $qui];
+            $message = 'Demande traitée. Le client est prévenu.';
             break;
         case 'rouvrir':
             $chg = ['statut' => 'en_cours'];
+            $message = 'Demande rouverte.';
             break;
-    }
-    if (array_key_exists('rappel_prevu', $_POST) && ($_POST['action'] ?? '') !== 'traiter') {
-        $chg['rappel_prevu'] = (string) $_POST['rappel_prevu'];
+        case 'note':
+            $message = 'Note ajoutée.';
+            break;
     }
     if (trim((string) ($_POST['note'] ?? '')) !== '') {
         $chg['note'] = mb_substr((string) $_POST['note'], 0, 1000);
     }
     if ($chg) {
-        ma_rep_avancer($db, (int) $dem['id'], $chg, $qui);
+        ma_rep_avancer($db, (int) $dem['id'], $chg, $qui, 'lien_equipe');
     }
-    header('Location: demande.php?t=' . $jeton . '&ok=1', true, 303);
+    header('Location: demande.php?t=' . $jeton . '&ok=' . rawurlencode($message), true, 303);
     exit;
 }
 
-$statuts = ['a_traiter' => ['À traiter', '#b3261e'], 'en_cours' => ['Pris en charge', '#b26a00'], 'traite' => ['Traitée', '#2e7d5b']];
-$tel = (string) ($dem['tel'] ?? '');
-$telLocal = preg_match('/^33(\d{9})$/', $tel, $m) ? '0' . $m[1] : $tel;
-$telLisible = preg_match('/^0\d{9}$/', $telLocal) ? trim(chunk_split($telLocal, 2, ' ')) : $telLocal;
 $personnes = $dem ? ma_rep_personnes_demande($db, $dem) : [];
-$quiDefaut = (string) ($_COOKIE['ma_qui'] ?? '');
+if ($dem && $dem['pris_par'] && !in_array($dem['pris_par'], $personnes, true)) {
+    array_unshift($personnes, $dem['pris_par']);
+}
+$quiDefaut = (string) ($connecte['nom'] ?? ($_COOKIE['ma_qui'] ?? ''));
+if ($quiDefaut === 'Administrateur') {
+    $quiDefaut = (string) ($_COOKIE['ma_qui'] ?? '');
+}
 $rappelVal = !empty($dem['rappel_prevu']) ? date('Y-m-d\TH:i', strtotime($dem['rappel_prevu'])) : '';
 $lienClient = $dem ? ma_rep_liens($db, $dem)['client'] : '';
-
-$choixQui = function () use ($personnes, $quiDefaut, $e): string {
-    $h = '<select name="qui" required onchange="this.form.qui_autre.hidden=this.value!==\'__autre\'">'
-        . '<option value="">— Qui êtes-vous ? —</option>';
-    $trouve = false;
-    foreach ($personnes as $p) {
-        $sel = $p === $quiDefaut ? ' selected' : '';
-        $trouve = $trouve || $sel !== '';
-        $h .= '<option' . $sel . '>' . $e($p) . '</option>';
-    }
-    $h .= '<option value="__autre"' . (!$trouve && $quiDefaut !== '' ? ' selected' : '') . '>Autre personne…</option></select>'
-        . '<input name="qui_autre" placeholder="Votre nom" value="' . (!$trouve ? $e($quiDefaut) : '') . '"'
-        . ($trouve || $quiDefaut === '' ? ' hidden' : '') . '>';
-    return $h;
-};
-$ligne = fn($k, $v) => trim((string) $v) === '' ? '' : '<tr><th>' . $e($k) . '</th><td>' . nl2br($e($v)) . '</td></tr>';
+$urgent = $dem && $dem['priorite'] === 'URGENT' && $dem['statut'] === 'a_traiter';
+$etat = $dem ? ($urgent ? ['URGENT', 'urgent'] : ([
+    'a_traiter' => ['À traiter', 'a_traiter'], 'en_cours' => ['En cours', 'en_cours'], 'traite' => ['Traitée', 'traite']][$dem['statut']] ?? [$dem['statut'], ''])) : null;
+$canal = $dem ? ma_canal($dem) : 'telephone';
+$svc = $dem ? (['SAV' => 'SAV', 'COMMERCIAL' => 'Commerce', 'FINANCE' => 'Finance', 'AUTRE' => 'À orienter'][$dem['service']] ?? $dem['service']) : '';
+[$materiel, $sujet] = $dem ? ma_rep_objet_client($dem) : ['', ''];
+$trouve = in_array($quiDefaut, $personnes, true);
+$histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) => !in_array($x['type'], ['message_client', 'reponse_claire'], true))) : [];
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -83,123 +92,110 @@ $ligne = fn($k, $v) => trim((string) $v) === '' ? '' : '<tr><th>' . $e($k) . '</
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title><?= $dem ? 'Demande n° ' . (int) $dem['id'] . ' — Multiair' : 'Demande introuvable — Multiair' ?></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css?v=<?= MA_VERSION ?>">
 <style>
-  :root { --ink:#1c2431; --muted:#5f6b7a; --line:#dde3ea; --bg:#f4f6f8; --card:#fff; --primary:#0f2f52; --primary-2:#1c4f86; --danger:#b3261e; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
-  .wrap { max-width:720px; margin:0 auto; padding:16px; display:grid; gap:14px; }
-  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  header .marque { font-weight:800; color:var(--primary); letter-spacing:.04em; }
-  h1 { font-size:22px; margin:0; }
-  .pill { display:inline-block; padding:2px 10px; border-radius:999px; color:#fff; font-size:13px; font-weight:700; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; display:grid; gap:10px; }
-  .urgent { background:var(--danger); color:#fff; border-radius:8px; padding:10px 14px; font-weight:700; }
-  .appeler { font-size:18px; }
-  .appeler a.tel { display:inline-block; margin-top:6px; background:var(--primary-2); color:#fff; padding:10px 16px; border-radius:8px; text-decoration:none; font-weight:700; }
-  table { border-collapse:collapse; width:100%; font-size:15px; }
-  th { text-align:left; vertical-align:top; color:var(--muted); font-weight:600; padding:5px 12px 5px 0; white-space:nowrap; width:1%; }
-  td { padding:5px 0; }
-  form { display:grid; gap:10px; }
-  label { display:grid; gap:4px; font-size:14px; color:var(--muted); }
-  select, input, textarea { font:inherit; padding:9px 10px; border:1px solid var(--line); border-radius:8px; width:100%; background:#fff; color:var(--ink); }
-  button { font:inherit; font-weight:700; padding:12px 16px; border:0; border-radius:8px; cursor:pointer; background:var(--primary-2); color:#fff; }
-  button.ok { background:#2e7d5b; }
-  button.sec { background:#e8edf2; color:var(--ink); }
-  .row { display:flex; gap:10px; flex-wrap:wrap; }
-  .row > * { flex:1 1 200px; }
-  .msg { background:#e3f1ea; color:#123f2c; border-radius:8px; padding:10px 14px; }
-  .hist { white-space:pre-wrap; font-size:14px; color:var(--muted); }
-  .pied { font-size:13px; color:var(--muted); }
-  a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline:3px solid #8ab4f8; outline-offset:2px; }
+  body { background: var(--bg); }
+  .m-top { background: var(--primary); color: #fff; padding: 20px 20px 22px; }
+  .m-top .marque { font-weight: 800; letter-spacing: .07em; font-size: 13px; color: #a9bbd0; }
+  .m-top h1 { margin: 6px 0 10px; font-size: 22px; font-weight: 800; line-height: 1.3; }
+  .m-top .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .m-top .tags .pill { background: var(--primary-2); color: #fff; }
+  .m-wrap { max-width: 640px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .m-card { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .m-card .lab { font-size: 12px; font-weight: 800; letter-spacing: .05em; color: var(--muted); }
+  .m-card .gros { font-size: 18px; font-weight: 800; }
+  .m-card .gris { color: var(--muted); font-size: 14px; }
+  .appel { display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--ok); color: #fff; text-decoration: none; font-weight: 700; font-size: 17px; padding: 15px; border-radius: 12px; margin-top: 6px; }
+  .m-form { display: flex; flex-direction: column; gap: 10px; }
+  .m-form select, .m-form input, .m-form textarea { font: inherit; font-size: 16px; padding: 12px; border: 1px solid var(--border-2); border-radius: 12px; background: #fff; width: 100%; color: var(--text); }
+  .m-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 700; color: var(--muted); }
+  .m-form .btn { font-size: 16px; padding: 15px; border-radius: 12px; }
+  .deux { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  details summary { cursor: pointer; font-weight: 700; color: var(--primary); padding: 4px 0; }
+  details[open] summary { margin-bottom: 10px; }
+  .ev { display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+  .ev div { border-left: 3px solid var(--border-2); padding-left: 10px; }
+  .ev small { display: block; color: var(--muted); }
+  .pied { font-size: 13px; color: var(--muted); text-align: center; }
 </style>
 </head>
 <body>
-<div class="wrap">
 <?php if (!$dem): ?>
-  <header><span class="marque">MULTIAIR</span></header>
-  <div class="card"><h1>Demande introuvable</h1><p>Ce lien n'est pas valide. Utilisez le lien reçu par e-mail ou par SMS, ou ouvrez le tableau de bord MULTIAIR.</p></div>
-<?php else:
-    [$stLib, $stCoul] = $statuts[$dem['statut']] ?? [$dem['statut'], '#5f6b7a']; ?>
-  <header>
-    <span class="marque">MULTIAIR</span>
-    <h1>Demande n° <?= (int) $dem['id'] ?> — <?= $e($dem['service']) ?><?= $dem['marque'] ? ' ' . $e($dem['marque']) : '' ?></h1>
-    <span class="pill" style="background:<?= $stCoul ?>"><?= $e($stLib) ?></span>
+  <div class="m-top"><div class="marque">MULTIAIR</div><h1>Demande introuvable</h1></div>
+  <div class="m-wrap"><div class="m-card">Ce lien n'est pas valide. Utilisez le lien reçu par e-mail ou par SMS, ou connectez-vous à la plateforme.
+    <a class="btn primary" href="index.php">Ouvrir la plateforme</a></div></div>
+<?php else: ?>
+  <header class="m-top">
+    <div class="marque">MULTIAIR</div>
+    <h1>Demande n° <?= (int) $dem['id'] ?><?= $sujet !== '' ? ' — ' . $e($sujet) : '' ?></h1>
+    <div class="tags"><span class="st <?= $e($etat[1]) ?>"><?= $e($etat[0]) ?></span><span class="pill"><?= $e($svc . ' · ' . (MA_CANAUX[$canal][0] ?? '')) ?></span>
+      <span class="pill"><?= $e(ma_date_fr($dem['created_at'])) ?></span></div>
   </header>
-  <?php if (isset($_GET['ok'])): ?><div class="msg" role="status">Enregistré. Le client est prévenu de l'étape.</div><?php endif; ?>
-  <?php if ($dem['priorite'] === 'URGENT' && $dem['statut'] !== 'traite'): ?><div class="urgent">🔴 URGENT — production arrêtée : rappel immédiat</div><?php endif; ?>
+  <div class="m-wrap">
+    <?php if (isset($_GET['ok'])): ?><div class="msg ok" role="status"><?= $e($_GET['ok'] ?: 'Enregistré.') ?></div><?php endif; ?>
+    <?php if ($urgent): ?><div class="msg err"><b>URGENT — production arrêtée.</b> À rappeler tout de suite.</div><?php endif; ?>
 
-  <div class="card appeler">
-    <div><b>À rappeler :</b> <?= $e($dem['contact'] ?: 'contact non précisé') ?> — <?= $e($dem['societe'] ?: 'société non précisée') ?></div>
-    <?php if ($telLisible): ?><div><a class="tel" href="tel:<?= $e($telLocal) ?>">📞 <?= $e($telLisible) ?></a></div><?php endif; ?>
+    <section class="m-card">
+      <span class="lab">CLIENT À RAPPELER</span>
+      <span class="gros"><?= $e($dem['contact'] ?: 'Contact non précisé') ?><?= $dem['societe'] ? ' — ' . $e($dem['societe']) : '' ?></span>
+      <span class="gris"><?= $e(implode(' · ', array_filter([($dem['type_client'] ?? '') === 'distributeur' ? 'Distributeur' : 'Client direct',
+          trim(($dem['code_postal'] ?? '') ?: ($dem['departement'] ? 'dpt ' . $dem['departement'] : ''))]))) ?></span>
+      <?php if ($dem['email']): ?><span class="gris"><?= $e($dem['email']) ?></span><?php endif; ?>
+      <?php if ($dem['tel']): ?><a class="appel" href="tel:+<?= $e($dem['tel']) ?>">Appeler le <?= $e(ma_tel_lisible($dem['tel'])) ?></a><?php endif; ?>
+    </section>
+
+    <section class="m-card">
+      <span class="lab">LA DEMANDE</span>
+      <?php if ($materiel !== ''): ?><b><?= $e($materiel) ?><?= $dem['numero_serie'] ? ' · n° ' . $e($dem['numero_serie']) : '' ?></b><?php endif; ?>
+      <?php foreach ([['Problème', $dem['type_panne']], ['Besoin', $dem['besoin_commercial']], ['Facture', $dem['reference_facture']],
+          ['Pourquoi urgent', $dem['priorite'] === 'URGENT' ? $dem['justification_urgence'] : ''], ['Résumé', $dem['resume']]] as [$k, $v]):
+          if (trim((string) $v) === '') continue; ?>
+        <div><span class="gris"><?= $e($k) ?> : </span><?= nl2br($e($v)) ?></div>
+      <?php endforeach; ?>
+      <span class="gris">Transmise à <?= $e($dem['destinataires'] ?: str_replace(';', ', ', (string) $dem['dest_to'])) ?>
+        <?= $dem['pris_par'] ? ' · prise en charge par ' . $e($dem['pris_par']) : '' ?>
+        <?= $dem['rappel_prevu'] ? ' · rappel prévu ' . $e(ma_date_fr($dem['rappel_prevu'])) : '' ?></span>
+    </section>
+
+    <form method="post" class="m-form">
+      <input type="hidden" name="t" value="<?= $e($jeton) ?>">
+      <label>QUI ÊTES-VOUS ?
+        <select name="qui" required onchange="this.form.qui_autre.hidden = this.value !== '__autre'">
+          <option value="">— Choisir —</option>
+          <?php foreach ($personnes as $p): ?><option<?= $p === $quiDefaut ? ' selected' : '' ?>><?= $e($p) ?></option><?php endforeach; ?>
+          <option value="__autre"<?= !$trouve && $quiDefaut !== '' ? ' selected' : '' ?>>Autre personne…</option>
+        </select>
+        <input name="qui_autre" placeholder="Votre nom" value="<?= !$trouve ? $e($quiDefaut) : '' ?>"<?= $trouve || $quiDefaut === '' ? ' hidden' : '' ?>>
+      </label>
+      <?php if ($dem['statut'] === 'traite'): ?>
+        <div class="msg ok">Cette demande est traitée<?= $dem['traite_par'] ? ' par ' . $e($dem['traite_par']) : '' ?>.</div>
+        <button class="btn" name="action" value="rouvrir">Rouvrir la demande</button>
+      <?php else: ?>
+        <?php if ($dem['statut'] === 'a_traiter'): ?>
+          <button class="btn <?= $urgent ? 'urgent' : 'primary' ?>" name="action" value="prendre">Je la prends en charge</button>
+        <?php endif; ?>
+        <details<?= $dem['statut'] === 'en_cours' && !$dem['rappel_prevu'] ? ' open' : '' ?>><summary>Planifier un rappel</summary>
+          <div class="m-form"><input type="datetime-local" name="rappel_prevu" value="<?= $e($rappelVal) ?>" aria-label="Date et heure du rappel">
+            <button class="btn" name="action" value="rappel">Enregistrer le rappel et prévenir le client</button></div></details>
+        <button class="btn go" name="action" value="traiter" onclick="return confirm('Marquer la demande comme traitée ? Le client sera prévenu.')">Marquer traitée</button>
+      <?php endif; ?>
+      <details><summary>Ajouter une note interne</summary>
+        <div class="m-form"><textarea name="note" rows="3" placeholder="Visible uniquement par l'équipe Multiair"></textarea>
+          <button class="btn" name="action" value="note">Enregistrer la note</button></div></details>
+    </form>
+    <p class="hint" style="margin:0">Chaque étape prévient le client par WhatsApp et e-mail. Vos coordonnées ne lui sont jamais communiquées.</p>
+
+    <details class="m-card"><summary>Historique (<?= count($histo) ?>)</summary>
+      <div class="ev"><?php foreach ($histo as $x): $d = $x['detail'] ?? []; ?>
+        <div><b><?= $e($x['resume']) ?></b><small><?= $e(ma_date_fr($x['date'])) ?><?= $x['qui'] ? ' · ' . $e($x['qui']) : '' ?></small>
+          <?php foreach (($d['envois'] ?? $d['canaux'] ?? []) as $v): ?><small><?= $e($v['canal'] . ' → ' . $v['a']) ?></small><?php endforeach; ?>
+          <?php if (!empty($d['texte']) && $x['type'] === 'note'): ?><small><?= $e($d['texte']) ?></small><?php endif; ?></div>
+      <?php endforeach; ?></div></details>
+
+    <p class="pied"><a href="<?= $e($lienClient) ?>" target="_blank" rel="noopener">Voir ce que voit le client</a> · <a href="index.php#demande/<?= (int) $dem['id'] ?>">Ouvrir sur la plateforme</a></p>
   </div>
-
-  <div class="card">
-    <table>
-      <?= $ligne('Reçue le', ma_date_fr($dem['created_at'])) ?>
-      <?= $ligne('Type de client', ($dem['type_client'] ?? '') === 'distributeur' ? 'Distributeur' : 'Client direct') ?>
-      <?= $ligne('Site', trim(($dem['code_postal'] ?? '') . ($dem['departement'] ? ' (dép. ' . $dem['departement'] . ')' : ''))) ?>
-      <?= $ligne('Marque / modèle', trim(($dem['marque'] ?? '') . ' ' . ($dem['modele'] ?? ''))) ?>
-      <?= $ligne('N° de série', $dem['numero_serie'] ?? '') ?>
-      <?= $ligne('Problème', $dem['type_panne'] ?? '') ?>
-      <?= $ligne('Besoin', $dem['besoin_commercial'] ?? '') ?>
-      <?= $ligne('Facture / dossier', $dem['reference_facture'] ?? '') ?>
-      <?= $ligne('Pourquoi urgent', $dem['priorite'] === 'URGENT' ? ($dem['justification_urgence'] ?? '') : '') ?>
-      <?= $ligne('Résumé', $dem['resume'] ?? '') ?>
-      <?= $ligne('E-mail du client', $dem['email'] ?? '') ?>
-      <?= $ligne('Transmis à', $dem['destinataires'] ?? '') ?>
-      <?= $ligne('Pris en charge', $dem['pris_at'] ? ma_date_fr($dem['pris_at']) . ($dem['pris_par'] ? ' par ' . $dem['pris_par'] : '') : '') ?>
-      <?= $ligne('Rappel prévu', ma_date_fr($dem['rappel_prevu'] ?? null)) ?>
-      <?= $ligne('Traitée', $dem['traite_at'] ? ma_date_fr($dem['traite_at']) . ($dem['traite_par'] ? ' par ' . $dem['traite_par'] : '') : '') ?>
-    </table>
-  </div>
-
-  <div class="card">
-  <?php if ($dem['statut'] === 'a_traiter'): ?>
-    <form method="post">
-      <input type="hidden" name="t" value="<?= $e($jeton) ?>">
-      <input type="hidden" name="action" value="prendre">
-      <div class="row">
-        <label>Qui prend la demande ?<?= $choixQui() ?></label>
-        <label>Rappel prévu (facultatif)<input type="datetime-local" name="rappel_prevu" value="<?= $e($rappelVal) ?>"></label>
-      </div>
-      <label>Note interne (facultatif)<textarea name="note" rows="2"></textarea></label>
-      <button type="submit">Je prends en charge</button>
-    </form>
-  <?php elseif ($dem['statut'] === 'en_cours'): ?>
-    <form method="post">
-      <input type="hidden" name="t" value="<?= $e($jeton) ?>">
-      <input type="hidden" name="action" value="rappel">
-      <div class="row">
-        <label>Rappel ou intervention prévu<input type="datetime-local" name="rappel_prevu" value="<?= $e($rappelVal) ?>"></label>
-        <label>Note interne (facultatif)<input name="note"></label>
-      </div>
-      <button type="submit" class="sec">Enregistrer la date / la note</button>
-    </form>
-    <form method="post">
-      <input type="hidden" name="t" value="<?= $e($jeton) ?>">
-      <input type="hidden" name="action" value="traiter">
-      <label>Qui clôture ?<?= $choixQui() ?></label>
-      <label>Note de clôture (facultatif)<textarea name="note" rows="2"></textarea></label>
-      <button type="submit" class="ok">Demande traitée</button>
-    </form>
-  <?php else: ?>
-    <p>Cette demande est traitée.</p>
-    <form method="post">
-      <input type="hidden" name="t" value="<?= $e($jeton) ?>">
-      <input type="hidden" name="action" value="rouvrir">
-      <label>Note (facultatif)<input name="note"></label>
-      <button type="submit" class="sec">Rouvrir la demande</button>
-    </form>
-  <?php endif; ?>
-  </div>
-
-  <?php if (trim((string) $dem['commentaire']) !== ''): ?>
-    <div class="card"><b>Historique</b><div class="hist"><?= $e($dem['commentaire']) ?></div></div>
-  <?php endif; ?>
-
-  <p class="pied">Page réservée à l'équipe Multiair. Le client suit sa demande sur sa propre page, sans vos coordonnées :
-    <a href="<?= $e($lienClient) ?>" target="_blank" rel="noopener">voir ce que voit le client</a>.</p>
 <?php endif; ?>
-</div>
 </body>
 </html>

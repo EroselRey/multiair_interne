@@ -51,6 +51,20 @@ CREATE TABLE IF NOT EXISTS rep_demandes (
 );
 CREATE INDEX IF NOT EXISTS idx_rep_demandes_date ON rep_demandes(created_at);
 
+-- Historique d'une demande, pour la traçabilité : réception, transmission (à qui, par quel
+-- canal), messages envoyés au client, prise en charge, rappels, notes, clôture.
+CREATE TABLE IF NOT EXISTS rep_evenements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  demande_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  type TEXT NOT NULL,             -- recue | transmise | client_prevenu | prise_en_charge | rappel | note | traitee | rouverte | modifiee
+  qui TEXT,                       -- personne de l'équipe, « Claire », « Plateforme »
+  via TEXT,                       -- plateforme | lien_equipe | make | telephone | chat | email | whatsapp
+  resume TEXT,
+  detail TEXT                     -- JSON : destinataires, canaux, texte envoyé, statut d'envoi
+);
+CREATE INDEX IF NOT EXISTS idx_rep_evenements_demande ON rep_evenements(demande_id, date);
+
 -- Conversation complète entre le client et Claire (WhatsApp entrant/sortant,
 -- résumé de l'appel VAPI). Une ligne par échange, rattachée à la fiche d'appel.
 CREATE TABLE IF NOT EXISTS rep_messages (

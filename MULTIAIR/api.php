@@ -52,17 +52,13 @@ $viaApiKey = is_string($apiKey) && $apiKey !== '' && hash_equals((string) $cfg['
 $viaSession = ma_is_logged();
 
 if ($parts === ['auth', 'login'] && $method === 'POST') {
-    ma_session_start();
-    $login = (string) ($body['login'] ?? '');
-    $pass = (string) ($body['password'] ?? '');
-    if (hash_equals((string) $cfg['login'], $login) && hash_equals((string) $cfg['password'], $pass)) {
-        session_regenerate_id(true);
-        $_SESSION['ma_auth'] = true;
-        $_SESSION['ma_login'] = $login;
-        out(['ok' => true, 'login' => $login]);
+    $u = ma_verifier_connexion(ma_db(), (string) ($body['login'] ?? ''), (string) ($body['password'] ?? ''));
+    if ($u) {
+        ma_ouvrir_session($u);
+        out(['ok' => true, 'utilisateur' => $u]);
     }
     usleep(500000);
-    fail('Identifiant ou mot de passe incorrect', 401);
+    fail('E-mail ou mot de passe incorrect', 401);
 }
 if ($parts === ['auth', 'logout']) {
     ma_session_start();
@@ -71,21 +67,20 @@ if ($parts === ['auth', 'logout']) {
     out(['ok' => true]);
 }
 if ($parts === ['auth', 'recover'] && $method === 'POST') {
-    // Envoie le mot de passe à l'adresse de récupération configurée (jamais à une adresse fournie par le client)
-    $to = (string) ($cfg['recovery_email'] ?? '');
-    if ($to === '') {
-        fail('Aucune adresse de récupération configurée', 500);
+    // Mot de passe oublié : un lien part à l'adresse du compte, s'il existe. La réponse est la même
+    // dans tous les cas, pour ne pas révéler qui a un compte.
+    $email = trim((string) ($body['email'] ?? ''));
+    if (str_contains($email, '@')) {
+        $st = ma_db()->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ('admin','sav','commerce','finance') LIMIT 1");
+        $st->execute([$email]);
+        if ($c = $st->fetch()) {
+            ma_compte_lien(ma_db(), $c, 'reinit');
+        }
     }
-    $ok = ma_send_mail(
-        $to,
-        'MULTIAIR - Rappel de vos identifiants',
-        "Bonjour,\n\nIdentifiants de la page MULTIAIR (interne) :\n\nIdentifiant : {$cfg['login']}\nMot de passe : {$cfg['password']}\n\n"
-        . "Ils sont également lisibles dans le fichier MULTIAIR/config.php sur le serveur (FileZilla).\n"
-    );
-    out(['ok' => $ok, 'message' => $ok ? "Identifiants envoyés à $to" : "Échec de l'envoi du mail (vérifier la configuration SMTP dans config.php)"]);
+    out(['ok' => true, 'message' => 'Si un compte existe pour cette adresse, un lien pour choisir un nouveau mot de passe vient d\'y être envoyé.']);
 }
 if ($parts === ['auth', 'me']) {
-    out(['ok' => true, 'connecte' => $viaSession, 'login' => $viaSession ? ($_SESSION['ma_login'] ?? 'admin') : null]);
+    out(['ok' => true, 'connecte' => $viaSession, 'utilisateur' => ma_user()]);
 }
 if ($parts === ['ping']) {
     out(['ok' => true, 'version' => MA_VERSION, 'auth' => $viaApiKey ? 'api_key' : ($viaSession ? 'session' : 'aucune'), 'date' => ma_now()]);
@@ -97,6 +92,26 @@ if (!$viaApiKey && !$viaSession) {
 
 $db = ma_db();
 $now = ma_now();
+
+// ------------------------------------------------------------------ Droits
+// Make (clé API) et les administrateurs : tout. Un service (sav, commerce, finance) : les demandes
+// de son service, leur suivi, les conversations qui s'y rattachent, et les noms de l'équipe.
+$user = $viaApiKey ? null : ma_user();
+$estAdmin = $viaApiKey || (($user['acces'] ?? '') === 'admin');
+$portee = $estAdmin ? null : ma_acces_service_demande((string) ($user['acces'] ?? ''));
+if (!$estAdmin) {
+    $r0 = $parts[0] ?? '';
+    $r1 = $parts[1] ?? null;
+    $lecture = $method === 'GET';
+    $permis = $portee !== null && (
+        ($r0 === 'rep' && $r1 === 'demandes' && ($lecture || (($method === 'PATCH' || $method === 'POST') && isset($parts[2]))))
+        || ($r0 === 'rep' && in_array($r1, ['fiches', 'messages', 'listes'], true) && $lecture)
+        || ($r0 === 'equipe' && $lecture && !isset($parts[1])));
+    if (!$permis) {
+        fail('Accès réservé aux administrateurs', 403);
+    }
+}
+$SVC_FICHE = ['SAV' => 'technique', 'COMMERCIAL' => 'commercial', 'FINANCE' => 'finance'];
 
 // ------------------------------------------------------------------ Helpers SQL
 function cols(PDO $db, string $table): array
@@ -339,6 +354,9 @@ try {
                     $id = idFrom($parts, 2);
                     if ($method === 'GET') {
                         $f = getOne($db, 'rep_fiches', $id) ?? fail('Fiche introuvable', 404);
+                        if ($portee !== null && ma_plat($f['service'] ?? '') !== $SVC_FICHE[$portee]) {
+                            fail('Accès réservé à un autre service', 403);
+                        }
                         $st = $db->prepare('SELECT * FROM rep_demandes WHERE fiche_id = ? ORDER BY id');
                         $st->execute([$id]);
                         $f['demandes'] = $st->fetchAll();
@@ -369,7 +387,11 @@ try {
                         out(['ok' => true]);
                     }
                 }
-                out(['ok' => true, 'rows' => listRows($db, 'rep_fiches', 'created_at', $_GET, ['societe', 'contact', 'tel_norm', 'resume', 'marque', 'modele'])]);
+                $rows = listRows($db, 'rep_fiches', 'created_at', $_GET, ['societe', 'contact', 'tel_norm', 'resume', 'marque', 'modele']);
+                if ($portee !== null) {
+                    $rows = array_values(array_filter($rows, fn($f) => ma_plat($f['service'] ?? '') === $SVC_FICHE[$portee]));
+                }
+                out(['ok' => true, 'rows' => $rows]);
             }
             if ($sub === 'messages') {
                 if ($method === 'POST') {
@@ -397,6 +419,13 @@ try {
                     out(['ok' => true, 'id' => $id, 'fiche_id' => $ficheId]);
                 }
                 // GET : la conversation d'une fiche (?fiche_id=) ou d'un numéro (?tel=)
+                if ($portee !== null) {
+                    $f = getOne($db, 'rep_fiches', (int) ($_GET['fiche_id'] ?? 0));
+                    if (!$f || ma_plat($f['service'] ?? '') !== $SVC_FICHE[$portee]) {
+                        out(['ok' => true, 'rows' => []]);
+                    }
+                    unset($_GET['tel']);
+                }
                 $where = ['1=1'];
                 $args = [];
                 if (!empty($_GET['fiche_id'])) {
@@ -419,8 +448,11 @@ try {
                 if ($method === 'POST' && $sub2 === null) {
                     $d = $body;
                     $svc = strtoupper(ma_str($d['service'] ?? null) ?? '');
-                    $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'FINANCE' => 'FINANCE'];
-                    $d['service'] = $map[$svc] ?? fail("Service non reconnu : $svc");
+                    $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'COMMERCE' => 'COMMERCIAL', 'FINANCE' => 'FINANCE',
+                        'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE'];
+                    // Sujet que personne n'a su classer : il part au responsable des sujets indéterminés.
+                    $d['service'] = $map[$svc] ?? 'AUTRE';
+                    $d['canal'] = ma_canal($d);
                     $d['priorite'] = $d['service'] === 'SAV'
                         && (ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT') ? 'URGENT' : 'Normal';
                     $d['tel'] = ma_tel((string) ($d['tel'] ?? $d['telephone'] ?? ''));
@@ -468,6 +500,7 @@ try {
                             . ' [' . $rt['regle_libelle'] . ']' . ($rt['notes'] ? ' — ' . implode(' ; ', $rt['notes']) : ''),
                         ['id' => $id, 'to' => $rt['to'], 'sms' => $rt['sms']]);
                     $cree = getOne($db, 'rep_demandes', $id);
+                    ma_rep_evenements_creation($db, $cree, $rt);
                     $liens = ma_rep_liens($db, $cree);
                     ma_rep_notifier_client($db, $cree, 'recue');
                     out(['ok' => true, 'id' => $id, 'service' => $d['service'], 'priorite' => $d['priorite'], 'urgent' => $rt['urgent'],
@@ -479,17 +512,31 @@ try {
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
+                    $dem = getOne($db, 'rep_demandes', $id) ?? fail('Demande introuvable', 404);
+                    if ($portee !== null && $dem['service'] !== $portee) {
+                        fail('Cette demande relève d\'un autre service', 403);
+                    }
                     if ($method === 'PATCH' || $method === 'POST') {
                         $d = $body;
                         // Statut, rappel prévu, note : même logique que la page interne, client prévenu.
                         $etapes = array_intersect_key($d, array_flip(['statut', 'rappel_prevu', 'note', 'pris_par', 'traite_par']));
                         $autres = array_diff_key($d, $etapes + ['jeton_interne' => 1, 'jeton_client' => 1, 'pris_at' => 1, 'traite_at' => 1]);
+                        if (!$estAdmin) {
+                            // Un service fait avancer la demande ; il ne réécrit pas ce que le client a dit.
+                            $autres = array_intersect_key($autres, ['commentaire' => 1]);
+                        }
+                        $parQui = (string) ($d['pris_par'] ?? $d['traite_par'] ?? '') ?: (string) ($user['nom'] ?? '');
                         if ($autres) {
                             update($db, 'rep_demandes', $id, $autres);
+                            $chg = array_keys(array_filter($autres, fn($v, $k) => (string) $v !== (string) ($dem[$k] ?? ''), ARRAY_FILTER_USE_BOTH));
+                            if ($chg) {
+                                ma_rep_evenement($db, $id, 'modifiee', $user['nom'] ?? ($viaApiKey ? 'Make' : null), $viaApiKey ? 'make' : 'plateforme',
+                                    'Informations modifiées : ' . implode(', ', $chg), array_intersect_key($autres, array_flip($chg)));
+                            }
                         }
                         if ($etapes) {
                             try {
-                                ma_rep_avancer($db, $id, $etapes, (string) ($d['pris_par'] ?? $d['traite_par'] ?? ''));
+                                ma_rep_avancer($db, $id, $etapes, $parQui);
                             } catch (RuntimeException $e) {
                                 fail($e->getMessage(), 404);
                             }
@@ -497,12 +544,25 @@ try {
                         out(['ok' => true, 'demande' => getOne($db, 'rep_demandes', $id)]);
                     }
                     if ($method === 'DELETE') {
+                        if (!$estAdmin) {
+                            fail('Seul un administrateur peut supprimer une demande', 403);
+                        }
                         $db->prepare('DELETE FROM rep_demandes WHERE id = ?')->execute([$id]);
                         out(['ok' => true]);
                     }
-                    out(['ok' => true, 'demande' => getOne($db, 'rep_demandes', $id)]);
+                    $dem['liens'] = ma_rep_liens($db, $dem);
+                    if ($sub3 = ($parts[3] ?? null)) {
+                        if ($sub3 === 'historique') {
+                            out(['ok' => true, 'historique' => ma_rep_historique($db, $dem)]);
+                        }
+                    }
+                    out(['ok' => true, 'demande' => $dem, 'historique' => ma_rep_historique($db, $dem)]);
                 }
-                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $_GET, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'])]);
+                $q = $_GET;
+                if ($portee !== null) {
+                    $q['service'] = $portee;
+                }
+                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $q, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'])]);
             }
             if ($sub === 'routage') {
                 routageRoutes($db, 'repondeur', $sub2, $method, $body);
@@ -522,6 +582,8 @@ try {
                     if ($sub === 'contacts' && isset($d['mobile'])) {
                         $d['mobile'] = ma_str($d['mobile']);
                     }
+                    // Le mot de passe ne s'écrit que par le lien d'invitation (compte.php).
+                    unset($d['mdp_hash'], $d['mdp_jeton'], $d['mdp_jeton_exp'], $d['derniere_connexion']);
                     return $d;
                 };
                 if ($method === 'POST' && $sub2 === null) {
@@ -533,22 +595,26 @@ try {
                         fail('Cible requise');
                     }
                     $id = insert($db, $table, $d);
-                    out(['ok' => true, 'id' => $id, 'ligne' => getOne($db, $table, $id)]);
+                    $l = getOne($db, $table, $id);
+                    out(['ok' => true, 'id' => $id, 'ligne' => $sub === 'contacts' ? ma_contact_public($l) : $l]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
                     if ($method === 'PATCH' || $method === 'POST') {
                         update($db, $table, $id, $norm($body));
-                        out(['ok' => true, 'ligne' => getOne($db, $table, $id)]);
+                        $l = getOne($db, $table, $id);
+                        out(['ok' => true, 'ligne' => $sub === 'contacts' ? ma_contact_public($l) : $l]);
                     }
                     if ($method === 'DELETE') {
                         $db->prepare("DELETE FROM $table WHERE id = ?")->execute([$id]);
                         out(['ok' => true]);
                     }
-                    out(['ok' => true, 'ligne' => getOne($db, $table, $id) ?? fail('Introuvable', 404)]);
+                    $l = getOne($db, $table, $id) ?? fail('Introuvable', 404);
+                    out(['ok' => true, 'ligne' => $sub === 'contacts' ? ma_contact_public($l) : $l]);
                 }
                 $ordre = $sub === 'contacts' ? 'role, nom' : 'ordre, id';
-                out(['ok' => true, 'rows' => $db->query("SELECT * FROM $table ORDER BY $ordre")->fetchAll(),
+                $rows = $db->query("SELECT * FROM $table ORDER BY $ordre")->fetchAll();
+                out(['ok' => true, 'rows' => $sub === 'contacts' ? array_map('ma_contact_public', $rows) : $rows,
                     'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence')")
                         ->fetchAll(PDO::FETCH_KEY_PAIR)]);
             }
@@ -584,11 +650,122 @@ try {
                 }
                 out(['ok' => true] + ma_rep_listes($db));
             }
+            // Aperçu des messages envoyés au client, sur la dernière demande (ou un exemple).
+            if ($sub === 'apercu') {
+                $dem = $db->query("SELECT * FROM rep_demandes WHERE jeton_client IS NOT NULL ORDER BY id DESC LIMIT 1")->fetch()
+                    ?: ['id' => 0, 'service' => 'SAV', 'contact' => 'Monsieur Martin', 'marque' => 'Worthington Creyssensac', 'modele' => 'ROLLAIR 220',
+                        'type_panne' => 'Le compresseur ne redémarre plus', 'jeton_client' => str_repeat('0', 32), 'priorite' => 'Normal'];
+                $dem['pris_par'] = $dem['pris_par'] ?: 'Julien Jardin';
+                $dem['rappel_prevu'] = $dem['rappel_prevu'] ?: date('Y-m-d 10:00:00', strtotime('+1 day'));
+                $out = [];
+                foreach (['recue' => 'Demande reçue', 'prise_en_charge' => 'Prise en charge', 'rappel' => 'Rappel prévu', 'traitee' => 'Demande traitée'] as $evt => $nom) {
+                    $out[] = ['evenement' => $evt, 'nom' => $nom, 'texte' => ma_rep_texte_client($db, $dem, $evt), 'html' => ma_rep_html_client($db, $dem, $evt)];
+                }
+                out(['ok' => true, 'demande_id' => (int) $dem['id'], 'messages' => $out, 'standard' => ma_param($db, 'rep_standard_tel', '01 34 32 95 00')]);
+            }
             // Simulateur : qui recevrait cette demande ? Rien n'est enregistré ni envoyé.
             if ($sub === 'simuler') {
                 out(['ok' => true] + ma_rep_router($db, $body + $_GET));
             }
             fail('Route rep inconnue', 404);
+
+        // ============================================================ Équipe et accès
+        case 'equipe':
+            if (!$estAdmin) {
+                // Un service n'a besoin que des noms (« pris en charge par »).
+                $rows = $db->query("SELECT * FROM rep_contacts WHERE actif = 1 AND role != 'boite' ORDER BY nom")->fetchAll();
+                out(['ok' => true, 'rows' => array_map(fn($c) => ['id' => (int) $c['id'], 'nom' => $c['nom'], 'fonction' => $c['fonction'],
+                    'service_equipe' => ma_contact_service($c)], $rows)]);
+            }
+            $normEquipe = function (array $d) use ($db): array {
+                $d = array_intersect_key($d, array_flip(['nom', 'fonction', 'service', 'acces', 'email', 'mobile', 'role', 'departements',
+                    'marques', 'competences', 'membres', 'actif', 'commentaire', 'externe']));
+                foreach (['actif', 'externe'] as $b) {
+                    if (array_key_exists($b, $d)) {
+                        $d[$b] = ma_bool($d[$b]) ? 1 : 0;
+                    }
+                }
+                if (array_key_exists('acces', $d)) {
+                    $d['acces'] = isset(MA_ACCES[$d['acces']]) ? $d['acces'] : null;
+                    if ($d['acces'] && !str_contains((string) ($d['email'] ?? ''), '@')) {
+                        fail('Une adresse e-mail est nécessaire pour ouvrir un accès : c\'est l\'identifiant de connexion');
+                    }
+                }
+                if (array_key_exists('email', $d) && trim((string) $d['email']) !== '') {
+                    $d['email'] = trim((string) $d['email']);
+                }
+                foreach (['mobile', 'fonction', 'departements'] as $c) {
+                    if (array_key_exists($c, $d)) {
+                        $d[$c] = ma_str($d[$c]);
+                    }
+                }
+                return $d;
+            };
+            $unique = function (array $d, int $id = 0) use ($db): void {
+                if (trim((string) ($d['email'] ?? '')) === '' || empty($d['acces'])) {
+                    return;
+                }
+                $st = $db->prepare("SELECT nom FROM rep_contacts WHERE lower(email) = lower(?) AND id != ? AND acces IN ('admin','sav','commerce','finance')");
+                $st->execute([$d['email'], $id]);
+                if ($autre = $st->fetchColumn()) {
+                    fail("Cette adresse sert déjà d'identifiant à $autre");
+                }
+            };
+            if ($sub === 'responsables' && ($method === 'POST' || $method === 'PATCH')) {
+                $ins = $db->prepare('INSERT OR REPLACE INTO parametres(cle, valeur) VALUES (?, ?)');
+                foreach (['sav' => 'resp_sav', 'finance' => 'resp_finance', 'commercial' => 'resp_commerce', 'autre' => 'resp_indetermine'] as $k => $cle) {
+                    if (isset($body[$k])) {
+                        $ins->execute([$cle, (string) (int) $body[$k]]);
+                    }
+                }
+                logEvent($db, 'plateforme', 'ok', 'responsables_modifies', 'Responsables de service mis à jour' . ($user ? ' par ' . $user['nom'] : ''));
+            } elseif ($method === 'POST' && $sub === null) {
+                $d = $normEquipe($body) + ['role' => 'membre', 'actif' => 1];
+                if (trim((string) ($d['nom'] ?? '')) === '') {
+                    fail('Le nom est requis');
+                }
+                $unique($d);
+                $id = insert($db, 'rep_contacts', $d);
+                logEvent($db, 'plateforme', 'ok', 'equipe_ajout', $d['nom'] . ' ajouté(e) à l\'équipe' . ($user ? ' par ' . $user['nom'] : ''));
+                out(['ok' => true, 'id' => $id, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id))]);
+            } elseif ($sub !== null && $sub !== 'responsables') {
+                $id = idFrom($parts, 1);
+                $c = getOne($db, 'rep_contacts', $id) ?? fail('Personne introuvable', 404);
+                if ($sub2 === 'invitation' && $method === 'POST') {
+                    if (!isset(MA_ACCES[$c['acces'] ?? '']) || !str_contains((string) $c['email'], '@')) {
+                        fail('Donnez d\'abord un accès et une adresse e-mail à cette personne');
+                    }
+                    $r = ma_compte_lien($db, $c, trim((string) $c['mdp_hash']) !== '' ? 'reinit' : 'invitation');
+                    out(['ok' => true] + $r);
+                }
+                if ($method === 'PATCH' || $method === 'POST') {
+                    $d = $normEquipe($body);
+                    $unique($d + ['email' => $c['email'], 'acces' => $c['acces']], $id);
+                    if (array_key_exists('acces', $d) && !$d['acces']) {
+                        // Accès retiré : le mot de passe ne sert plus.
+                        $d['mdp_hash'] = null;
+                    }
+                    $cols = array_keys($d);
+                    if ($cols) {
+                        $db->prepare('UPDATE rep_contacts SET ' . implode(', ', array_map(fn($k) => "$k = ?", $cols)) . ' WHERE id = ?')
+                            ->execute([...array_values($d), $id]);
+                    }
+                    out(['ok' => true, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id))]);
+                }
+                if ($method === 'DELETE') {
+                    $db->prepare('DELETE FROM rep_contacts WHERE id = ?')->execute([$id]);
+                    logEvent($db, 'plateforme', 'ok', 'equipe_retrait', $c['nom'] . ' retiré(e) de l\'équipe' . ($user ? ' par ' . $user['nom'] : ''));
+                    out(['ok' => true]);
+                }
+                out(['ok' => true, 'personne' => ma_contact_public($c)]);
+            }
+            $rows = $db->query('SELECT * FROM rep_contacts ORDER BY nom')->fetchAll();
+            $resp = ma_responsables($db);
+            out(['ok' => true, 'rows' => array_map('ma_contact_public', $rows),
+                'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, $resp),
+                'acces' => MA_ACCES, 'services' => MA_SERVICES,
+                'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel')")
+                    ->fetchAll(PDO::FETCH_KEY_PAIR)]);
 
         case 'distributeurs':
             if ($sub === 'find') {

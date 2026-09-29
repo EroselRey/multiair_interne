@@ -1,4 +1,4 @@
-/* MULTIAIR — application (tableau de bord des scénarios Make) */
+/* MULTIAIR — plateforme des demandes clients (demandes, équipe, réglages, autres automatisations) */
 (() => {
   'use strict';
 
@@ -224,41 +224,52 @@
   };
   const ficheStatut = (s) => pill((FICHE_STATUTS[s] || [s])[0], (FICHE_STATUTS[s] || [0, 'muted'])[1]);
 
-  // ------------------------------------------------------------------ état global
+  // ------------------------------------------------------------------ utilisateur, navigation
+  const MA = window.MA || {user: {nom: 'Administrateur', acces: 'admin'}, admin: true};
+  const moi = MA.user || {nom: '', acces: ''};
+  const ADMIN = !!MA.admin;
+  const SERVICE_MOI = {sav: 'SAV', commerce: 'COMMERCIAL', finance: 'FINANCE'}[moi.acces] || null;
+  const PAGES_SERVICE = ['a-traiter', 'demandes', 'demande', 'appel', 'stats'];
   const main = $('#main');
-  let current = 'overview';
+  const app = $('#app');
+  let current = 'a-traiter';
   const tabs = {};
 
-  async function show(tab) {
+  async function show(tab, arg = null, push = true) {
+    if (!tabs[tab] || (!ADMIN && !PAGES_SERVICE.includes(tab))) tab = 'a-traiter';
     current = tab;
-    $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    const hash = '#' + tab + (arg !== null && arg !== undefined ? '/' + arg : '');
+    if (push && location.hash !== hash) history.pushState(null, '', hash);
+    const actif = {demande: 'demandes', appel: 'demandes'}[tab] || tab;
+    $$('#side [data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === actif));
+    app.classList.remove('menu');
+    closeDrawer();
     main.innerHTML = '<div class="loading">Chargement…</div>';
     try {
-      await tabs[tab]();
+      await tabs[tab](arg);
     } catch (e) {
       main.innerHTML = `<div class="msg err">${h(e.message)}</div>`;
     }
     window.scrollTo(0, 0);
   }
-  $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.tab); });
-  $('#refreshBtn').addEventListener('click', () => { show(current); refreshBadges(); });
-  $('#logoutBtn').addEventListener('click', async () => { await fetch('api.php?r=auth/logout'); location.reload(); });
+  const depuisAdresse = (push) => { const [t, a] = location.hash.replace('#', '').split('/'); show(t || 'a-traiter', a ?? null, push); };
+  window.addEventListener('popstate', () => depuisAdresse(false));
+  $('#side').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b) show(b.dataset.page); });
+  $('#menuBtn').addEventListener('click', (e) => { e.stopPropagation(); app.classList.toggle('menu'); });
+  document.addEventListener('click', (e) => { if (app.classList.contains('menu') && !e.target.closest('#side')) app.classList.remove('menu'); });
+  $('#logoutBtn').addEventListener('click', async () => { await fetch('api.php?r=auth/logout'); location.href = 'index.php'; });
 
+  // Pastille « À traiter » et bandeau rouge des urgences non prises en charge (72 h), rafraîchis chaque minute.
   async function refreshBadges() {
     try {
-      const s = (await api('stats/overview')).a_traiter;
-      const set = (k, n) => { const b = $(`[data-badge=${k}]`); if (b) { b.textContent = n; b.classList.toggle('zero', !n); } };
-      set('repondeur', s.rep_fiches_en_attente + s.rep_demandes_a_traiter);
-      set('chatbot', s.chat_leads_nouveaux);
-      set('adv', s.adv_a_valider);
-      set('cso', s.cso_en_cours);
-      set('cee', s.cee_actions_a_faire);
-      urgentBar(s.rep_urgences || 0);
+      const r = await api('rep/demandes', {query: {statut: 'a_traiter', limit: 2000}});
+      const n = r.rows.length;
+      const b = $('[data-badge="a-traiter"]');
+      if (b) { b.textContent = n; b.classList.toggle('zero', !n); }
+      const limite = Date.now() - 72 * 3600 * 1000;
+      urgentBar(r.rows.filter((d) => d.priorite === 'URGENT' && new Date(String(d.created_at).replace(' ', 'T')).getTime() >= limite).length);
     } catch (e) { /* silencieux */ }
   }
-
-  // Bandeau rouge sur toutes les pages tant qu'une urgence SAV n'est pas prise en charge.
-  // Actualisé chaque minute : une urgence apparaît sans avoir à recharger la page.
   function urgentBar(n) {
     const bar = $('#urgentBar');
     if (!bar) return;
@@ -266,10 +277,601 @@
     if (!n) return;
     bar.innerHTML = `<span class="pulse" aria-hidden="true"></span>
       <span>${n} urgence${n > 1 ? 's' : ''} — production arrêtée — ${n > 1 ? 'personne ne les a' : "personne ne l'a"} encore prise${n > 1 ? 's' : ''} en charge</span>
-      <span class="go">Voir ${n > 1 ? 'les demandes' : 'la demande'} →</span>`;
-    bar.onclick = () => { repSub.v = 'demandes'; show('repondeur'); };
+      <span class="go">Voir →</span>`;
+    bar.onclick = () => show('a-traiter');
   }
   setInterval(() => { if (!document.hidden) refreshBadges(); }, 60000);
+
+  // ------------------------------------------------------------------ icônes, canaux, états
+  const PATHS = {
+    telephone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    whatsapp: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/>',
+    email: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+    sms: '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    prendre: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/>',
+    agenda: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    note: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    lien: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+    envoi: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/>',
+    oeil: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
+    retour: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+  };
+  const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[n] || ''}</svg>`;
+  const CANAUX = {telephone: 'Téléphone', whatsapp: 'WhatsApp', chat: 'Chat du site', email: 'E-mail'};
+  const canalDe = (d) => {
+    if (CANAUX[d.canal]) return d.canal;
+    const s = String(d.source || '');
+    return s.includes('chat') ? 'chat' : (['email', 'adv'].includes(s) ? 'email' : (s === 'whatsapp' ? 'whatsapp' : 'telephone'));
+  };
+  const canalHtml = (c, court = false) => `<span class="canal">${ic(c, 's')}${h(CANAUX[c] || c)}${court ? '' : ''}</span>`;
+  const SERVICES = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Finance', AUTRE: 'À orienter'};
+  const ETATS = {qualification: 'Avec Claire', a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traitée'};
+  const etatDe = (d) => (d.fiche ? 'qualification' : d.statut);
+  const estUrgente = (d) => !d.fiche && d.priorite === 'URGENT' && d.statut === 'a_traiter';
+  const etatPill = (d) => estUrgente(d) ? '<span class="st urgent">URGENT</span>' : `<span class="st ${etatDe(d)}">${h(ETATS[etatDe(d)] || etatDe(d))}</span>`;
+  const svcPill = (s) => `<span class="pill">${h(SERVICES[s] || s || '—')}</span>`;
+  const telFr = (t) => { const m = String(t || '').match(/^33(\d{9})$/); return m ? ('0' + m[1]).replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
+  const sujetDe = (d) => d.type_panne || d.besoin_commercial || (d.nature ? nomDe(R_NATURES, d.nature) : '')
+    || (d.reference_facture ? 'Facture ' + d.reference_facture : '') || d.resume || '';
+  const materielDe = (d) => [d.marque_norm && d.marque_norm !== 'autre' ? nomDe(R_MARQUES, d.marque_norm) : (d.marque && !/^inconnu/i.test(d.marque) ? d.marque : ''), d.modele].filter(Boolean).join(' ');
+  const clientDe = (d) => [d.contact, d.type_client ? L(d.type_client).toLowerCase() : ''].filter(Boolean).join(' · ');
+  const prenom = (n) => String(n || '').trim().split(/\s+/)[0] || '';
+  // « Julien » (ancien nom) et « Julien Jardin » désignent la même personne.
+  const memePersonne = (a, b) => {
+    a = String(a || '').trim().toLowerCase(); b = String(b || '').trim().toLowerCase();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return (!a.includes(' ') || !b.includes(' ')) && a.split(' ')[0] === b.split(' ')[0];
+  };
+  const mienne = (d) => memePersonne(d.pris_par, moi.nom) || String(d.destinataires || '').split(/\s*,\s*/).some((n) => memePersonne(n, moi.nom));
+  const quand = (s) => { const d = new Date(String(s).replace(' ', 'T')); if (isNaN(d)) return h(s || ''); const auj = new Date();
+    const hier = new Date(Date.now() - 86400000); const hh = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    if (d.toDateString() === auj.toDateString()) return hh;
+    if (d.toDateString() === hier.toDateString()) return 'Hier ' + hh;
+    return fmtDate(s, false).slice(0, 5) + ' ' + hh; };
+  const jourFr = (s) => { const d = new Date(String(s).replace(' ', 'T')); if (isNaN(d)) return ''; return d.toLocaleDateString('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'}) + ' à ' + d.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}); };
+
+  // Toutes les demandes visibles par l'utilisateur, plus les appels encore en échange avec Claire.
+  async function chargerDemandes() {
+    const [dem, fiches] = await Promise.all([api('rep/demandes', {query: {limit: 5000}}), api('rep/fiches', {query: {limit: 1000}}), chargerListes().catch(() => {})]);
+    const avecDemande = new Set(dem.rows.map((d) => d.fiche_id).filter(Boolean));
+    const SVC_FICHE = {technique: 'SAV', commercial: 'COMMERCIAL', finance: 'FINANCE'};
+    const enCours = fiches.rows.filter((f) => ['En attente', 'Urgent'].includes(f.statut) && !avecDemande.has(f.id)).map((f) => ({
+      fiche: f, id: f.id, fiche_id: f.id, created_at: f.created_at, service: SVC_FICHE[String(f.service || '').trim().toLowerCase()] || 'AUTRE',
+      priorite: f.urgence ? 'URGENT' : 'Normal', statut: 'qualification', societe: f.societe, contact: f.contact, tel: f.tel_norm,
+      marque: f.marque, modele: f.modele, departement: f.departement, canal: 'telephone', source: 'en_qualification',
+      type_panne: f.type_panne, besoin_commercial: f.besoin_commercial, resume: f.resume}));
+    return [...dem.rows, ...enCours];
+  }
+  const ouvrir = (d) => (d.fiche ? show('appel', d.fiche.id) : show('demande', d.id));
+
+  // Faire avancer une demande depuis une liste ou sa fiche. Le client est prévenu par le serveur.
+  async function avancer(d, chg, msg) {
+    const corps = Object.assign({}, chg);
+    if (corps.statut === 'en_cours' && !corps.pris_par) corps.pris_par = moi.nom;
+    if (corps.statut === 'traite' && !corps.traite_par) corps.traite_par = moi.nom;
+    const r = await patch('rep/demandes/' + d.id, corps);
+    toast(msg || 'Enregistré');
+    refreshBadges();
+    return r.demande;
+  }
+
+  // ================================================================== À TRAITER
+  const vueATraiter = {portee: 'tout', service: ''};
+  tabs['a-traiter'] = async () => {
+    const toutes = await chargerDemandes();
+    const render = () => {
+      let rows = toutes.filter((d) => !d.fiche);
+      if (!SERVICE_MOI && vueATraiter.service) rows = rows.filter((d) => d.service === vueATraiter.service);
+      if (vueATraiter.portee === 'moi') rows = rows.filter(mienne);
+      const attente = (d) => new Date(String(d.created_at).replace(' ', 'T')).getTime();
+      const aPrendre = rows.filter((d) => d.statut === 'a_traiter').sort((a, b) => (estUrgente(b) - estUrgente(a)) || (attente(b) - attente(a)));
+      const enCours = rows.filter((d) => d.statut === 'en_cours').sort((a, b) => String(a.rappel_prevu || '9').localeCompare(String(b.rappel_prevu || '9')) || (attente(b) - attente(a)));
+      const sept = Date.now() - 7 * 86400000;
+      const traitees7 = rows.filter((d) => d.statut === 'traite' && d.traite_at && new Date(String(d.traite_at).replace(' ', 'T')).getTime() >= sept).length;
+      const urgentes = aPrendre.filter(estUrgente).length;
+      const qualif = toutes.filter((d) => d.fiche && (SERVICE_MOI || !vueATraiter.service || d.service === vueATraiter.service)).length;
+      const nomSvc = SERVICE_MOI ? SERVICES[SERVICE_MOI] : (vueATraiter.service ? SERVICES[vueATraiter.service] : '');
+      const carte = (d) => {
+        const act = d.statut === 'a_traiter'
+          ? `<button class="btn ${estUrgente(d) ? 'urgent' : 'primary'}" data-prendre="${d.id}">Je la prends</button>`
+          : `<button class="btn go" data-traiter="${d.id}">${ic('check', 's')}Traitée</button>`;
+        const qui = d.statut === 'en_cours'
+          ? `<span>Pris par <b>${h(d.pris_par || '—')}</b></span>${d.rappel_prevu ? `<span>Rappel : ${h(jourFr(d.rappel_prevu))}</span>` : ''}`
+          : ((d.destinataires || d.dest_to) ? `<span>Transmise à ${h(d.destinataires || String(d.dest_to || '').replace(/;/g, ', '))}</span>` : '');
+        return `<article class="dcard ${estUrgente(d) ? 'urgent' : ''}" data-ouvrir="${d.id}">
+          <div class="c1">${etatPill(d)}<span class="quand">${ic(canalDe(d), 's')}${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></div>
+          <div class="c2"><b>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</b>
+            <span>${h([SERVICES[d.service], materielDe(d)].filter(Boolean).join(' · '))}</span></div>
+          <div class="c3"><b>${h(clientDe(d) || '—')}</b>${d.code_postal || d.departement ? `<span>Site : ${h(d.code_postal || d.departement)}</span>` : ''}${qui}</div>
+          <div class="c4"><button class="btn" data-ouvrir="${d.id}">Ouvrir</button>${act}</div>
+        </article>`;
+      };
+      main.innerHTML = `
+        <div class="page-head"><div class="t"><h1>Bonjour ${h(prenom(moi.nom))}</h1>
+          <p>${aPrendre.length ? `${aPrendre.length} demande${aPrendre.length > 1 ? 's' : ''}${nomSvc ? ' ' + h(nomSvc) : ''} attend${aPrendre.length > 1 ? 'ent' : ''} un rappel${urgentes ? `, dont ${urgentes} urgente${urgentes > 1 ? 's' : ''}` : ''}.` : 'Aucune demande n\'attend de rappel.'}</p></div>
+          ${SERVICE_MOI ? `<div class="seg" role="group" aria-label="Périmètre">
+              <button class="${vueATraiter.portee === 'tout' ? 'on' : ''}" data-portee="tout">Tout le ${h(SERVICES[SERVICE_MOI])}</button>
+              <button class="${vueATraiter.portee === 'moi' ? 'on' : ''}" data-portee="moi">Mes demandes</button></div>`
+            : `<div class="frow">${[['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['AUTRE', 'À orienter']].map(([v, t]) =>
+              `<button class="chip ${vueATraiter.service === v ? 'on' : ''}" data-svc="${v}">${t}</button>`).join('')}</div>`}
+        </div>
+        <div class="tiles">
+          <button class="tile ${urgentes ? 'rouge' : ''}" data-aller="urgent"><b>${urgentes}</b><span>Urgence${urgentes > 1 ? 's' : ''} non prise${urgentes > 1 ? 's' : ''} en charge</span></button>
+          <button class="tile orange" data-aller="a_traiter"><b>${aPrendre.length}</b><span>À traiter</span></button>
+          <button class="tile bleu" data-aller="en_cours"><b>${enCours.length}</b><span>En cours</span></button>
+          <button class="tile vert" data-aller="traite"><b>${traitees7}</b><span>Traitées ces 7 derniers jours</span></button>
+        </div>
+        <section class="section"><h2>À prendre en charge</h2>
+          ${aPrendre.length ? `<div class="cards">${aPrendre.map(carte).join('')}</div>` : '<div class="vide">Rien à prendre en charge pour le moment.</div>'}</section>
+        <section class="section"><h2>En cours</h2><p class="hint">Demandes prises en charge, pas encore traitées. Le prochain rappel prévu d'abord.</p>
+          ${enCours.length ? `<div class="cards">${enCours.map(carte).join('')}</div>` : '<div class="vide">Aucune demande en cours.</div>'}</section>
+        ${qualif ? `<p class="hint" style="margin-top:18px">${qualif} appel${qualif > 1 ? 's' : ''} encore en échange avec Claire sur WhatsApp : ${qualif > 1 ? 'ils arriveront' : 'il arrivera'} ici une fois validé${qualif > 1 ? 's' : ''}. <button class="link" data-aller="qualification">Voir</button></p>` : ''}`;
+      $$('[data-portee]', main).forEach((b) => b.onclick = () => { vueATraiter.portee = b.dataset.portee; render(); });
+      $$('[data-svc]', main).forEach((b) => b.onclick = () => { vueATraiter.service = b.dataset.svc; render(); });
+      $$('[data-aller]', main).forEach((b) => b.onclick = () => {
+        const v = b.dataset.aller;
+        vueDemandes.f = {etat: v === 'urgent' ? 'a_traiter' : v};
+        vueDemandes.f.priorite = v === 'urgent' ? 'URGENT' : '';
+        if (!SERVICE_MOI && vueATraiter.service) vueDemandes.f.service = vueATraiter.service;
+        if (v === 'traite') vueDemandes.f.periode = '7';
+        show('demandes');
+      });
+      $$('[data-ouvrir]', main).forEach((el) => el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-prendre],[data-traiter]')) return;
+        e.stopPropagation(); show('demande', el.dataset.ouvrir);
+      }));
+      $$('[data-prendre]', main).forEach((b) => b.onclick = async () => {
+        b.disabled = true;
+        const d = toutes.find((x) => !x.fiche && String(x.id) === b.dataset.prendre);
+        Object.assign(d, await avancer(d, {statut: 'en_cours'}, 'Demande prise en charge — le client est prévenu'));
+        render();
+      });
+      $$('[data-traiter]', main).forEach((b) => b.onclick = async () => {
+        b.disabled = true;
+        const d = toutes.find((x) => !x.fiche && String(x.id) === b.dataset.traiter);
+        Object.assign(d, await avancer(d, {statut: 'traite'}, 'Demande traitée — le client est prévenu'));
+        render();
+      });
+    };
+    render();
+  };
+
+  // ================================================================== DEMANDES (vue globale)
+  const vueDemandes = {f: {}, q: '', page: 0};
+  tabs.demandes = async () => {
+    const toutes = await chargerDemandes();
+    const PAGE_D = 50;
+    const jours = (d) => (Date.now() - new Date(String(d.created_at).replace(' ', 'T')).getTime()) / 86400000;
+    const noms = (d) => String(d.destinataires || '').split(/\s*,\s*/).filter(Boolean);
+    const uniques = (fn) => [...new Set(toutes.flatMap(fn).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+    const FILTRES = {
+      etat: (d, v) => etatDe(d) === v,
+      canal: (d, v) => canalDe(d) === v,
+      service: (d, v) => d.service === v,
+      priorite: (d, v) => (d.priorite === 'URGENT') === (v === 'URGENT'),
+      periode: (d, v) => jours(d) <= Number(v),
+      transmise: (d, v) => noms(d).includes(v),
+      pris: (d, v) => d.pris_par === v,
+      marque: (d, v) => (d.marque_norm || '') === v,
+      client: (d, v) => (d.type_client || '') === v,
+    };
+    const filtrer = (sauf) => toutes.filter((d) => Object.entries(vueDemandes.f).every(([k, v]) => !v || k === sauf || FILTRES[k](d, v))
+      && (!vueDemandes.q || [d.id, d.societe, d.contact, d.tel, telFr(d.tel), d.email, d.resume, d.type_panne, d.besoin_commercial, d.destinataires, d.pris_par, d.commentaire]
+        .join(' ').toLowerCase().includes(vueDemandes.q.toLowerCase())));
+    const rang = (d) => (estUrgente(d) ? 0 : ({qualification: 1, a_traiter: 2, en_cours: 3}[etatDe(d)] ?? 4));
+    const chips = (cle, items, avecNombre = true) => {
+      const base = filtrer(cle);
+      return items.map(([v, t, cls = '']) => `<button class="chip ${cls} ${(vueDemandes.f[cle] || '') === v ? 'on' : ''}" data-f="${cle}" data-v="${h(v)}">${t}${
+        avecNombre ? ' · ' + base.filter((d) => !v || FILTRES[cle](d, v)).length : ''}</button>`).join('');
+    };
+    const select = (cle, label, options) => `<select data-f="${cle}" aria-label="${h(label)}"><option value="">${h(label)} : tous</option>${options.map(([v, t]) =>
+      `<option value="${h(v)}" ${(vueDemandes.f[cle] || '') === v ? 'selected' : ''}>${h(t)}</option>`).join('')}</select>`;
+    const qui = (d) => {
+      if (d.fiche) return '<span class="qui">Claire pose ses questions</span>';
+      if (d.statut === 'traite') return `<span class="qui vert">${h(d.traite_par || d.pris_par || '—')} · traitée</span>`;
+      if (d.statut === 'en_cours') return `<span class="qui bleu">${h(d.pris_par || '—')}</span>`;
+      return `<span class="qui ${estUrgente(d) ? 'rouge' : ''}">${h(d.destinataires || String(d.dest_to || '').replace(/;/g, ', ') || '—')}${estUrgente(d) ? ' · pas encore pris' : ''}</span>`;
+    };
+    const render = () => {
+      const rows = filtrer().sort((a, b) => rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
+      const pages = Math.max(1, Math.ceil(rows.length / PAGE_D));
+      vueDemandes.page = Math.min(vueDemandes.page, pages - 1);
+      const tranche = rows.slice(vueDemandes.page * PAGE_D, (vueDemandes.page + 1) * PAGE_D);
+      const nbFiltres = Object.values(vueDemandes.f).filter(Boolean).length + (vueDemandes.q ? 1 : 0);
+      main.innerHTML = `
+        <div class="page-head"><div class="t"><h1>Demandes</h1><p>${SERVICE_MOI ? 'Toutes les demandes du service ' + h(SERVICES[SERVICE_MOI]) + '.' : 'Toutes les demandes, tous canaux confondus.'}</p></div>
+          <label class="search">${ic('search', 's')}<input type="search" id="dq" placeholder="Nom, société, téléphone, n° de demande…" aria-label="Rechercher" value="${h(vueDemandes.q)}"></label>
+          ${ADMIN ? '<a class="btn" href="api.php?r=export/rep_demandes" download>Exporter (CSV)</a>' : ''}</div>
+        <div class="panel filtres">
+          <div class="frow"><span class="lab">Suivi</span>${chips('etat', [['', 'Toutes'], ['qualification', 'Avec Claire', 'st-qualification'], ['a_traiter', 'À traiter', 'st-a_traiter'],
+            ['en_cours', 'En cours', 'st-en_cours'], ['traite', 'Traitées', 'st-traite']])}</div>
+          <div class="frow"><span class="lab">Canal</span>${chips('canal', [['', 'Tous'], ...Object.entries(CANAUX).map(([k, t]) => [k, ic(k, 's') + h(t)])])}</div>
+          ${SERVICE_MOI ? '' : `<div class="frow"><span class="lab">Service</span>${chips('service', [['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['AUTRE', 'À orienter']])}</div>`}
+          <div class="frow"><span class="lab">Affiner</span>
+            ${select('periode', 'Période', [['1', 'Dernières 24 h'], ['7', '7 derniers jours'], ['30', '30 derniers jours'], ['90', '3 derniers mois']]).replace(': tous', ': tout')}
+            ${select('priorite', 'Priorité', [['URGENT', 'Urgent'], ['NORMAL', 'Normal']]).replace(': tous', ': toutes')}
+            ${select('transmise', 'Transmise à', uniques(noms).map((n) => [n, n]))}
+            ${select('pris', 'Pris en charge par', uniques((d) => [d.pris_par]).map((n) => [n, n]))}
+            ${select('marque', 'Marque', uniques((d) => [d.marque_norm]).map((m) => [m, nomDe(R_MARQUES, m)])).replace(': tous', ': toutes')}
+            ${select('client', 'Client', uniques((d) => [d.type_client]).map((c) => [c, L(c)]))}
+            ${nbFiltres ? '<button class="link" id="raz" style="margin-left:auto">Effacer les filtres</button>' : ''}</div>
+        </div>
+        <div class="panel dl" style="margin-top:16px">
+          <div class="row head"><span>REÇUE</span><span>CANAL</span><span>SUIVI</span><span>SERVICE</span><span>CLIENT</span><span>DEMANDE</span><span>QUI S'EN OCCUPE</span></div>
+          ${tranche.length ? tranche.map((d, i) => `<div class="row ${estUrgente(d) ? 'urgent' : ''}" data-i="${i}" role="link" tabindex="0">
+            <span class="two"><b>${h(quand(d.created_at))}</b><span>${h(rel(d.created_at))}</span></span>
+            ${canalHtml(canalDe(d))}
+            <span>${etatPill(d)}</span>
+            <span>${svcPill(d.service)}</span>
+            <span class="two"><b>${h(d.societe || d.contact || '—')}</b><span>${h([d.type_client ? L(d.type_client) : '', d.departement].filter(Boolean).join(' · '))}</span></span>
+            <span class="txt">${h([materielDe(d), sujetDe(d)].filter(Boolean).join(' — ') || '—')}</span>
+            ${qui(d)}
+            <span class="m1"><b>${h(d.societe || d.contact || '—')}</b><span>${h(sujetDe(d))}</span><span>${ic(canalDe(d), 's')} ${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></span>
+            <span class="m2">${etatPill(d)}${svcPill(d.service)}</span>
+          </div>`).join('') : '<div class="vide" style="border:0">Aucune demande ne correspond.</div>'}
+          <div class="pied"><span>${rows.length} demande${rows.length > 1 ? 's' : ''}</span>${pages > 1 ? `<span>
+            <button class="btn small" data-page="-1" ${vueDemandes.page === 0 ? 'disabled' : ''}>‹ Précédentes</button>
+            Page ${vueDemandes.page + 1} / ${pages}
+            <button class="btn small" data-page="1" ${vueDemandes.page >= pages - 1 ? 'disabled' : ''}>Suivantes ›</button></span>` : ''}</div>
+        </div>`;
+      const q = $('#dq', main);
+      q.oninput = () => { vueDemandes.q = q.value; vueDemandes.page = 0; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#dq', main); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200); };
+      $$('button[data-f]', main).forEach((b) => b.onclick = () => { vueDemandes.f[b.dataset.f] = b.dataset.v; vueDemandes.page = 0; render(); });
+      $$('select[data-f]', main).forEach((s) => s.onchange = () => { vueDemandes.f[s.dataset.f] = s.value; vueDemandes.page = 0; render(); });
+      const raz = $('#raz', main); if (raz) raz.onclick = () => { vueDemandes.f = {}; vueDemandes.q = ''; vueDemandes.page = 0; render(); };
+      $$('[data-page]', main).forEach((b) => b.onclick = () => { vueDemandes.page += Number(b.dataset.page); render(); window.scrollTo(0, 0); });
+      $$('.dl .row[data-i]', main).forEach((r) => {
+        const go = () => ouvrir(tranche[Number(r.dataset.i)]);
+        r.onclick = go; r.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      });
+    };
+    render();
+  };
+
+  // ================================================================== UNE DEMANDE
+  const TYPES_HIST = {
+    recue: ['Réception', 'inbox'], transmise: ['Transmission', 'envoi'], client_prevenu: ['Message au client', 'envoi'],
+    prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
+    rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
+  };
+  const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
+  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
+  const vueHist = {f: 'tout'};
+
+  function historiqueHtml(ev) {
+    const liste = ev.filter((e) => vueHist.f === 'tout' || familleHist(e.type) === vueHist.f);
+    const envois = (d) => (d.envois || d.canaux || []).map((x) => `<span class="pill">${ic(x.canal === 'SMS' ? 'sms' : (x.canal === 'WhatsApp' ? 'whatsapp' : 'email'), 's')}${h(x.canal)} → ${h(x.a)}${x.role === 'copie' ? ' (copie)' : ''}</span>`).join(' ');
+    return `<div class="frow" style="margin-bottom:4px">${Object.entries(FAMILLES_HIST).map(([k, t]) => `<button class="chip ${vueHist.f === k ? 'on' : ''}" data-hist="${k}">${t}</button>`).join('')}</div>
+      <ol class="tl">${liste.length ? liste.map((e) => {
+        const d = e.detail || {};
+        const [nom, icone] = TYPES_HIST[e.type] || [e.type, 'note'];
+        const texte = d.texte ? `<div class="texte" style="margin-top:6px">${h(d.texte)}</div>` : '';
+        const extra = [
+          envois(d) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${envois(d)}</div>` : '',
+          d.envoi ? `<small>Envoi : ${h(d.envoi)}</small>` : '',
+          d.regle && ADMIN ? `<small>Règle : ${h(d.regle)}</small>` : '',
+          (d.notes || []).length && ADMIN ? `<small>${h(d.notes.join(' · '))}</small>` : '',
+        ].join('');
+        return `<li class="fait"><span class="pt" style="background:${e.type === 'traitee' ? 'var(--ok)' : 'var(--primary-2)'};border-color:transparent">${ic(icone, 's')}</span>
+          <span style="min-width:0;flex:1"><b style="color:var(--text)">${h(e.resume || nom)}</b>
+          <small>${h(jourFr(e.date))}${e.qui ? ' · ' + h(e.qui) : ''}${e.via === 'lien_equipe' ? ' · depuis le lien reçu' : ''}${e.reconstitue ? ' · reconstitué' : ''}</small>
+          ${extra}${texte}</span></li>`;
+      }).join('') : '<li class="hint">Rien dans cette catégorie.</li>'}</ol>`;
+  }
+
+  tabs.demande = async (id) => {
+    const [r] = await Promise.all([api('rep/demandes/' + id), chargerListes().catch(() => {})]);
+    const d = r.demande, ev = r.historique || [];
+    const urgent = estUrgente(d);
+    const canal = canalDe(d);
+    const via = {whatsapp_qualifie: ', validée sur WhatsApp', sans_reponse_10min: ', sans réponse WhatsApp du client', vapi_direct: ''}[d.source] ?? '';
+    const tl = [
+      ['Demande reçue', jourFr(d.created_at) + ' · ' + (CANAUX[canal] || '').toLowerCase(), true],
+      ['Transmise à ' + (d.destinataires || String(d.dest_to || '').replace(/;/g, ', ') || '—'), [d.dest_to ? 'e-mail' : '', d.dest_sms ? 'SMS' : ''].filter(Boolean).join(' + '), true],
+      ['Prise en charge', d.pris_at ? jourFr(d.pris_at) + (d.pris_par ? ' · ' + d.pris_par : '') : 'en attente', !!d.pris_at],
+      ...(d.rappel_prevu ? [['Rappel prévu', jourFr(d.rappel_prevu), d.statut === 'traite' || new Date(String(d.rappel_prevu).replace(' ', 'T')) <= new Date()]] : []),
+      ['Traitée', d.traite_at ? jourFr(d.traite_at) + (d.traite_par ? ' · ' + d.traite_par : '') : '', d.statut === 'traite'],
+    ];
+    const champ = (k, v, large = false) => v ? `<div class="${large ? 'large' : ''}"><span>${h(k)}</span><b>${v}</b></div>` : '';
+    const notes = String(d.commentaire || '').split('\n').filter((l) => l.trim());
+    const actions = d.statut === 'traite'
+      ? `<button class="btn big" data-act="rouvrir">${ic('retour')}Rouvrir la demande</button>`
+      : `${d.statut === 'a_traiter' ? `<button class="btn big ${urgent ? 'urgent' : 'primary'}" data-act="prendre">${ic('prendre')}Je la prends en charge</button>` : ''}
+         <button class="btn big" data-act="rappel">${ic('agenda')}${d.rappel_prevu ? 'Changer le rappel' : 'Planifier un rappel'}</button>
+         <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>`;
+    main.innerHTML = `
+      <div class="crumb"><a href="#demandes" data-retour>Demandes</a> › n° ${d.id}</div>
+      <div class="dtitle"><h1>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</h1>
+        <div class="tags">${etatPill(d)}${svcPill(d.service)}${d.priorite === 'URGENT' ? '<span class="pill danger">Production arrêtée</span>' : '<span class="pill">Priorité normale</span>'}
+          <span class="pill">${ic(canal, 's')}Reçue ${h({telephone: 'par téléphone', whatsapp: 'sur WhatsApp', chat: 'par le chat du site', email: 'par e-mail'}[canal])}${h(via)}</span>
+          <span class="hint">${h(jourFr(d.created_at))}</span></div></div>
+      ${urgent ? '<div class="msg err" style="margin-bottom:16px"><b>Urgent — production arrêtée.</b> Personne n\'a encore pris cette demande en charge.</div>' : ''}
+      <section class="actions" aria-label="Actions">${actions}
+        <span class="note">Chaque action prévient le client par WhatsApp et e-mail.</span>
+        <div class="rappel-form" id="rappelForm" hidden>
+          <label for="rappelDate"><b>Rappel prévu le</b></label>
+          <input type="datetime-local" id="rappelDate" value="${h(String(d.rappel_prevu || '').replace(' ', 'T').slice(0, 16))}">
+          <button class="btn primary" id="rappelOk">Enregistrer et prévenir le client</button>
+          <button class="btn ghost" id="rappelNon">Annuler</button>
+        </div>
+      </section>
+      <div class="dgrid">
+        <div class="dcol">
+          <section class="box2"><h2>Client à rappeler</h2><div class="kvg">
+            ${champ('Contact', h(d.contact || '—'))}
+            ${champ('Société', h([d.societe, d.type_client ? L(d.type_client).toLowerCase() : ''].filter(Boolean).join(' · ') || '—'))}
+            ${champ('Téléphone', d.tel ? `<a href="tel:+${h(d.tel)}" style="font-weight:800">${h(telFr(d.tel))}</a>` : '—')}
+            ${champ('E-mail', d.email ? `<a href="mailto:${h(d.email)}">${h(d.email)}</a>` : '')}
+            ${champ('Site', h([d.code_postal, d.departement && !d.code_postal ? 'dpt ' + d.departement : ''].filter(Boolean).join(' ')))}
+            ${champ('Compte distributeur', h(d.compte_distributeur || ''))}
+          </div></section>
+          <section class="box2"><h2>La demande</h2><div class="kvg">
+            ${champ('Marque / modèle', h(materielDe(d)))}
+            ${champ('N° de série', h(d.numero_serie || ''))}
+            ${champ('Équipement', h(d.type_equipement ? L(d.type_equipement) : ''))}
+            ${champ('Nature', h(d.nature ? nomDe(R_NATURES, d.nature) : ''))}
+            ${champ('Réf. facture', h(d.reference_facture || ''))}
+            ${champ('Production arrêtée', d.service === 'SAV' ? (d.priorite === 'URGENT' ? 'Oui' : 'Non') : '')}
+            ${champ('Problème', h(d.type_panne || ''), true)}
+            ${champ('Besoin', h(d.besoin_commercial || ''), true)}
+            ${champ('Pourquoi urgent', h(d.priorite === 'URGENT' ? d.justification_urgence || '' : ''), true)}
+          </div>${d.resume ? `<p class="texte">${h(d.resume)}</p>` : ''}</section>
+          <section class="box2 hist-box"><h2>Historique complet</h2>
+            <p class="hint" style="margin-top:-6px">Tout ce qui s'est passé : à qui la demande a été envoyée, quand, par quel canal, les messages envoyés au client et ses réponses.</p>
+            <div id="hist">${historiqueHtml(ev)}</div></section>
+        </div>
+        <aside class="dcol">
+          <section class="box2"><h2>Suivi</h2><ol class="tl">${tl.map(([t, s, fait]) => `<li class="${fait ? 'fait' : ''}"><span class="pt">${fait ? ic('check', 's') : ''}</span>
+            <span><b>${h(t)}</b>${s ? `<small>${h(s)}</small>` : ''}</span></li>`).join('')}</ol></section>
+          <section class="box2"><h2><label for="noteTxt">Note interne</label></h2>
+            <div class="notes">${notes.map((l) => `<div>${h(l)}</div>`).join('')}
+              <textarea id="noteTxt" placeholder="Visible uniquement par l'équipe Multiair"></textarea></div>
+            <button class="btn primary" id="noteOk" style="align-self:flex-end">Ajouter la note</button></section>
+          <section class="box2"><h2>Liens</h2>
+            <a href="${h(d.liens.client)}" target="_blank" rel="noopener">${ic('oeil', 's')} Voir ce que voit le client</a>
+            <div class="lienbox"><input readonly value="${h(d.liens.interne)}" aria-label="Lien de la demande pour l'équipe"><button class="btn small" data-copier>Copier</button></div>
+            <span class="hint">Ce lien ouvre la demande sans mot de passe : il est réservé à l'équipe.</span></section>
+          ${ADMIN ? `<section class="box2"><h2>Transmission</h2>${kv([['Règle', h(d.regle_libelle)], ['E-mail à', h(String(d.dest_to || '').replace(/;/g, ', '))],
+            ['Copie', h(String(d.dest_cc || '').replace(/;/g, ', '))], ['SMS à', h(String(d.dest_sms || '').replace(/;/g, ', '))], ['Origine', h(L(d.source))]])}
+            <button class="link danger" id="suppr" style="align-self:flex-start;color:var(--danger)">Supprimer cette demande</button></section>` : ''}
+        </aside>
+      </div>`;
+    const recharger = () => show('demande', d.id, false);
+    $('[data-retour]', main).onclick = (e) => { e.preventDefault(); history.length > 1 ? history.back() : show('demandes'); };
+    const act = async (chg, msg) => { await avancer(d, chg, msg); recharger(); };
+    $$('[data-act]', main).forEach((b) => b.onclick = async () => {
+      const a = b.dataset.act;
+      if (a === 'prendre') return act({statut: 'en_cours'}, 'Demande prise en charge — le client est prévenu');
+      if (a === 'traiter') return act({statut: 'traite'}, 'Demande traitée — le client est prévenu');
+      if (a === 'rouvrir') return act({statut: 'en_cours'}, 'Demande rouverte');
+      if (a === 'rappel') { $('#rappelForm').hidden = false; $('#rappelDate').focus(); }
+    });
+    $('#rappelNon') && ($('#rappelNon').onclick = () => { $('#rappelForm').hidden = true; });
+    $('#rappelOk') && ($('#rappelOk').onclick = async () => {
+      const v = $('#rappelDate').value;
+      if (!v) return toast('Choisissez une date et une heure', true);
+      const chg = {rappel_prevu: v};
+      if (d.statut === 'a_traiter') chg.statut = 'en_cours';
+      await act(chg, 'Rappel enregistré — le client est prévenu');
+    });
+    $('#noteOk').onclick = async () => {
+      const t = $('#noteTxt').value.trim();
+      if (!t) return;
+      await patch('rep/demandes/' + d.id, {note: t});
+      toast('Note ajoutée'); recharger();
+    };
+    $('[data-copier]', main).onclick = async (e) => {
+      const i = e.target.previousElementSibling; i.select();
+      try { await navigator.clipboard.writeText(i.value); toast('Lien copié'); } catch (x) { document.execCommand('copy'); toast('Lien copié'); }
+    };
+    const bindHist = () => $$('[data-hist]', main).forEach((b) => b.onclick = () => { vueHist.f = b.dataset.hist; $('#hist', main).innerHTML = historiqueHtml(ev); bindHist(); });
+    bindHist();
+    const s = $('#suppr', main);
+    if (s) s.onclick = async () => { if (confirm('Supprimer définitivement la demande n° ' + d.id + ' ?')) { await api('rep/demandes/' + d.id, {method: 'DELETE'}); toast('Demande supprimée'); show('demandes'); } };
+  };
+
+  // Un appel encore en échange avec Claire : pas encore de demande, seulement la fiche et la conversation.
+  tabs.appel = async (id) => {
+    const [f, m] = await Promise.all([api('rep/fiches/' + id), api('rep/messages', {query: {fiche_id: id, dir: 'asc'}})]);
+    const x = f.fiche;
+    main.innerHTML = `
+      <div class="crumb"><a href="#demandes" data-retour>Demandes</a> › appel du ${h(quand(x.created_at))}</div>
+      <div class="dtitle"><h1>${h(x.societe || x.contact || x.tel_norm || 'Appel')}${x.type_panne || x.besoin_commercial ? ' — ' + h(x.type_panne || x.besoin_commercial) : ''}</h1>
+        <div class="tags"><span class="st qualification">Avec Claire</span>${x.urgence ? '<span class="pill danger">Urgent</span>' : ''}<span class="pill">${ic('telephone', 's')}Reçu par téléphone</span>
+        <span class="hint">${h(jourFr(x.created_at))}</span></div></div>
+      <div class="msg" style="margin-bottom:20px">Claire échange avec le client sur WhatsApp pour valider les informations. La demande sera transmise dès qu'il aura répondu, ou au bout de 10 minutes sans réponse.</div>
+      <div class="dgrid"><div class="dcol">
+        <section class="box2"><h2>Ce que Claire a noté</h2><div class="kvg">
+          <div><span>Contact</span><b>${h(x.contact || '—')}</b></div><div><span>Société</span><b>${h(x.societe || '—')}</b></div>
+          <div><span>Téléphone</span><b>${x.tel_norm ? `<a href="tel:+${h(x.tel_norm)}">${h(telFr(x.tel_norm))}</a>` : '—'}</b></div>
+          <div><span>Marque / modèle</span><b>${h([x.marque, x.modele].filter(Boolean).join(' ') || '—')}</b></div><div><span>Département</span><b>${h(x.departement || '—')}</b></div>
+          <div><span>E-mail</span><b>${h(x.email || '—')}</b></div></div>${x.resume ? `<p class="texte">${h(x.resume)}</p>` : ''}</section>
+      </div><aside class="dcol"><section class="box2"><h2>Conversation WhatsApp</h2>
+        <div class="chat">${m.rows.length ? m.rows.map((e) => `${e.message ? `<div class="bubble u"><span class="t">Client · ${h(quand(e.date))}</span>${h(e.message)}</div>` : ''}${e.reponse ? `<div class="bubble a"><span class="t">Claire</span>${h(e.reponse)}</div>` : ''}`).join('') : '<span class="hint">Pas encore de réponse du client.</span>'}</div>
+      </section></aside></div>`;
+    $('[data-retour]', main).onclick = (e) => { e.preventDefault(); history.length > 1 ? history.back() : show('demandes'); };
+  };
+
+  // ================================================================== STATISTIQUES
+  tabs.stats = async () => {
+    const toutes = (await chargerDemandes()).filter((d) => !d.fiche);
+    const t = (s) => new Date(String(s).replace(' ', 'T')).getTime();
+    const d30 = Date.now() - 30 * 86400000;
+    const recentes = toutes.filter((d) => t(d.created_at) >= d30);
+    const delais = recentes.filter((d) => d.pris_at).map((d) => (t(d.pris_at) - t(d.created_at)) / 60000).filter((x) => x >= 0).sort((a, b) => a - b);
+    const mediane = delais.length ? delais[Math.floor(delais.length / 2)] : null;
+    const duree = (min) => min === null ? '—' : (min < 60 ? Math.round(min) + ' min' : (min < 1440 ? (Math.round(min / 6) / 10).toString().replace('.', ',') + ' h' : Math.round(min / 1440) + ' j'));
+    const traitees = recentes.filter((d) => d.statut === 'traite').length;
+    const grouper = (fn, vides = true) => Object.entries(recentes.reduce((m, d) => { const k = fn(d) || (vides ? '(non renseigné)' : ''); if (k) m[k] = (m[k] || 0) + 1; return m; }, {}))
+      .map(([k, n]) => ({k, n})).sort((a, b) => b.n - a.n).slice(0, 10);
+    const jours = [...Array(30)].map((_, i) => { const x = new Date(Date.now() - (29 - i) * 86400000); return x.toISOString().slice(0, 10); });
+    main.innerHTML = `
+      <div class="page-head"><div class="t"><h1>Statistiques</h1><p>Les 30 derniers jours${SERVICE_MOI ? ', service ' + h(SERVICES[SERVICE_MOI]) : ''}.</p></div></div>
+      <div class="tiles">
+        <div class="tile"><b>${recentes.length}</b><span>Demandes reçues</span></div>
+        <div class="tile bleu"><b>${duree(mediane)}</b><span>Délai habituel avant prise en charge</span></div>
+        <div class="tile vert"><b>${recentes.length ? Math.round(100 * traitees / recentes.length) : 0} %</b><span>Déjà traitées</span></div>
+        <div class="tile ${recentes.some((d) => d.priorite === 'URGENT') ? 'rouge' : ''}"><b>${recentes.filter((d) => d.priorite === 'URGENT').length}</b><span>Urgences (production arrêtée)</span></div>
+      </div>
+      <div class="grid2" style="margin-top:20px">
+        <div class="card"><h3>Demandes par jour et par canal</h3><div class="chart-wrap"><canvas id="c_jours"></canvas></div></div>
+        <div class="grid3" style="grid-template-columns:1fr">${distCard('Par canal', grouper((d) => CANAUX[canalDe(d)]))}${SERVICE_MOI ? '' : distCard('Par service', grouper((d) => SERVICES[d.service]))}</div>
+      </div>
+      <div class="grid3" style="margin-top:16px">${distCard('Prises en charge par', grouper((d) => d.pris_par, false))}${distCard('Par marque', grouper((d) => d.marque_norm ? nomDe(R_MARQUES, d.marque_norm) : ''))}${distCard('Type de client', grouper((d) => d.type_client ? L(d.type_client) : ''))}</div>`;
+    const couleurs = {telephone: '#0f2f52', chat: '#1d4ed8', whatsapp: '#1f6b47', email: '#e8720c'};
+    chart('c_jours', {type: 'bar', data: {labels: jours.map((j) => j.slice(8, 10) + '/' + j.slice(5, 7)),
+      datasets: Object.entries(CANAUX).map(([k, l]) => ({label: l, backgroundColor: couleurs[k], borderRadius: 3,
+        data: jours.map((j) => recentes.filter((d) => canalDe(d) === k && String(d.created_at).slice(0, 10) === j).length)}))},
+      options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {position: 'top', labels: {boxWidth: 10}}},
+        scales: {x: {stacked: true, grid: {display: false}}, y: {stacked: true, beginAtZero: true, ticks: {precision: 0}}}}});
+  };
+
+  // ================================================================== ÉQUIPE ET ACCÈS
+  const ROLES_ROUTAGE = [['membre', 'Membre (reçoit via les responsables)'], ['direction', 'Direction'], ['backoffice', 'Back-office SAV'],
+    ['rso', 'RSO (secteur)'], ['cta', 'CTA ABAC (agent externe)'], ['finance', 'Finance (reçoit toute la finance)'], ['direct_projet', 'Direct / Projet'], ['boite', 'Boîte partagée']];
+  const vueEquipe = {q: '', service: ''};
+  tabs.equipe = async () => {
+    const r = await api('equipe');
+    const estBoite = (c) => c.role === 'boite' || /bo[iî]te partag/i.test(c.commentaire || '');
+    const gens = r.rows.filter((c) => !estBoite(c));
+    const boites = r.rows.filter(estBoite);
+    const tel = (t) => { const x = String(t || '').replace(/\D/g, '').replace(/^33/, '0'); return /^0\d{9}$/.test(x) ? x.replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
+    const parId = (id) => r.rows.find((c) => Number(c.id) === Number(id));
+    const acces = (c) => c.acces === 'admin' ? '<span class="pill admin">Admin</span>' : (c.acces ? `<span class="pill info">${h(MA.acces[c.acces] || c.acces)}</span>` : '<span class="pill muted">Aucun</span>');
+    const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : (c.a_mot_de_passe ? `<span class="hint">${c.derniere_connexion ? 'Vu ' + h(rel(c.derniere_connexion)) : 'Mot de passe choisi'}</span>`
+      : (c.invitation_en_cours ? '<span class="pill warn">Invitation envoyée</span>' : '<span class="pill warn">À inviter</span>'));
+    const RESP = [['sav', 'SAV'], ['finance', 'Compta / finance'], ['commercial', 'Commerce'], ['autre', 'Sujet indéterminé']];
+    const render = () => {
+      const liste = gens.filter((c) => (!vueEquipe.service || c.service_equipe === vueEquipe.service)
+        && (!vueEquipe.q || [c.nom, c.email, c.fonction, c.departements].join(' ').toLowerCase().includes(vueEquipe.q.toLowerCase())));
+      main.innerHTML = `
+        <div class="page-head"><div class="t"><h1>Équipe et accès</h1><p>Qui fait partie de l'équipe, comment le joindre, et ce qu'il voit sur la plateforme.</p></div>
+          <button class="btn primary" id="ajout">${ic('plus', 's')}Ajouter une personne</button></div>
+        <section class="section" style="margin-top:0"><h2>Responsables de service</h2>
+          <p class="hint">Ils reçoivent les demandes que la plateforme ne sait attribuer à personne d'autre.</p>
+          <div class="resp">${RESP.map(([k, t]) => { const c = parId(r.responsables[k]); return `<div class="box2"><span class="lab">${h(t.toUpperCase())}</span>
+            <span class="nom">${h(c ? c.nom : 'Personne')}</span><span class="coord">${h(c ? c.email || '' : '')}${c && c.mobile ? '<br>' + h(tel(c.mobile)) : ''}</span>
+            <label class="sr" for="resp_${k}">Changer le responsable ${h(t)}</label>
+            <select id="resp_${k}" data-resp="${k}">${gens.filter((g) => g.email && Number(g.actif)).map((g) => `<option value="${g.id}" ${Number(g.id) === Number(r.responsables[k]) ? 'selected' : ''}>${h(g.nom)}</option>`).join('')}</select></div>`; }).join('')}</div></section>
+        <section class="section"><h2>Toute l'équipe</h2>
+          <div class="frow"><label class="search">${ic('search', 's')}<input type="search" id="eq_q" placeholder="Nom, e-mail, fonction…" aria-label="Rechercher" value="${h(vueEquipe.q)}"></label>
+            ${[['', 'Tous'], ['direction', 'Direction'], ['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance']].map(([v, t]) =>
+              `<button class="chip ${vueEquipe.service === v ? 'on' : ''}" data-eqs="${v}">${t}</button>`).join('')}</div>
+          <div class="panel dl eq">
+            <div class="row head"><span>NOM</span><span>FONCTION</span><span>E-MAIL</span><span>PORTABLE</span><span>DÉPARTEMENTS</span><span>ACCÈS</span><span>CONNEXION</span></div>
+            ${liste.map((c) => `<div class="row" data-c="${c.id}" role="link" tabindex="0" style="${Number(c.actif) ? '' : 'opacity:.55'}">
+              <span class="two"><b>${h(c.nom)}</b><span>${h(({sav: 'SAV', commerce: 'Commerce', finance: 'Finance', direction: 'Direction'})[c.service_equipe] || '')}${Number(c.actif) ? '' : ' · inactif'}</span></span>
+              <span class="txt">${h(c.fonction || nomDe(ROLES_ROUTAGE, c.role))}</span><span class="txt">${h(c.email || '—')}</span><span class="txt">${h(tel(c.mobile) || '—')}</span>
+              <span class="txt">${h(c.departements ? c.departements.split(/[,;]/).length + ' dpts · ' + c.departements.split(/[,;]/).slice(0, 3).join(',') + '…' : '—')}</span>
+              <span>${acces(c)}</span><span>${connexion(c)}</span>
+              <span class="m1"><b>${h(c.nom)}</b><span>${h(c.fonction || '')}</span><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span>
+            </div>`).join('') || '<div class="vide" style="border:0">Personne ne correspond.</div>'}
+          </div>
+          <p class="hint">Admin : voit tout et modifie les réglages. Service : voit toutes les demandes de son service et fait avancer leur suivi. Les portables ne sont jamais montrés aux clients.</p></section>
+        <section class="section"><h2>Boîtes partagées</h2><p class="hint">Adresses de service qui reçoivent les demandes commerce (qui reçoit quoi : menu « Qui reçoit quoi »). Elles n'ont pas d'accès.</p>
+          <div class="panel dl eq"><div class="row head"><span>BOÎTE</span><span>ACTIVITÉ</span><span>E-MAIL</span><span></span><span>LUE PAR</span><span></span><span></span></div>
+          ${boites.map((c) => `<div class="row" data-c="${c.id}" role="link" tabindex="0"><span class="two"><b>${h(c.nom)}</b></span><span class="txt">${h(c.competences || '')}</span>
+            <span class="txt">${h(c.email || '')}</span><span></span><span class="txt">${h(c.membres || '')}</span><span></span><span></span>
+            <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2"></span></div>`).join('')}</div></section>`;
+      $('#ajout', main).onclick = () => fiche({actif: 1, role: 'membre', service: 'sav'});
+      const q = $('#eq_q', main);
+      q.oninput = () => { vueEquipe.q = q.value; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#eq_q', main); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200); };
+      $$('[data-eqs]', main).forEach((b) => b.onclick = () => { vueEquipe.service = b.dataset.eqs; render(); });
+      $$('[data-c]', main).forEach((el) => { const go = () => fiche(parId(el.dataset.c)); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); }; });
+      $$('[data-resp]', main).forEach((s) => s.onchange = async () => {
+        await api('equipe/responsables', {method: 'POST', body: {[s.dataset.resp]: Number(s.value)}});
+        r.responsables[s.dataset.resp] = Number(s.value); toast('Responsable enregistré'); render();
+      });
+    };
+    const fiche = (c) => {
+      const role = c.role || 'membre';
+      const champs = [
+        ligne('Nom', `<input name="nom" value="${h(c.nom)}" autocomplete="off">`),
+        ligne('Fonction', `<input name="fonction" value="${h(c.fonction)}" placeholder="ex. RSO, Comptabilité, Back-office SAV">`),
+        ligne('Service', sel('service', [['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance'], ['direction', 'Direction']], c.service || c.service_equipe || 'sav')),
+        ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`, 'Sert aussi d\'identifiant de connexion.'),
+        ligne('Portable', `<input name="mobile" value="${h(c.mobile)}" placeholder="06 12 34 56 78">`, 'Reçoit le SMS des demandes SAV qui lui sont transmises. Jamais communiqué aux clients.'),
+        ligne('Rôle dans l\'envoi des demandes', sel('role', ROLES_ROUTAGE, role), 'Détermine quelles demandes lui sont envoyées (menu « Qui reçoit quoi »).'),
+        ligne('Départements couverts', `<input name="departements" value="${h(c.departements)}" placeholder="69, 01, 38">`, 'Pour un RSO ou un CTA : les demandes de ces départements lui arrivent.'),
+        ligne('Accès à la plateforme', sel('acces', [['', 'Aucun'], ...Object.entries(MA.acces)], c.acces || ''), 'Admin : tout, réglages compris. Service : les demandes de son service.'),
+        ligne('Actif', sel('actif', [['1', 'Oui'], ['0', 'Non (absent, parti…)']], String(c.actif ?? 1))),
+        role === 'boite' ? ligne('Lue par', `<textarea name="membres">${h(c.membres)}</textarea>`) : '',
+      ].join('');
+      const inviter = c.id && c.acces ? `<button class="btn" id="inviter">${ic('envoi', 's')}${c.a_mot_de_passe ? 'Envoyer un lien de mot de passe' : (c.invitation_en_cours ? 'Renvoyer l\'invitation' : 'Envoyer l\'invitation')}</button>` : '';
+      openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', champs + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
+      // Départements : seulement pour ceux qui couvrent un secteur (RSO, CTA).
+      const roleSel = $('#drawerBody [name="role"]'), depRow = $('#drawerBody [name="departements"]').closest('.editrow');
+      const secteur = () => { depRow.hidden = !['rso', 'cta'].includes(roleSel.value); };
+      roleSel.addEventListener('change', secteur); secteur();
+      $('#drawerSave').onclick = async () => {
+        const b = $('#drawerBody');
+        const body = {};
+        ['nom', 'fonction', 'service', 'email', 'mobile', 'role', 'departements', 'acces', 'actif', 'membres'].forEach((k) => { const i = $(`[name="${k}"]`, b); if (i) body[k] = i.value.trim(); });
+        if (!body.nom) return toast('Le nom est requis', true);
+        try {
+          const x = c.id ? await patch('equipe/' + c.id, body) : await api('equipe', {method: 'POST', body});
+          toast('Enregistré');
+          if (!c.id && body.acces) { closeDrawer(); await tabs.equipe(); fiche(x.personne); return; }
+          closeDrawer(); tabs.equipe();
+        } catch (e) { toast(e.message, true); }
+      };
+      if (c.id) $('#drawerDelete').onclick = async () => { if (confirm(`Retirer ${c.nom} de l'équipe ?`)) { await api('equipe/' + c.id, {method: 'DELETE'}); closeDrawer(); tabs.equipe(); } };
+      const inv = $('#inviter');
+      if (inv) inv.onclick = async () => {
+        inv.disabled = true;
+        try {
+          const x = await api('equipe/' + c.id + '/invitation', {method: 'POST'});
+          $('#invRes').innerHTML = `<div class="msg ${x.envoi === 'envoyé' ? 'ok' : 'warn'}">${x.envoi === 'envoyé' ? 'Lien envoyé par e-mail à ' + h(c.email) + '.' : 'L\'e-mail n\'a pas pu partir (' + h(x.envoi) + '). Transmettez ce lien vous-même :'}
+            <div class="lienbox" style="margin-top:8px"><input readonly value="${h(x.lien)}" aria-label="Lien pour choisir le mot de passe"><button class="btn small" id="copieInv">Copier</button></div>
+            <span class="hint">Valable 7 jours, une seule fois.</span></div>`;
+          $('#copieInv').onclick = async () => { const i = $('#invRes input'); i.select(); try { await navigator.clipboard.writeText(i.value); } catch (e) { document.execCommand('copy'); } toast('Lien copié'); };
+        } catch (e) { toast(e.message, true); inv.disabled = false; }
+      };
+    };
+    render();
+  };
+
+  // ================================================================== QUI REÇOIT QUOI
+  tabs.routage = async () => {
+    main.innerHTML = `<div class="page-head"><div class="t"><h1>Qui reçoit quoi</h1>
+      <p>Pour chaque service, à qui partent les demandes. Ce que rien n'attribue part au responsable du service (menu « Équipe et accès »).</p></div></div><div id="routageRoot"></div>`;
+    await repRoutageUI($('#routageRoot', main));
+  };
+
+  // ================================================================== MESSAGES AUX CLIENTS
+  tabs.messages = async () => {
+    const [a, eq] = await Promise.all([api('rep/apercu'), api('equipe')]);
+    const p = eq.parametres || {};
+    main.innerHTML = `
+      <div class="page-head"><div class="t"><h1>Messages aux clients</h1><p>Ce que le client reçoit à chaque étape, par WhatsApp et par e-mail. Aucun numéro ni e-mail d'un collaborateur n'y figure.</p></div></div>
+      <section class="box2" style="max-width:720px"><h2>Numéro donné aux clients</h2>
+        <div class="frow"><input class="inp" id="std" value="${h(a.standard)}" style="max-width:260px" aria-label="Numéro du standard"><button class="btn primary" id="stdOk">Enregistrer</button></div>
+        <span class="hint">Le standard figure dans chaque message, pour que le client puisse rappeler en citant son numéro de demande.</span></section>
+      <section class="box2" style="max-width:720px;margin-top:16px"><h2>Urgences</h2>
+        <label class="hint" for="ccu">Mettre en plus en copie de chaque urgence SAV (facultatif, séparer par ;)</label>
+        <div class="frow"><input class="inp" id="ccu" value="${h(p.rep_cc_urgence || '')}" placeholder="ex. direction@airwco.com"><button class="btn primary" id="ccuOk">Enregistrer</button></div></section>
+      <section class="section"><h2>Aperçu des messages</h2><p class="hint">Exemple sur la demande n° ${a.demande_id || '—'}. Les e-mails partent de service.clients@multiairfrance.store.</p>
+        <div class="frow">${a.messages.map((m, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-m="${i}">${h(m.nom)}</button>`).join('')}</div>
+        <div class="apercus" id="apercu"></div></section>`;
+    const montrer = (i) => {
+      const m = a.messages[i];
+      $$('[data-m]', main).forEach((b) => b.classList.toggle('on', Number(b.dataset.m) === i));
+      $('#apercu', main).innerHTML = `<div><h3 style="margin:0 0 8px;font-size:14px">E-mail</h3><iframe title="Aperçu de l'e-mail" sandbox></iframe></div>
+        <div><h3 style="margin:0 0 8px;font-size:14px">WhatsApp</h3><div class="wa"><div class="b">${h(m.texte).replace(/\*(.+?)\*/g, '<b>$1</b>')}</div></div></div>`;
+      $('#apercu iframe', main).srcdoc = m.html;
+    };
+    $$('[data-m]', main).forEach((b) => b.onclick = () => montrer(Number(b.dataset.m)));
+    montrer(0);
+    $('#stdOk', main).onclick = async () => { await api('parametres', {method: 'POST', body: {valeurs: {rep_standard_tel: $('#std').value.trim()}}}); toast('Numéro enregistré'); tabs.messages(); };
+    $('#ccuOk', main).onclick = async () => { await api('parametres', {method: 'POST', body: {valeurs: {rep_cc_urgence: $('#ccu').value.trim()}}}); toast('Enregistré'); };
+  };
+
 
   const journal = (rows) => `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Scénario</th><th>Statut</th><th>Événement</th><th>Détail</th></tr></thead><tbody>${
     rows.length ? rows.map((r) => `<tr style="cursor:default"><td>${fmtDate(r.date)}</td><td>${h(r.scenario)}</td><td>${pill(r.statut, r.statut === 'ok' ? 'ok' : (r.statut === 'erreur' ? 'danger' : 'info'))}</td><td>${h(r.type_evenement)}</td><td>${clip(r.resume, true)}</td></tr>`).join('')
@@ -279,6 +881,7 @@
     const html = `<div class="subtabs">${items.map(([k, l]) => `<button data-sub="${k}" class="${k === active ? 'active' : ''}">${h(l)}</button>`).join('')}</div>`;
     return {html, bind: (root) => $$('[data-sub]', root).forEach((b) => b.addEventListener('click', () => onChange(b.dataset.sub)))};
   };
+
 
   // ------------------------------------------------------------------ table de routage (commune aux 3 scénarios)
   async function routageUI(root, scenario, opts) {
@@ -333,7 +936,7 @@
   const MARQUES_COM = [['abac', 'ABAC'], ['worthington', 'Worthington'], ['mauguiere', 'Mauguière'], ['pneumatech', 'Pneumatech'], ['autre', 'Marque non précisée']];
   const NATURES_COM = [['commande_pieces', 'Pièces — commande ou suivi de livraison'], ['devis_pieces', 'Devis pièces détachées ou SAV'],
     ['commande_equipement', 'Équipement — commande ou suivi de livraison'], ['devis_equipement', 'Devis équipement neuf']];
-  const CHOIX_SAV = [['rso', 'RSO du secteur'], ['cta', 'CTA du secteur'], ['backoffice', 'Back-office'], ['repli', 'Moi (adresse de repli)']];
+  const CHOIX_SAV = [['rso', 'RSO du secteur'], ['cta', 'CTA du secteur'], ['backoffice', 'Back-office'], ['repli', 'Responsable SAV']];
   const routeSub = {v: 'sav'};
 
   async function repRoutageUI(root) {
@@ -360,11 +963,11 @@
     };
     const bloc = (titre, sousTitre, corps) => `<div class="card" style="margin-bottom:12px"><h3>${h(titre)}</h3>${sousTitre ? `<p class="hint" style="margin-top:-4px">${sousTitre}</p>` : ''}${corps}</div>`;
     const boites = duRole('boite');
-    const choixBoite = (name, v) => sel(name, [['', 'Moi (adresse de repli)'], ...boites.map((b) => [String(b.id), b.nom])], v ? String(v) : '');
+    const choixBoite = (name, v) => sel(name, [['', 'Responsable commerce'], ...boites.map((b) => [String(b.id), b.nom])], v ? String(v) : '');
 
     const vues = {
       finance: () => bloc('Qui reçoit les demandes finance ?', 'Une seule étape : chaque demande finance part à <b>toutes</b> les personnes actives ci-dessous.',
-        personnes('finance', 'Personne : les demandes finance vous reviennent.')),
+        personnes('finance', 'Personne : les demandes finance partent au responsable finance.')),
 
       sav: () => `
         ${bloc('Étape 1 — Les personnes du SAV', 'Renseignez l\'email et le portable : le SMS part à chaque demande. Pour un RSO ou un CTA, les départements qu\'il couvre.', `
@@ -386,7 +989,7 @@
         ${bloc('Étape 1 — Les boîtes partagées', 'Le mail part à l\'adresse de la boîte ; « lue par » est pour information.', `
           ${personnes('boite', 'Aucune boîte')}
           <h4 style="margin:16px 0 6px">Direct / Projet</h4>${personnes('direct_projet', 'Personne')}`)}
-        ${bloc('Étape 2 — Quelle boîte reçoit quelle demande ?', 'Une case sur « Moi » : la demande vous revient, le temps de désigner la bonne boîte.', `
+        ${bloc('Étape 2 — Quelle boîte reçoit quelle demande ?', 'Une case sur « Responsable commerce » : la demande part au responsable du commerce, le temps de désigner la bonne boîte.', `
           <div class="tbl-wrap"><table class="tbl" id="grilleCom"><thead><tr><th>Demande</th>${MARQUES_COM.map(([, t]) => `<th>${h(t)}</th>`).join('')}</tr></thead><tbody>
           ${NATURES_COM.map(([n, t]) => `<tr style="cursor:default"><td><b>${h(t)}</b></td>${MARQUES_COM.map(([m]) =>
             `<td>${choixBoite(`com.${n}.${m}`, grilles.commerce[n]?.[m])}</td>`).join('')}</tr>`).join('')}
@@ -407,7 +1010,7 @@
           </div>
           <div style="margin-top:10px"><button class="btn primary" id="simGo">Qui reçoit ?</button></div>
           <div class="route-res" id="simRes"></div>`)}
-        ${bloc('Adresses de secours', 'Reçoivent ce qu\'aucun tableau ne couvre, et les demandes dont personne n\'est joignable. Une ou plusieurs adresses, séparées par ;', `
+        ${bloc('Dernier recours', 'Ce qu\'aucun tableau ne couvre part au responsable du service (menu « Équipe et accès »). Si même ce responsable est injoignable, la demande part à ces adresses (séparées par ;).', `
           <input name="rep_repli_email" value="${h(params.rep_repli_email)}" placeholder="ex. cyril.mortier@airwco.com; service.clients@multiairfrance.store" style="width:100%">
           <div style="margin-top:10px"><button class="btn small primary" id="saveRepli">Enregistrer</button></div>`)}
         <details><summary class="hint" style="cursor:pointer">WhatsApp non identifiés (aiguilleur)</summary><div id="oldRoutage" style="margin-top:10px"></div></details>`,
@@ -472,7 +1075,7 @@
         const liste = (s) => (s || '').split(';').filter(Boolean).map((e) => h(e)).join(', ') || '<span class="hint">—</span>';
         $('#simRes', vue).innerHTML = `
           ${x.urgent ? '<div class="msg err" style="margin-top:0"><b>Urgent :</b> objet du mail et SMS marqués URGENT.</div>' : ''}
-          <div class="who">→ ${h(x.personnes.map((p) => p.nom).join(', ') || 'Vous (adresse de repli)')}</div>
+          <div class="who">→ ${h(x.personnes.map((p) => p.nom).join(', ') || 'Adresse de dernier recours')}</div>
           ${kv([['Mail à', liste(x.to)], ['Copie', liste(x.cc)], ['SMS à', liste(x.sms)], ['Lu par', h(x.personnes.map((p) => p.membres).filter(Boolean).join(' · '))],
             ['Pourquoi', h(x.regle_libelle)], ['Objet du mail', h(x.objet)]])}
           ${x.notes.length ? `<div class="msg" style="background:#fdefd6;color:var(--warn)">${x.notes.map(h).join('<br>')}</div>` : ''}`;
@@ -481,6 +1084,7 @@
         hint: 'Seule la clé « aiguilleur » sert encore : destinataire des WhatsApp que Claire n\'a pas pu rattacher à un appel.'});
     }
   }
+
 
   // ================================================================== VUE D'ENSEMBLE
   tabs.overview = async () => {
@@ -517,8 +1121,9 @@
   };
   const todo = (n, label, go) => `<div class="todo ${n ? '' : 'zero'}" data-go="${go}"><span>${h(label)}</span><b>${num(n)}</b></div>`;
 
+
   // ================================================================== RÉPONDEUR IA
-  const repSub = {v: 'demandes'};
+  const repSub = {v: 'fiches'};
   tabs.repondeur = async () => {
     const [s, fiches, demandes, conv, dist, logs] = await Promise.all([
       api('stats/repondeur'), api('rep/fiches'), api('rep/demandes'), api('rep/messages', {query: {limit: 2000}}),
@@ -547,9 +1152,9 @@
         priorite: f.urgence ? 'URGENT' : 'NORMAL', societe: f.societe, contact: f.contact, tel: f.tel_norm, marque: f.marque, modele: f.modele,
         departement: f.departement, source: 'en_qualification', type_panne: f.type_panne, resume: f.resume})),
     ];
-    const st = subtabs([['demandes', `Toutes les demandes (${toutes.length})`], ['fiches', `Fiches d'appel (${fiches.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['routage', 'Routage et annuaire'], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
+    const st = subtabs([['fiches', `Fiches d'appel (${fiches.rows.length})`], ['conversations', `Conversations (${fils.length})`], ['distributeurs', `Distributeurs (${dist.rows.length})`], ['journal', 'Journal']], repSub.v, (v) => { repSub.v = v; renderSub(); });
     main.innerHTML = `
-      <div class="section-title"><h2>Répondeur IA — appels VAPI et suivi WhatsApp</h2><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
+      <div class="page-head"><div class="t"><h1>Répondeur (appels)</h1><p>Appels reçus par Claire, échanges WhatsApp et distributeurs. Les demandes se suivent dans « Demandes ».</p></div><span class="hint">scénarios Make 9582857 · 9583172 · 9583010 · 9791097</span></div>
       <div class="kpis">
         ${kpi(num(k.urgences_a_traiter), 'Urgences à traiter', k.urgences_a_traiter ? 'danger' : 'ok')}
         ${kpi(num(k.demandes_a_traiter), 'Demandes à rappeler', k.demandes_a_traiter ? 'warn' : 'ok')}
@@ -754,6 +1359,7 @@
     }
     renderSub();
   };
+
 
   // ================================================================== CHATBOT CLAIRE
   const chatSub = {v: 'leads'};
@@ -1124,9 +1730,8 @@
     renderSub();
   };
 
+
   // ------------------------------------------------------------------ démarrage
-  const hash = location.hash.replace('#', '');
-  show(tabs[hash] ? hash : 'overview');
+  depuisAdresse(false);
   refreshBadges();
-  $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) history.replaceState(null, '', '#' + b.dataset.tab); });
 })();
