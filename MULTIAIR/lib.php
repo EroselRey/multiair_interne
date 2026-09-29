@@ -1492,9 +1492,16 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
         'mobile' => (bool) preg_match('/^33[67]\d{8}$/', $tel),
         'email' => str_contains((string) ($dem['email'] ?? ''), '@') ? $dem['email'] : '',
         'lien' => ma_rep_liens($db, $dem)['client'],
-        'texte' => ma_rep_texte_client($db, $dem, $evenement),
+        // Sans guillemets doubles ni antislash : le texte est inséré tel quel dans le JSON WhatsApp de Make.
+        'texte' => str_replace(['"', '\\'], ["'", '/'], ma_rep_texte_client($db, $dem, $evenement)),
         'objet' => 'Multiair — votre demande n° ' . $dem['id'],
     ];
+    // Version e-mail : même texte, lien cliquable, signature Multiair.
+    $html = nl2br(htmlspecialchars($payload['texte'], ENT_QUOTES, 'UTF-8'));
+    $html = preg_replace('#(https?://[^\s<]+)#', '<a href="$1">Suivre ma demande</a>', $html);
+    $payload['html'] = '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-size:15px;color:#1c2431;line-height:1.55">'
+        . $html . '<p style="color:#5f6b7a;font-size:13px;margin-top:18px">Multiair France — standard : '
+        . htmlspecialchars(ma_param($db, 'rep_standard_tel', '01 34 32 95 00'), ENT_QUOTES, 'UTF-8') . '</p></div>';
     $webhook = ma_param($db, 'rep_webhook_suivi');
     $statut = 'non configuré';
     if ($webhook !== '' && function_exists('curl_init')) {
