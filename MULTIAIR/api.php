@@ -953,6 +953,13 @@ try {
                     // Regroupement : un lead identique (session, société+nom, email ou téléphone) reçu dans la
                     // fenêtre paramétrée (chat_lead_fenetre_min, 60 min par défaut) met à jour le lead existant.
                     $d = $body;
+                    // Le scénario envoie aussi la réponse complète du chatbot : on y lit tout le bloc de fin
+                    // (machine, site, urgence, référence, demande existante…), sans dépendre des variables Make.
+                    foreach (ma_chat_lire_bloc((string) ($body['bloc'] ?? '')) as $k => $v) {
+                        if (trim((string) ($d[$k] ?? '')) === '') {
+                            $d[$k] = $v;
+                        }
+                    }
                     $d['date'] = ma_date($d['date'] ?? null) ?? $now;
                     $d['marque_orientee'] = $d['marque_orientee'] ?? ($d['marque'] ?? null);
                     $r = ma_chat_lead_upsert($db, $d);
@@ -962,7 +969,13 @@ try {
                     // envoie son e-mail interne aux destinataires renvoyés ici.
                     $dm = ma_chat_demande($db, $r['id']);
                     $rt = $dm['rt'] ?? ['to' => '', 'cc' => '', 'regle_libelle' => '', 'sms' => '', 'urgent' => false, 'objet' => '', 'mail_html' => '', 'sms_texte' => ''];
-                    out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $r['action'] === 'created' || !empty($dm['nouvelle']),
+                    // Qui prévenir : l'e-mail à l'équipe part pour une nouvelle demande ou une relance ; le SMS
+                    // (SAV urgent) aussi, ou quand la demande devient urgente en cours de conversation.
+                    $nouvelle = !empty($dm['nouvelle']) && empty($dm['relance']);
+                    $envoyer = !empty($dm['nouvelle']) || !empty($dm['devient_urgente']);
+                    out(['ok' => true, 'id' => $r['id'], 'action' => $r['action'], 'nouveau' => $nouvelle,
+                        'relance' => $dm['relance'] ?? null, 'envoyer_equipe' => $envoyer,
+                        'alerte_sms' => $envoyer && $rt['urgent'] && trim((string) $rt['sms']) !== '',
                         'nb_mises_a_jour' => $r['nb_mises_a_jour'], 'demande_id' => $dm['id'] ?? null,
                         'dest_to' => $rt['to'], 'dest_cc' => $rt['cc'], 'dest_libelle' => ($dm['demande']['destinataires'] ?? '') ?: $rt['regle_libelle'],
                         'service' => $dm['demande']['service'] ?? null, 'urgent' => $rt['urgent'], 'sms' => $rt['sms'], 'sms_texte' => $rt['sms_texte'],

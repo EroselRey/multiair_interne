@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29j';
+const MA_VERSION = '2026-09-29k';
 
 function ma_config(): array
 {
@@ -56,7 +56,11 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
         'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
     $colonnes = [
-        'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0', 'demande_id' => 'INTEGER'],
+        'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0', 'demande_id' => 'INTEGER',
+            // Ce que le chatbot recueille comme Claire au téléphone (SAV, commande, facture, relance).
+            'nature' => 'TEXT', 'reference' => 'TEXT', 'marque_materiel' => 'TEXT', 'modele' => 'TEXT', 'numero_serie' => 'TEXT',
+            'code_postal' => 'TEXT', 'urgence' => 'TEXT', 'justification_urgence' => 'TEXT', 'demande_existante' => 'TEXT',
+            'preference_contact' => 'TEXT', 'page_url' => 'TEXT', 'page_title' => 'TEXT'],
         'adv_demandes' => ['commentaire' => 'TEXT'],
         'cso_devis' => ['commentaire' => 'TEXT', 'contact_interne' => 'TEXT'],
         'cee_leads' => ['commentaire' => 'TEXT'],
@@ -2264,16 +2268,65 @@ function ma_chat_service(array $l): string
     return 'AUTRE';
 }
 
+/**
+ * Bloc de fin de conversation du chatbot (« Société : … », « Urgence : oui »…) : chaque ligne « Libellé : valeur »
+ * devient un champ. Les libellés sont comparés sans accents ni majuscules.
+ */
+function ma_chat_lire_bloc(string $bloc): array
+{
+    $cles = ['societe' => 'societe', 'nom' => 'nom', 'prenom' => 'prenom', 'email' => 'email', 'telephone' => 'telephone',
+        'departement' => 'departement', 'besoin resume' => 'besoin_resume', 'marque orientee' => 'marque_orientee',
+        'type interlocuteur' => 'type_interlocuteur', 'statut' => 'statut', 'a verifier' => 'a_verifier', 'categorie' => 'categorie',
+        'nature' => 'nature', 'reference' => 'reference', 'marque du materiel' => 'marque_materiel', 'modele' => 'modele',
+        'n de serie' => 'numero_serie', 'numero de serie' => 'numero_serie', 'code postal du site' => 'code_postal',
+        'urgence' => 'urgence', 'pourquoi urgent' => 'justification_urgence', 'demande existante' => 'demande_existante',
+        'preference de contact' => 'preference_contact'];
+    $out = [];
+    foreach (preg_split('/\R/u', $bloc) ?: [] as $ligne) {
+        if (!preg_match('/^\s*[-*]?\s*([^:]{2,40}?)\s*:\s*(.*)$/u', $ligne, $m)) {
+            continue;
+        }
+        $k = trim(preg_replace('/[^a-z ]+/', ' ', ma_plat($m[1])));
+        $k = preg_replace('/\s+/', ' ', $k);
+        if (isset($cles[$k]) && trim($m[2], " \t`*") !== '') {
+            $out[$cles[$k]] = trim($m[2], " \t`*");
+        }
+    }
+    return $out;
+}
+
 /** Ce que le chat transmet, traduit en champs de demande. Les « non communiqué » sont écartés. */
 function ma_chat_vers_demande(array $l): array
 {
-    $vide = fn($v) => in_array(ma_plat($v), ['', 'non communique', 'noncommunique', 'non renseigne', 'a qualifier', 'indetermine', 'inconnu', 'nc', 'n/a', '-'], true);
+    $vide = fn($v) => in_array(ma_plat($v), ['', 'non communique', 'noncommunique', 'non renseigne', 'a qualifier', 'indetermine', 'inconnu', 'nc', 'n/a', '-',
+        'non concerne', 'non', 'aucun', 'aucune'], true);
     $propre = fn($v) => $vide($v) ? null : trim((string) $v);
     $cat = ma_plat($l['categorie'] ?? null);
     $interloc = ma_plat($l['type_interlocuteur'] ?? null);
     $dep = strtoupper(trim((string) ($l['departement'] ?? '')));
+    $cp = preg_match('/\b(\d{5})\b/', (string) ($l['code_postal'] ?? ''), $m) ? $m[1] : null;
+    $nature = ma_plat($l['nature'] ?? null);
+    $natures = ['devis_equipement', 'commande_equipement', 'devis_pieces', 'commande_pieces', 'autre'];
+    $nature = in_array($nature, $natures, true) ? $nature : (['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? null);
+    $ref = $propre($l['reference'] ?? null);
+    $svc = ma_chat_service($l);
+    // Marque : celle de la machine concernée (SAV, pièces), sinon la marque vers laquelle le chat oriente.
+    $marque = $propre($l['marque_materiel'] ?? null) ?? $propre($l['marque_orientee'] ?? ($l['marque'] ?? null));
+    $besoin = $propre($l['besoin_resume'] ?? null);
+    $infos = array_filter([
+        $besoin,
+        $ref && $svc !== 'FINANCE' ? 'Référence : ' . $ref : null,
+        ($p = $propre($l['type_interlocuteur'] ?? null)) ? 'Profil : ' . $p : null,
+        ($p = $propre($l['marque_orientee'] ?? null)) && $p !== $marque ? 'Marque suggérée : ' . $p : null,
+        in_array(ma_plat($l['statut'] ?? ''), ['expert n2'], true) ? 'Demande technique pointue (expert)' : null,
+        ($p = $propre($l['a_verifier'] ?? null)) ? 'Coordonnées à vérifier : ' . $p : null,
+        ($p = $propre($l['preference_contact'] ?? null)) ? 'Préfère être contacté ' . (['email' => 'par e-mail', 'e mail' => 'par e-mail', 'telephone' => 'par téléphone',
+            'les deux' => 'par e-mail ou par téléphone'][ma_plat($p)] ?? 'par ' . $p) : null,
+        ($p = $propre($l['page_title'] ?? null) ?? $propre($l['page_url'] ?? null)) ? 'Page : ' . $p : null,
+    ]);
+    $existante = trim((string) ($l['demande_existante'] ?? ''));
     return [
-        'service' => ma_chat_service($l),
+        'service' => $svc,
         'canal' => 'chat',
         'source' => 'chatbot',
         'date' => $l['date'] ?? null,
@@ -2281,17 +2334,22 @@ function ma_chat_vers_demande(array $l): array
         'contact' => trim(implode(' ', array_filter([$propre($l['prenom'] ?? null), $propre($l['nom'] ?? null)]))) ?: null,
         'telephone' => $propre($l['telephone'] ?? null),
         'email' => str_contains((string) ($l['email'] ?? ''), '@') ? trim((string) $l['email']) : null,
-        'marque' => $propre($l['marque_orientee'] ?? ($l['marque'] ?? null)),
-        'departement' => preg_match('/^(\d{2,3}|2A|2B)$/', $dep) ? $dep : null,
-        'code_postal' => preg_match('/\b(\d{5})\b/', (string) ($l['code_postal'] ?? ''), $m) ? $m[1] : null,
+        'marque' => $marque,
+        'modele' => $propre($l['modele'] ?? null),
+        'numero_serie' => $propre($l['numero_serie'] ?? null),
+        'departement' => $cp ? ma_departement($cp) : (preg_match('/^(\d{2,3}|2A|2B)$/', $dep) ? $dep : null),
+        'code_postal' => $cp,
         'type_interlocuteur' => str_contains($interloc, 'distri') ? 'distributeur' : (str_contains($interloc, 'final') || str_contains($interloc, 'utilisateur') ? 'utilisateur_final'
             : (str_contains($interloc, 'install') ? 'installateur' : (str_contains($interloc, 'particulier') ? 'particulier' : null))),
-        'nature' => ['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? ($l['nature'] ?? null),
-        'besoin_commercial' => in_array($cat, ['equipement', 'pieces', 'commercial'], true) ? $propre($l['besoin_resume'] ?? null) : null,
-        'type_panne' => $cat === 'sav' ? $propre($l['besoin_resume'] ?? null) : null,
-        'resume' => $propre($l['besoin_resume'] ?? null),
-        'urgence' => $l['urgence'] ?? false,
-        'justification_urgence' => $l['justification_urgence'] ?? null,
+        'nature' => $svc === 'COMMERCIAL' ? $nature : null,
+        'besoin_commercial' => $svc === 'COMMERCIAL' ? $besoin : null,
+        'type_panne' => $svc === 'SAV' ? $besoin : null,
+        'reference_facture' => $svc === 'FINANCE' ? $ref : null,
+        'resume' => implode(' | ', $infos) ?: null,
+        'urgence' => $svc === 'SAV' && ma_bool($l['urgence'] ?? false),
+        'justification_urgence' => $propre($l['justification_urgence'] ?? null),
+        'relance_demande_id' => preg_match('/(\d+)/', $existante, $m) ? (int) $m[1] : null,
+        'demande_existante' => $existante !== '' && !$vide($existante),
     ];
 }
 
@@ -2315,7 +2373,8 @@ function ma_chat_demande(PDO $db, int $leadId): ?array
         $st->execute([(int) $l['demande_id']]);
         if ($dem = $st->fetch()) {
             $maj = [];
-            foreach (['societe', 'contact', 'email', 'marque', 'departement', 'resume', 'besoin_commercial', 'type_panne'] as $c) {
+            foreach (['societe', 'contact', 'email', 'marque', 'modele', 'numero_serie', 'code_postal', 'departement', 'nature', 'resume',
+                'besoin_commercial', 'type_panne', 'reference_facture', 'justification_urgence'] as $c) {
                 if (($d[$c] ?? null) !== null && (string) $d[$c] !== (string) $dem[$c]) {
                     $maj[$c] = $d[$c];
                 }
@@ -2323,6 +2382,11 @@ function ma_chat_demande(PDO $db, int $leadId): ?array
             $tel = ma_tel((string) ($d['telephone'] ?? ''));
             if ($tel && preg_match('/^\d{9,15}$/', $tel) && $tel !== $dem['tel']) {
                 $maj['tel'] = $tel;
+            }
+            // Urgence précisée après coup : la demande SAV passe en URGENT (et l'équipe reçoit le SMS).
+            $devientUrgente = $dem['service'] === 'SAV' && !empty($d['urgence']) && $dem['priorite'] !== 'URGENT';
+            if ($devientUrgente) {
+                $maj['priorite'] = 'URGENT';
             }
             if ($maj) {
                 $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
@@ -2333,7 +2397,19 @@ function ma_chat_demande(PDO $db, int $leadId): ?array
             $rt = ma_rep_router($db, array_merge($dem, $maj, ['jeton_interne' => $dem['jeton_interne']]));
             $st->execute([(int) $dem['id']]);
             $dem = $st->fetch();
-            return ['id' => (int) $dem['id'], 'demande' => $dem, 'rt' => $rt, 'liens' => ma_rep_liens($db, $dem), 'nouvelle' => false];
+            return ['id' => (int) $dem['id'], 'demande' => $dem, 'rt' => $rt, 'liens' => ma_rep_liens($db, $dem), 'nouvelle' => false,
+                'devient_urgente' => $devientUrgente];
+        }
+    }
+    // « Je vous ai déjà contactés pour ça » sans numéro : sa dernière demande du même service (60 jours).
+    if (empty($d['relance_demande_id']) && !empty($d['demande_existante'])) {
+        $tel = ma_tel_cle($d['telephone'] ?? null);
+        $email = $d['email'] ? mb_strtolower($d['email']) : null;
+        if ($tel || $email) {
+            $q = $db->prepare("SELECT id FROM rep_demandes WHERE service = ? AND created_at >= ? AND ((? IS NOT NULL AND tel = ?) OR (? IS NOT NULL AND lower(email) = ?))
+                ORDER BY created_at DESC LIMIT 1");
+            $q->execute([$d['service'], date('Y-m-d H:i:s', time() - 60 * 86400), $tel, $tel, $email, $email]);
+            $d['relance_demande_id'] = (int) $q->fetchColumn() ?: null;
         }
     }
     $r = ma_rep_creer_demande($db, $d, ['notifier' => ma_param($db, 'chat_notifier_client') === '1']);
@@ -2677,6 +2753,9 @@ function ma_civilite_de(?string $contact): array
 function ma_rep_bonjour(PDO $db, array $dem): string
 {
     $civ = null;
+    if (ma_param($db, 'rep_accueil_nom', '0') !== '1') {
+        return 'Bonjour' . (trim((string) ($dem['contact'] ?? '')) !== '' ? ' ' . trim((string) $dem['contact']) : '') . ',';
+    }
     if (!empty($dem['client_id'])) {
         $q = $db->prepare('SELECT civilite, contact FROM rep_clients WHERE id = ?');
         $q->execute([(int) $dem['client_id']]);
@@ -2813,7 +2892,16 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     $p = [];
     $p[] = 'Appelant connu' . ($out['contact'] ? ' : ' . $out['contact'] : '') . ($out['societe'] ? ', ' . $out['societe'] : '')
         . ($distributeur ? ' (distributeur' . ($out['compte_distributeur'] ? ', compte ' . $out['compte_distributeur'] : '') . ')' : '') . '.';
-    if ($out['accueil']) {
+    // Accueil « Bonjour Monsieur Mortier » sobre (sans fidélité) : activé par le paramètre rep_accueil_nom.
+    $accueilNom = ma_param($db, 'rep_accueil_nom', '0') === '1';
+    if (!$accueilNom) {
+        $out['accueil'] = null;
+    }
+    if (!$accueilNom && $out['nb_demandes'] > 0) {
+        $p[] = $out['nb_demandes'] . ' demande' . ($out['nb_demandes'] > 1 ? 's' : '') . ' déjà enregistrée' . ($out['nb_demandes'] > 1 ? 's' : '')
+            . ($out['fidelite'] === 'fidele' || $out['fidelite'] === 'vip' ? ' : client fidèle, à remercier de sa confiance' : '') . '.';
+    }
+    if ($accueilNom && $out['accueil']) {
         $p[] = 'Salutation : « ' . $out['accueil'] . ' » (si le premier message l\'a déjà saluée par son nom, ne la resaluez pas).'
             . ' Sobre et professionnel : ni remerciement pour sa fidélité, ni nombre d\'appels, ni « je vous reconnais ».'
             . ' Si ce n\'est pas cette personne, excusez-vous brièvement et demandez son nom.';
