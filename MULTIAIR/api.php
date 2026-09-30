@@ -321,9 +321,19 @@ try {
                         $where[] = 'statut IN (' . implode(',', array_fill(0, count($vals), '?')) . ')';
                         array_push($args, ...$vals);
                     }
-                    if (!empty($_GET['older_than_min'])) {
+                    if (!empty($_GET['id'])) {
+                        $where[] = 'id = ?';
+                        $args[] = (int) $_GET['id'];
+                    }
+                    $attente = (int) ($_GET['older_than_min'] ?? 0);
+                    // Relance déclenchée fiche par fiche (webhook) : l'ancien scénario qui interrogeait toutes les
+                    // 5 min ne voit plus rien, pour éviter tout doublon s'il tournait encore.
+                    if ($attente > 0 && empty($_GET['id']) && ma_param($db, 'rep_webhook_relance') !== '') {
+                        $where[] = '0 = 1';
+                    }
+                    if ($attente > 0) {
                         $where[] = "created_at <= ?";
-                        $args[] = date('Y-m-d H:i:s', time() - 60 * (int) $_GET['older_than_min']);
+                        $args[] = date('Y-m-d H:i:s', time() - 60 * $attente);
                     }
                     $dir = (($_GET['dir'] ?? 'desc') === 'asc') ? 'ASC' : 'DESC';
                     $limit = max(1, min(100, (int) ($_GET['limit'] ?? 1)));
@@ -349,6 +359,9 @@ try {
                     }
                     $id = insert($db, 'rep_fiches', $d);
                     logEvent($db, 'repondeur', 'ok', 'fiche_creee', ($d['societe'] ?? '') . ' / ' . ($d['contact'] ?? '') . ' [' . $d['statut'] . ']', ['id' => $id]);
+                    // En attente de validation WhatsApp : Make attend 10 min puis vérifie cette fiche seulement
+                    // (au lieu d'interroger la base toutes les 5 min, jour et nuit).
+                    ma_rep_programmer_relances($db, $d['statut'] === 'En attente' ? $id : null);
                     out(['ok' => true, 'id' => $id, 'tel_norm' => $d['tel_norm'], 'statut' => $d['statut']]);
                 }
                 if ($sub2 !== null) {

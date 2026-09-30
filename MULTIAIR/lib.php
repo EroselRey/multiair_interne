@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-29m';
+const MA_VERSION = '2026-09-30a';
 
 function ma_config(): array
 {
@@ -77,7 +77,8 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             // Le client rappelle pour la même demande : relances comptées, demande liée si nouvelle.
             'nb_relances' => 'INTEGER NOT NULL DEFAULT 0', 'derniere_relance' => 'TEXT', 'demande_liee_id' => 'INTEGER'],
         // Ce que Claire a recueilli au téléphone : la fiche le garde pour la demande créée après WhatsApp.
-        'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT'],
+        'rep_fiches' => ['code_postal' => 'TEXT', 'type_interlocuteur' => 'TEXT', 'nature' => 'TEXT', 'type_equipement' => 'TEXT',
+            'relance_programmee_at' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
         // Champs corrigés à la main sur la fiche client : les demandes suivantes ne les écrasent plus.
         'rep_clients' => ['champs_corriges' => 'TEXT', 'civilite' => 'TEXT'],
@@ -1872,7 +1873,40 @@ function ma_ouvrir_session(array $u): void
 /** Envoi par le scénario Make « Suivi client » (e-mail ; WhatsApp seulement si mobile = true). */
 function ma_webhook_suivi(PDO $db, array $payload): string
 {
-    $webhook = ma_param($db, 'rep_webhook_suivi');
+    return ma_webhook_post(ma_param($db, 'rep_webhook_suivi'), $payload);
+}
+
+/**
+ * Relance à 10 min d'une fiche en attente de validation WhatsApp : Make attend puis vérifie cette fiche.
+ * Au passage, les fiches restées en attente plus de 30 min sans relance programmée (webhook injoignable)
+ * sont reprogrammées : pas de scénario qui tourne à vide pour ça.
+ */
+function ma_rep_programmer_relances(PDO $db, ?int $ficheId = null): void
+{
+    $wh = ma_param($db, 'rep_webhook_relance');
+    if ($wh === '') {
+        return;
+    }
+    $ids = $ficheId ? [$ficheId] : [];
+    $q = $db->prepare("SELECT id FROM rep_fiches WHERE statut = 'En attente' AND relance_programmee_at IS NULL AND created_at <= ? AND created_at >= ? ORDER BY id LIMIT 10");
+    $q->execute([date('Y-m-d H:i:s', time() - 1800), date('Y-m-d H:i:s', time() - 7 * 86400)]);
+    foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        $ids[] = (int) $id;
+    }
+    foreach (array_unique($ids) as $id) {
+        $r = ma_webhook_post($wh, ['fiche_id' => $id, 'attente_min' => 10]);
+        if ($r === 'envoyé') {
+            $db->prepare('UPDATE rep_fiches SET relance_programmee_at = ? WHERE id = ?')->execute([ma_now(), $id]);
+        } else {
+            $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+                ->execute(['repondeur', ma_now(), 'erreur', 'relance_non_programmee', 'Fiche ' . $id . ' : relance 10 min non programmée (' . $r . '), nouvel essai au prochain appel']);
+        }
+    }
+}
+
+/** Appel d'un webhook Make (JSON). Rend « envoyé », « non configuré » ou « échec (code) ». */
+function ma_webhook_post(string $webhook, array $payload): string
+{
     if ($webhook === '' || !function_exists('curl_init')) {
         return 'non configuré';
     }
