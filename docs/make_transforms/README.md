@@ -11,7 +11,7 @@ Usage : `MULTIAIR_API_KEY=... python3 transform_<id>.py <blueprint_source.json> 
 | 9209946 Claire ADV | transform_9209946.py | ajout log API + routage AUTO / ESCALADE |
 | 9582857 Répondeur IA V2 | transform_9582857.py | bascule directe, suppression de l'attente 10 min |
 | 9583172 Répondeur IA V3 | transform_9583172.py | bascule directe |
-| 9583010 Aiguilleur WhatsApp | transform_9583010.py | fiche VAPI via API, Leads WCF encore sur Sheets |
+| 9583010 Aiguilleur WhatsApp | transform_9583010.py | fiche VAPI et lead CEE via API (30/09) |
 | 9791097 Relance 10 min | transform_9791097.py | bascule directe (source = API) |
 | 9324836 WCF A | transform_9324836.py | double écriture |
 | 9339470 WCF B | transform_9339470.py | double écriture |

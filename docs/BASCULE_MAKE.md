@@ -1,6 +1,6 @@
 # Bascule des scénarios Make vers l'API MULTIAIR
 
-État au 14/09/2026. Base API : `https://multiairfrance.store/calculateurs/interne/MULTIAIR/api.php?r=…`
+État au 30/09/2026. Base API : `https://multiairfrance.store/calculateurs/interne/MULTIAIR/api.php?r=…`
 (header `X-Api-Key`). Chaque blueprint d'origine a été sauvegardé avant modification.
 
 ## Modes de bascule
@@ -73,10 +73,31 @@ délai de 40 s dépassé), le gestionnaire « Ignore » arrête le traitement de
 ligne concernée ne sera écrite ni dans MULTIAIR ni dans le Sheet. Risque faible, à surveiller
 pendant la période de double écriture en comparant les deux sources.
 
+## Retrait des Google Sheets (30/09/2026)
+
+Plus aucun scénario actif n'écrit ni ne lit de Google Sheet, à une exception près (voir plus bas).
+La plateforme MULTIAIR est désormais la seule source.
+
+| Scénario | ID | Modules retirés | Remplacement |
+|---|---|---|---|
+| Chatbot Claire v12 | 9295374 | 7 (journal des leads), 12 (journal des conversations) | `chat/leads`, `chat/messages` (déjà en place) |
+| CSO analyse des devis | 9775498 | 4 (lecture colonne B) et toute la branche Sheets (router 6 : ajout, mise à jour, lignes, suppression des anciennes lignes) | `cso/devis`, qui gère déjà nouveau devis et révision |
+| Prime CEE — WCF A | 9324836 | 4 et 6 (ajout `Leads WCF`) | `cee/leads` ; les filtres « Téléphone fourni » / « Pas de téléphone » passent sur les modules 20 et 21 |
+| Prime CEE — WCF B | 9339470 | 7 et 15 (lecture `Leads WCF`), 16 (comptage), 10, 12, 13, 14 (ajouts Conversations/Actions WCF) | 1 appel `cee/leads/find` (module 7) ; filtre « Lead connu sur la plateforme » sur l'agent ; nombre de simulations = `nb_simulations` ; filtres de profil déplacés sur 23, 24, 25 |
+| Aiguilleur WhatsApp | 9583010 | 50 (lecture `Leads WCF`), 51 (agrégateur) | 1 appel `cee/leads/find` (module 50) ; mêmes règles de tri (fiche VAPI la plus récente contre lead CEE le plus récent) |
+
+Reprise de l'historique `Leads WCF` : le Sheet ne contenait que 2 lignes (tests du 28/07 et du
+02/09). Elles ont été reprises sur la plateforme par un scénario ponctuel, supprimé ensuite.
+Aucun formulaire CEE n'avait été reçu depuis l'ajout de l'appel `cee/leads` (14/09), d'où la table
+vide avant la reprise.
+
+**Exception conservée : Jeu Mauguière (9356263).** Ce scénario n'a pas d'équivalent sur la
+plateforme : son Sheet est son unique stockage, ce n'est pas un doublon. Il reste tel quel.
+
+Les Sheets peuvent être archivés (ne pas les supprimer tout de suite : ils gardent l'historique
+d'avant la bascule).
+
 ## Reste à faire
 
-1. Contrôler une à deux semaines que la page et les Google Sheets affichent la même chose.
-2. Retirer les modules Google Sheets des scénarios en double écriture, puis archiver les Sheets.
-3. Migrer `Leads WCF` (Prime CEE) une fois le Sheet partagé, et brancher l'aiguilleur dessus.
-4. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
-5. Sortir le jeton WhatsApp des blueprints (aujourd'hui en clair dans 4 scénarios).
+1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
+2. Sortir le jeton WhatsApp des blueprints (aujourd'hui en clair dans plusieurs scénarios).
