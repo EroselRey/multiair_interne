@@ -109,6 +109,42 @@ restées en attente jusqu'au lendemain.
 - Dans Make, le scénario passe toutes les 30 minutes de 8 h à 11 h, du lundi au vendredi
   (7 passages, soit jusqu'à 105 relances par jour). Un passage sans relance due coûte 1 crédit.
 
+## Boîte service clients : chaque e-mail devient une demande (05/10/2026, correctif 36)
+
+Avant : le scénario Claire ADV (9209946) ne savait traiter que les demandes de prix d'équipements et
+de maintenance. Un e-mail SAV (ex. « Demande de dépannage urgente » de Veolia, 05/10) partait en
+ESCALADE à l'adresse de validation ADV, hors du circuit des demandes : le SAV (Julien Jardin) n'était
+pas prévenu.
+
+Maintenant, côté plateforme (`adv/demandes` POST, `ma_email_demande`) :
+- l'e-mail reste journalisé comme avant (onglet « Boîte service clients »), Claire ADV continue de
+  répondre aux demandes de prix ;
+- il devient aussi une demande numérotée, canal « e-mail » : service deviné (panne → SAV, facture → compta,
+  candidature → RH, prix/matériel → commerce), téléphone, code postal du site, marque, urgence et société
+  lus dans l'e-mail, puis routage par les règles habituelles ;
+- l'équipe concernée est prévenue (e-mail par le scénario « Suivi client », SMS pour le SAV), le client
+  reçoit son n° et son lien de suivi ;
+- une réponse à un de nos e-mails de suivi (« demande n° 63 ») relance la demande existante au lieu d'en créer une ;
+- e-mails internes et e-mails écartés par les filtres (RECU) : pas de demande ;
+- bouton « Créer la demande » dans le détail d'un e-mail, pour ceux reçus avant le correctif ;
+- interrupteur : paramètre `adv_demandes_auto` (1 par défaut, 0 pour couper).
+
+À faire dans Make (accès à rétablir : le connecteur est actuellement ouvert avec un compte qui ne voit pas
+l'organisation Multiair) :
+1. Module 20 `adv/demandes` : ajouter `pieces_jointes` = `{{join(map(10.attachments; "fileName"); ", ")}}`,
+   `equipe_par_make` = 1 et `ticket_dans_reponse` = 1.
+2. Nouveau module e-mail à l'équipe : à `20.data.equipe_to`, copie `20.data.equipe_cc`, objet
+   `20.data.equipe_objet`, corps `20.data.equipe_html`, répondre à l'expéditeur, **pièces jointes = `10.attachments`**,
+   filtre « demande créée » (`20.data.demande_id` existe). En cas d'erreur (pièces trop lourdes), même e-mail
+   sans pièces jointes avec la mention « pièces jointes dans la boîte service clients ».
+3. SMS SAV : `20.data.equipe_sms` / `equipe_sms_texte` (Brevo), comme le chatbot.
+4. Réponse automatique au client (module 5) : corps = `20.data.mail` (la réponse de Claire suivie du n° de demande et du lien).
+5. Mail d'escalade ADV (module 21) : seulement si `20.data.demande_service` = COMMERCIAL (validation d'une
+   proposition de prix) ; les autres e-mails sont déjà routés par la demande.
+
+Tant que ces changements ne sont pas faits, la plateforme envoie elle-même l'e-mail à l'équipe (sans les
+pièces jointes : elles restent dans la boîte service clients).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

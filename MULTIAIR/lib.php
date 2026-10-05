@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05b';
+const MA_VERSION = '2026-10-05c';
 
 function ma_config(): array
 {
@@ -61,7 +61,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             'nature' => 'TEXT', 'reference' => 'TEXT', 'marque_materiel' => 'TEXT', 'modele' => 'TEXT', 'numero_serie' => 'TEXT',
             'code_postal' => 'TEXT', 'urgence' => 'TEXT', 'justification_urgence' => 'TEXT', 'demande_existante' => 'TEXT',
             'preference_contact' => 'TEXT', 'page_url' => 'TEXT', 'page_title' => 'TEXT'],
-        'adv_demandes' => ['commentaire' => 'TEXT'],
+        'adv_demandes' => ['commentaire' => 'TEXT', 'demande_id' => 'INTEGER', 'pieces_jointes' => 'TEXT'],
         'cso_devis' => ['commentaire' => 'TEXT', 'contact_interne' => 'TEXT'],
         'cee_leads' => ['commentaire' => 'TEXT'],
         'rep_demandes' => ['commentaire' => 'TEXT', 'email' => 'TEXT', 'departement' => 'TEXT',
@@ -2504,6 +2504,179 @@ function ma_chat_reprise(PDO $db): int
         $n++;
     }
     return $n;
+}
+
+// ------------------------------------------------------------------ Boîte service clients : chaque e-mail est une demande
+// Claire ADV répond toujours aux demandes de prix d'équipements et de maintenance. En plus, chaque e-mail
+// reçu devient une demande numérotée, routée comme un appel ou un chat (SAV au SAV, compta à la compta…),
+// avec le suivi par lien pour le client.
+
+/** Le message du client, sans l'historique cité en dessous (« Le … a écrit », « De : », « From: »…). */
+function ma_email_corps(?string $txt): string
+{
+    $t = str_replace("\r", '', (string) $txt);
+    $coupe = preg_split('/^\s*(?:>|Le .{4,120}a écrit\s*:|On .{4,120}wrote\s*:|De\s*:|From\s*:|Envoyé\s*:|-{3,}\s*(?:Original|Message d)|_{8,})/mu', $t, 2);
+    $t = trim($coupe[0] ?? $t);
+    return trim(preg_replace("/\n{3,}/", "\n\n", $t));
+}
+
+/** Service d'un e-mail : recrutement, panne, compta, sinon commerce si c'est une demande de prix ou de matériel. */
+function ma_email_service(string $sujet, string $corps, ?string $famille): string
+{
+    if (ma_est_rh(['resume' => $sujet . ' ' . $corps])) {
+        return 'AUTRE';
+    }
+    $sav = '/\b(pannes?|en panne|depann\w*|fuites?|alarmes?|interventions?|repar\w*|ne (?:demarre|fonctionne|marche) (?:plus|pas)|code (?:d.)?erreur'
+        . '|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|bruit anormal|surchauffe|disjonct\w*|sav)\b/u';
+    $fin = '/\b(factur\w*|reglements?|paiements?|virement|releve de compte|impayes?|echeances?|lettrage)\b/u';
+    $s = ma_plat($sujet);
+    $t = ma_plat($sujet . ' ' . $corps);
+    // L'objet tranche d'abord ; dans le corps, une panne passe avant une question de facture.
+    foreach ([[$s, true], [$t, false]] as [$texte]) {
+        if (preg_match($sav, $texte)) {
+            return 'SAV';
+        }
+        if (preg_match($fin, $texte)) {
+            return 'FINANCE';
+        }
+    }
+    if (in_array(ma_plat($famille), ['equipements', 'maintenance'], true)
+        || preg_match('/\b(devis|prix|tarifs?|cotation|commande|pieces?|kit|compresseurs?|secheurs?|filtres?)\b/u', $t)) {
+        return 'COMMERCIAL';
+    }
+    return 'AUTRE';
+}
+
+/** Ce qu'on peut tirer d'un e-mail : téléphone, code postal du site, urgence, marque, société. */
+function ma_email_infos(PDO $db, string $sujet, string $corps, string $from): array
+{
+    $standard = ma_tel_cle(ma_param($db, 'rep_standard_tel', '01 34 32 95 00'));
+    $tel = null;
+    if (preg_match_all('/(?:\+33\s?\(?0?\)?\s?|0033\s?|\b0)[1-9](?:[\s.\-]?\d{2}){4}\b/u', $corps, $m)) {
+        foreach ($m[0] as $x) {
+            $k = ma_tel_cle($x);
+            if ($k && $k !== $standard) {
+                $tel = $x;
+                break;
+            }
+        }
+    }
+    $internes = array_filter(array_map('trim', explode(',', ma_param($db, 'cp_internes', '95150,95740'))));
+    $cp = null;
+    if (preg_match_all('/\b((?:0[1-9]|[1-8]\d|9[0-8])\d{3})\s+(?:cedex\s+)?[A-ZÉÈ][\p{L}\'\- ]{2,}/u', $corps, $m)) {
+        foreach ($m[1] as $x) {
+            if (!in_array($x, $internes, true)) {
+                $cp = $x;
+                break;
+            }
+        }
+    }
+    $t = ma_plat($sujet . ' ' . $corps);
+    $urgent = (bool) preg_match('/\b(urgent\w*|urgence|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|plus d.air)\b/u', $t);
+    $marque = null;
+    foreach (['worthington' => 'Worthington Creyssensac', 'creyssensac' => 'Worthington Creyssensac', 'pneumatech' => 'Pneumatech',
+        'abac' => 'ABAC', 'mauguiere' => 'Mauguière'] as $mot => $nom) {
+        if (preg_match('/\b' . $mot . '\b/u', $t)) {
+            $marque = $nom;
+            break;
+        }
+    }
+    // Société devinée depuis le domaine de l'adresse, sauf messageries grand public.
+    $societe = null;
+    $dom = strtolower((string) substr(strrchr($from, '@') ?: '', 1));
+    $publics = ['gmail', 'hotmail', 'outlook', 'live', 'yahoo', 'orange', 'wanadoo', 'free', 'sfr', 'laposte', 'icloud', 'me', 'aol', 'gmx', 'bbox', 'neuf', 'msn', 'protonmail'];
+    if ($dom !== '') {
+        $base = explode('.', $dom)[0];
+        if (!in_array($base, $publics, true)) {
+            $societe = mb_convert_case(str_replace(['-', '_'], ' ', $base), MB_CASE_TITLE);
+        }
+    }
+    return ['tel' => $tel, 'code_postal' => $cp, 'urgent' => $urgent, 'marque' => $marque, 'societe' => $societe];
+}
+
+/** « MACHADO, REMY » → « Remy Machado » ; le reste tel quel. */
+function ma_email_nom(?string $nom): ?string
+{
+    $n = trim((string) $nom, " \t\"'");
+    if ($n === '') {
+        return null;
+    }
+    if (preg_match('/^([^,]+),\s*(.+)$/u', $n, $m)) {
+        $n = $m[2] . ' ' . $m[1];
+    }
+    return mb_strtoupper($n) === $n ? mb_convert_case(mb_strtolower($n), MB_CASE_TITLE) : $n;
+}
+
+/**
+ * Crée (une seule fois) la demande d'un e-mail journalisé dans adv_demandes et prévient l'équipe.
+ * Options : equipe_par_make (le scénario Make envoie lui-même le mail à l'équipe, avec les pièces
+ * jointes) ; ticket_dans_reponse (le n° figure déjà dans la réponse de Claire : pas d'accusé de réception en plus).
+ */
+function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
+{
+    $st = $db->prepare('SELECT * FROM adv_demandes WHERE id = ?');
+    $st->execute([$advId]);
+    $a = $st->fetch();
+    if (!$a) {
+        return null;
+    }
+    if (!empty($a['demande_id'])) {
+        $q = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+        $q->execute([(int) $a['demande_id']]);
+        if ($dem = $q->fetch()) {
+            return ['id' => (int) $dem['id'], 'demande' => $dem, 'liens' => ma_rep_liens($db, $dem), 'nouvelle' => false];
+        }
+    }
+    $from = trim((string) $a['from_email']);
+    // E-mails écartés par les filtres du scénario (RECU), sans expéditeur, ou venant de chez nous : pas de demande.
+    if (($a['tag'] === 'RECU' && empty($opt['forcer'])) || !str_contains($from, '@') || ma_est_interne($from, ma_domaines_internes($db))) {
+        return null;
+    }
+    $sujet = trim((string) $a['sujet']);
+    $corps = ma_email_corps($a['message']);
+    $svc = ma_email_service($sujet, $corps, $a['famille']);
+    $info = ma_email_infos($db, $sujet, $corps, $from);
+    $extrait = mb_strlen($corps) > 600 ? mb_substr($corps, 0, 597) . '…' : $corps;
+    $claire = array_filter([$a['techno'] ? 'Techno : ' . $a['techno'] : null, $a['critere'] ? 'Critère : ' . $a['critere'] : null,
+        $a['pression'] ? 'Pression : ' . $a['pression'] : null, $a['configuration'] ? 'Configuration : ' . $a['configuration'] : null]);
+    $pj = trim((string) ($a['pieces_jointes'] ?? ''));
+    $resume = implode(' | ', array_filter([
+        'E-mail « ' . ($sujet ?: 'sans objet') . ' »',
+        $svc === 'COMMERCIAL' && $a['tag'] === 'AUTO' ? 'Claire ADV a répondu au client avec une proposition' : null,
+        $svc === 'COMMERCIAL' && $a['tag'] === 'ESCALADE' ? 'Réponse de Claire ADV à valider (onglet E-mails)' : null,
+        $claire ? implode(', ', $claire) : null,
+        $pj !== '' ? 'Pièces jointes : ' . $pj . ' (dans la boîte service clients)' : null,
+    ]));
+    $d = [
+        'service' => $svc, 'canal' => 'email', 'source' => 'email', 'date' => $a['date'],
+        'societe' => $info['societe'], 'contact' => ma_email_nom($a['from_nom']), 'email' => $from, 'telephone' => $info['tel'],
+        'marque' => $info['marque'], 'code_postal' => $info['code_postal'],
+        'departement' => $info['code_postal'] ? ma_departement($info['code_postal']) : null,
+        'nature' => $svc === 'COMMERCIAL' ? (ma_plat($a['famille']) === 'maintenance' ? 'devis_pieces' : 'devis_equipement') : null,
+        'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
+        'type_panne' => $svc === 'SAV' ? $extrait : null,
+        'resume' => $resume,
+        'urgence' => $svc === 'SAV' && $info['urgent'],
+        'justification_urgence' => $svc === 'SAV' && $info['urgent'] ? 'Signalé urgent dans l\'e-mail : « ' . ($sujet ?: mb_substr($corps, 0, 80)) . ' »' : null,
+    ];
+    // Réponse à un de nos e-mails de suivi (« demande n° 85 ») : c'est une relance, pas une nouvelle demande.
+    if (preg_match('/demande\s+n\W{0,2}\s*(\d{1,7})\b/iu', $sujet . ' ' . $corps, $m)) {
+        $d['relance_demande_id'] = (int) $m[1];
+    }
+    $notifier = !($a['tag'] === 'AUTO' && !empty($opt['ticket_dans_reponse']));
+    $r = ma_rep_creer_demande($db, $d, ['notifier' => $notifier]);
+    $db->prepare('UPDATE adv_demandes SET demande_id = ? WHERE id = ?')->execute([$r['id'], $advId]);
+    if (empty($opt['equipe_par_make'])) {
+        $rt = $r['rt'];
+        $dest = array_values(ma_liste_emails(str_replace(';', ',', $rt['to'] . ',' . $rt['cc'])));
+        $envoi = $dest ? ma_webhook_suivi($db, ['evenement' => 'transfert', 'demande_id' => (int) $r['id'], 'mobile' => false, 'tel' => '',
+            'email' => implode(',', $dest), 'objet' => $rt['objet'], 'html' => $rt['mail_html'], 'texte' => '', 'lien' => $r['liens']['interne'] ?? '',
+            'sms' => $svc === 'SAV' ? $rt['sms'] : '', 'sms_texte' => $rt['sms_texte']]) : 'aucune adresse';
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+            ->execute(['adv', ma_now(), str_starts_with($envoi, 'échec') ? 'erreur' : 'ok', 'demande_email',
+                'E-mail ' . $advId . ' → demande n° ' . $r['id'] . ' (' . $svc . ') : équipe prévenue — ' . $envoi]);
+    }
+    return $r + ['nouvelle' => empty($r['relance'])];
 }
 
 // ------------------------------------------------------------------ Transfert d'une demande

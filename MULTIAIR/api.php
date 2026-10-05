@@ -1083,6 +1083,7 @@ try {
                         'envoye_at' => ma_bool($body['envoye'] ?? ($tag === 'AUTO')) ? $now : null,
                         'statut_suivi' => $tag === 'RECU' ? 'recu' : ($tag === 'AUTO' ? 'envoye' : 'a_valider'),
                         'commentaire' => ma_str($body['commentaire'] ?? null),
+                        'pieces_jointes' => ma_str($body['pieces_jointes'] ?? null),
                     ];
                     // Le scénario écrit deux fois : à la réception du mail (tag RECU) puis après
                     // la réponse de Claire. Même Message-ID = même demande, on complète la ligne.
@@ -1113,11 +1114,35 @@ try {
                         ($d['from_email'] ?? '') . ' - ' . ($d['sujet'] ?? '') . ' [' . $tag . ']', ['id' => $id]);
                     $cleRoutage = in_array($tag, ['ESCALADE', 'ERREUR'], true) ? $tag : ($famille === 'maintenance' ? 'MAINTENANCE' : ($d['cas'] ?? 'STANDARD'));
                     $rt = ma_routage($db, 'adv', $cleRoutage);
-                    out(['ok' => true, 'id' => $id, 'action' => $action, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'], 'mail' => $mailClean, 'statut_suivi' => $d['statut_suivi'],
+                    // Chaque e-mail reçu devient aussi une demande numérotée, routée comme un appel ou un chat.
+                    $ticket = null;
+                    if ($tag !== 'RECU' && ma_param($db, 'adv_demandes_auto', '1') === '1') {
+                        try {
+                            $ticket = ma_email_demande($db, $id, ['equipe_par_make' => ma_bool($body['equipe_par_make'] ?? false),
+                                'ticket_dans_reponse' => ma_bool($body['ticket_dans_reponse'] ?? false)]);
+                        } catch (Throwable $e) {
+                            logEvent($db, 'adv', 'erreur', 'demande_email', 'E-mail ' . $id . ' : demande non créée — ' . $e->getMessage(), null);
+                        }
+                    }
+                    $ligneTicket = $ticket ? "Votre demande porte le n° " . $ticket['id'] . ". Suivez-la ici : " . ($ticket['liens']['client'] ?? '') : '';
+                    $dem = $ticket['demande'] ?? null;
+                    $rtDem = $ticket['rt'] ?? null;
+                    out(['ok' => true, 'id' => $id, 'action' => $action, 'tag' => $tag, 'famille' => $famille, 'cas' => $d['cas'],
+                        'mail' => $mailClean . ($ligneTicket !== '' ? "\n\n" . $ligneTicket : ''), 'statut_suivi' => $d['statut_suivi'],
+                        'demande_id' => $ticket['id'] ?? null, 'demande_service' => $dem['service'] ?? null, 'demande_nouvelle' => $ticket['nouvelle'] ?? null,
+                        'ticket' => $ligneTicket, 'equipe_to' => $rtDem['to'] ?? '', 'equipe_cc' => $rtDem['cc'] ?? '', 'equipe_objet' => $rtDem['objet'] ?? '',
+                        'equipe_html' => $rtDem['mail_html'] ?? '', 'equipe_sms' => ($dem['service'] ?? '') === 'SAV' ? ($rtDem['sms'] ?? '') : '',
+                        'equipe_sms_texte' => $rtDem['sms_texte'] ?? '',
                         'envoyer_au_client' => $tag === 'AUTO', 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
+                    if ($method === 'POST' && ($parts[3] ?? null) === 'demande') {
+                        // E-mail reçu avant le circuit des demandes (ou écarté) : on en fait une demande à la main.
+                        $r = ma_email_demande($db, $id, ['forcer' => true]) ?? fail('Pas de demande possible : expéditeur absent ou interne');
+                        logEvent($db, 'adv', 'ok', 'demande_email', 'E-mail ' . $id . ' → demande n° ' . $r['id'] . ($user ? ' par ' . $user['nom'] : ''), null);
+                        out(['ok' => true, 'demande_id' => $r['id'], 'nouvelle' => $r['nouvelle'] ?? false]);
+                    }
                     if ($method === 'PATCH' || $method === 'POST') {
                         $d = $body;
                         if (in_array($d['statut_suivi'] ?? '', ['valide', 'traite'], true)) {

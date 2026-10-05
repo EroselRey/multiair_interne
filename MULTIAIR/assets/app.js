@@ -1733,7 +1733,7 @@
     const [s, dem, logs] = await Promise.all([api('stats/adv'), api('adv/demandes'), api('log', {query: {scenario: 'adv', limit: 50}})]);
     const k = s.kpi;
     main.innerHTML = `
-      <div class="section-title"><h2>Claire ADV — e-mails équipements et maintenance</h2><span class="hint">scénario Make 9209946 · boîte service.clients@multiairfrance.store</span></div>
+      <div class="section-title"><h2>Boîte service clients — e-mails reçus</h2><span class="hint">scénario Make 9209946 · service.clients@multiairfrance.store · chaque e-mail devient une demande numérotée</span></div>
       <div class="kpis">
         ${kpi(num(k.mails_recus), 'E-mails reçus au total')}
         ${kpi(num(k.mails_j30), 'E-mails traités sur 30 jours')}
@@ -1766,13 +1766,25 @@
       openDrawer(`${h(d.sujet || '(sans objet)')}`, `
         ${kv([['Date', fmtDate(d.date)], ['Expéditeur', h([d.from_nom, d.from_email].filter(Boolean).join(' — '))], ['Tag', pill(d.tag, cls(d.tag))], ['Famille', h(d.famille)], ['Cas', pill(d.cas, cls(d.cas))],
           ['Techno', h(d.techno)], ['Critère', h(d.critere)], ['Pression', h(d.pression)], ['Configuration', h(d.configuration)], ['Options retenues', h(d.options_retenues)],
-          ['Envoyé le', fmtDate(d.envoye_at)], ['Message-ID', h(d.message_id)]])}
+          ['Envoyé le', fmtDate(d.envoye_at)], ['Pièces jointes', h(d.pieces_jointes || '—')], ['Demande', d.demande_id ? `<a href="#demande/${d.demande_id}" data-dem="${d.demande_id}">n° ${d.demande_id}</a>` : '<span class="hint">aucune</span>'],
+          ['Message-ID', h(d.message_id)]])}
+        ${d.demande_id ? '' : '<p><button class="btn" id="advTicket">Créer la demande (routée vers le bon service)</button></p>'}
         <h4>Question du client</h4><pre class="raw">${h(d.message || '—')}</pre>
         <h4>Réponse de Claire ${d.tag === 'RECU' ? '<span class="hint">(aucune : e-mail écarté par les filtres)</span>' : ''}</h4><pre class="raw">${h(d.mail_envoye || '—')}</pre>
         ${d.analyse_brute ? `<h4>Bloc d'analyse</h4><pre class="raw">${h(d.analyse_brute)}</pre>` : ''}
         <h4>Suivi</h4>${editForm(fields, d)}`, saveBtn() + delBtn());
       $('#drawerSave').onclick = async () => { await patch('adv/demandes/' + d.id, readForm($('#drawerBody'), fields)); toast('Enregistré'); closeDrawer(); show('adv'); refreshBadges(); };
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer ?')) { await api('adv/demandes/' + d.id, {method: 'DELETE'}); closeDrawer(); show('adv'); } };
+      const lienDem = $('#drawerBody [data-dem]');
+      if (lienDem) lienDem.onclick = (e) => { e.preventDefault(); closeDrawer(); show('demande', Number(lienDem.dataset.dem)); };
+      if ($('#advTicket')) $('#advTicket').onclick = async () => {
+        if (!confirm("Créer la demande ? L'équipe concernée est prévenue et le client reçoit son n° de suivi.")) return;
+        $('#advTicket').disabled = true;
+        try {
+          const r = await api('adv/demandes/' + d.id + '/demande', {method: 'POST', body: {}});
+          toast('Demande n° ' + r.demande_id + ' créée'); closeDrawer(); refreshBadges(); show('demande', r.demande_id);
+        } catch (e) { toast(e.message, true); $('#advTicket').disabled = false; }
+      };
     };
     table('#adv_tbl', dem.rows, [
       {key: 'date', label: 'Date', render: (r) => fmtDate(r.date)},
@@ -1781,6 +1793,7 @@
       {key: 'famille', label: 'Famille'}, {key: 'cas', label: 'Cas'},
       {key: 'from_email', label: 'Expéditeur', render: (r) => clip(r.from_nom ? `${r.from_nom} <${r.from_email}>` : r.from_email)},
       {key: 'sujet', label: 'Objet', render: (r) => clip(r.sujet, true)},
+      {key: 'demande_id', label: 'Demande', render: (r) => r.demande_id ? 'n° ' + r.demande_id : '—'},
       {key: 'techno', label: 'Techno'}, {key: 'critere', label: 'Critère'},
     ], {sort: 'date', filters: [{key: 'tag', label: 'Tag'}, {key: 'statut_suivi', label: 'Suivi', map: L}, {key: 'famille', label: 'Famille'}, {key: 'cas', label: 'Cas'}], onRow: detail});
   };
