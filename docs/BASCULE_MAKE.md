@@ -189,6 +189,20 @@ Prix des équipements tirés du tarif Multiair en vigueur (05/10) :
   déclaré dans `metadata.expect` (type text) avec une aide `metadata.restore.expect.<champ>.extra.aiHelp` ;
   une valeur glissée dans l'URL ou dans `qs` part vide.
 
+Mauguière et Pneumatech chiffrés comme Worthington (05/10) :
+- fonction `tarif_claire_recherche(text)` (POST text/plain, même clé en en-tête) : recherche par critères
+  « marque=mauguiere; puissance_ch=15; pression=10; debit_min=80; mots=vsd chassis seul » ; renvoie jusqu'à 40 produits
+  avec technologie et configuration déduites (Mauguière : MAVP V = niveau 3 / V PM, MAVX V = niveaux 1-2 / XV PM,
+  MAVD V = niveau 0 / V classique ; lettres R = réservoir, S = sécheur, F = filtres) ;
+- prix nul dans le tarif = statut « sur_devis » (jamais chiffré : traité comme un cas LEAD) — aussi dans `prix_tarif_claire` ;
+- Claire ADV : 4e outil « Recherche tarif par critères » ; Mauguière et Pneumatech suivent les mêmes règles et modèles de
+  réponse que Worthington (une seule marque par proposition) ; Abac reste transmis au contact interne ;
+- l'ancienne `recherche_tarif_claire_brut` (première version) n'est plus utilisée et n'est plus accessible au public ;
+  sa suppression reste bloquée côté Supabase (le `drop` n'aboutit pas) — à refaire depuis l'éditeur SQL :
+  `drop function public.recherche_tarif_claire_brut(text);`
+- testé le 05/10 : « Mauguière vitesse variable 15 ch 10 bar châssis » → MAVX V 141 10 (9 807 €) et MAVP V 141 13
+  (14 085 €), le MAVD V 151 « sur devis » écarté.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
