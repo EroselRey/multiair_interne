@@ -562,6 +562,7 @@
     recue: ['Réception', 'inbox'], transmise: ['Transmission', 'envoi'], client_prevenu: ['Message au client', 'envoi'],
     prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
     rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], relance: ['Relance du client', 'retour'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
+    piece: ['Pièce jointe', 'note'],
   };
   const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
   const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
@@ -601,7 +602,7 @@
     const parSvc = (s) => actifs.filter((c) => !boite(c) && c.service_equipe === s).sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map((c) => opt(c));
     const choix = `<select name="cible" class="inp"><option value="">— Choisir —</option>
       ${groupe('Responsables de service', Object.entries(nomsResp).map(([k, t]) => { const c = actifs.find((x) => Number(x.id) === Number(resp[k])); return c ? opt(c, t + ' (' + c.nom + ')') : ''; }).filter(Boolean))}
-      ${groupe('Finance', parSvc('finance'))}${groupe('SAV', parSvc('sav'))}${groupe('Commerce', parSvc('commerce'))}${groupe('Direction', parSvc('direction'))}
+      ${groupe('Finance', parSvc('finance'))}${groupe('SAV', parSvc('sav'))}${groupe('Commerce', parSvc('commerce'))}${groupe('RH', parSvc('rh'))}${groupe('Direction', parSvc('direction'))}
       ${groupe('Boîtes partagées', actifs.filter(boite).map((c) => opt(c, c.nom + (c.competences ? ' — ' + c.competences : ''))))}</select>`;
     openDrawer('Transférer la demande n° ' + d.id, `
       <p class="hint" style="margin:0">La personne choisie reçoit la demande par e-mail (et par SMS pour le SAV), avec le lien pour la prendre en charge.
@@ -632,9 +633,23 @@
     };
   }
 
+  const poids = (o) => (o >= 1048576 ? (o / 1048576).toFixed(1).replace('.', ',') + ' Mo' : Math.max(1, Math.round(o / 1024)) + ' Ko');
+  const pieceHtml = (demId) => (p) => {
+    const url = 'api.php?r=rep/demandes/' + demId + '/pieces/' + p.id;
+    const legende = `<div class="pj-l"><a href="${url}" target="_blank" rel="noopener">${h(p.nom)}</a>
+      <small>${h(poids(Number(p.taille) || 0))} · ${h(p.source === 'email' ? 'reçue avec l\'e-mail' : 'ajoutée' + (p.ajoute_par ? ' par ' + p.ajoute_par : ''))} · ${h(fmtDate(p.created_at))}</small>
+      ${p.erreur ? `<small style="color:var(--danger)">Non enregistrée : ${h(p.erreur)} — voir l'e-mail d'origine</small>` : `<a href="${url}&telecharger=1" class="hint">Télécharger</a>`}
+      ${moi.acces === 'admin' ? `<button class="btn small ghost" data-suppr-piece="${p.id}">Supprimer</button>` : ''}</div>`;
+    if (p.erreur) return `<div class="pj">${legende}</div>`;
+    if (String(p.type).startsWith('image/') && p.en_ligne) return `<div class="pj"><a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${h(p.nom)}" loading="lazy"></a>${legende}</div>`;
+    if (String(p.type).startsWith('video/')) return `<div class="pj"><video src="${url}" controls preload="metadata" playsinline></video>${legende}</div>`;
+    if (String(p.type).startsWith('audio/')) return `<div class="pj"><audio src="${url}" controls preload="none"></audio>${legende}</div>`;
+    return `<div class="pj">${legende}</div>`;
+  };
+
   tabs.demande = async (id) => {
     const [r] = await Promise.all([api('rep/demandes/' + id), chargerListes().catch(() => {})]);
-    const d = r.demande, ev = r.historique || [];
+    const d = r.demande, ev = r.historique || [], pieces = r.pieces || [];
     const urgent = estUrgente(d);
     const canal = canalDe(d);
     const via = {whatsapp_qualifie: ', validée sur WhatsApp', sans_reponse_10min: ', sans réponse WhatsApp du client', vapi_direct: ''}[d.source] ?? '';
@@ -693,6 +708,10 @@
             ${champ('Besoin', h(d.besoin_commercial || ''), true)}
             ${champ('Pourquoi urgent', h(d.priorite === 'URGENT' ? d.justification_urgence || '' : ''), true)}
           </div>${d.resume ? `<p class="texte">${h(d.resume)}</p>` : ''}</section>
+          <section class="box2"><h2>Pièces jointes${pieces.length ? ' (' + pieces.length + ')' : ''}</h2>
+            <div class="pieces">${pieces.length ? pieces.map(pieceHtml(d.id)).join('') : '<p class="hint" style="margin:0">Aucune pièce jointe. Les photos, vidéos et documents envoyés par le client avec son e-mail arrivent ici automatiquement.</p>'}</div>
+            <label class="btn" style="align-self:flex-start;cursor:pointer">${ic('plus', 's')}Ajouter une pièce jointe<input type="file" id="pieceFichier" multiple hidden></label>
+            <span class="hint" id="pieceEtat"></span></section>
           <section class="box2 hist-box"><h2>Historique complet</h2>
             <p class="hint" style="margin-top:-6px">Tout ce qui s'est passé : à qui la demande a été envoyée, quand, par quel canal, les messages envoyés au client et ses réponses.</p>
             <div id="hist">${historiqueHtml(ev)}</div></section>
@@ -731,6 +750,31 @@
       const chg = {rappel_prevu: v};
       if (d.statut === 'a_traiter') chg.statut = 'en_cours';
       await act(chg, 'Rappel enregistré — le client est prévenu');
+    });
+    const fichierPj = $('#pieceFichier');
+    if (fichierPj) fichierPj.onchange = async () => {
+      const fichiers = [...fichierPj.files];
+      if (!fichiers.length) return;
+      const etat = $('#pieceEtat');
+      const erreurs = [];
+      for (const [i, f] of fichiers.entries()) {
+        etat.textContent = `Envoi de ${f.name} (${i + 1}/${fichiers.length}, ${poids(f.size)})…`;
+        const fd = new FormData();
+        fd.append('fichier', f, f.name);
+        try {
+          const rep = await fetch('api.php?r=rep/demandes/' + d.id + '/pieces&nom=' + encodeURIComponent(f.name), {method: 'POST', body: fd});
+          const j = await rep.json().catch(() => ({ok: false, erreur: 'Réponse invalide'}));
+          if (!j.ok) erreurs.push(f.name + ' : ' + (j.erreur || 'erreur'));
+          else erreurs.push(...(j.erreurs || []));
+        } catch (e) { erreurs.push(f.name + ' : ' + e.message); }
+      }
+      if (erreurs.length) toast(erreurs.join(' — '), true); else toast(fichiers.length > 1 ? 'Pièces jointes ajoutées' : 'Pièce jointe ajoutée');
+      recharger();
+    };
+    $$('[data-suppr-piece]', main).forEach((b) => b.onclick = async () => {
+      if (!confirm('Supprimer cette pièce jointe ?')) return;
+      await api('rep/demandes/' + d.id + '/pieces/' + b.dataset.supprPiece, {method: 'DELETE'});
+      toast('Pièce jointe supprimée'); recharger();
     });
     $('#noteOk').onclick = async () => {
       const t = $('#noteTxt').value.trim();
@@ -1031,12 +1075,12 @@
             <select id="resp_${k}" data-resp="${k}">${gens.filter((g) => g.email && Number(g.actif)).map((g) => `<option value="${g.id}" ${Number(g.id) === Number(r.responsables[k]) ? 'selected' : ''}>${h(g.nom)}</option>`).join('')}</select></div>`; }).join('')}</div></section>
         <section class="section"><h2>Toute l'équipe</h2>
           <div class="frow"><label class="search">${ic('search', 's')}<input type="search" id="eq_q" placeholder="Nom, e-mail, fonction…" aria-label="Rechercher" value="${h(vueEquipe.q)}"></label>
-            ${[['', 'Tous'], ['direction', 'Direction'], ['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance']].map(([v, t]) =>
+            ${[['', 'Tous'], ['direction', 'Direction'], ['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance'], ['rh', 'RH']].map(([v, t]) =>
               `<button class="chip ${vueEquipe.service === v ? 'on' : ''}" data-eqs="${v}">${t}</button>`).join('')}</div>
           <div class="panel dl eq">
             <div class="row head"><span>NOM</span><span>FONCTION</span><span>E-MAIL</span><span>PORTABLE</span><span>DÉPARTEMENTS</span><span>ACCÈS</span><span>CONNEXION</span></div>
             ${liste.map((c) => `<div class="row" data-c="${c.id}" role="link" tabindex="0" style="${Number(c.actif) ? '' : 'opacity:.55'}">
-              <span class="two"><b>${h(c.nom)}</b><span>${h(({sav: 'SAV', commerce: 'Commerce', finance: 'Finance', direction: 'Direction'})[c.service_equipe] || '')}${Number(c.actif) ? '' : ' · inactif'}</span></span>
+              <span class="two"><b>${h(c.nom)}</b><span>${h(({sav: 'SAV', commerce: 'Commerce', finance: 'Finance', rh: 'RH', direction: 'Direction'})[c.service_equipe] || '')}${Number(c.actif) ? '' : ' · inactif'}</span></span>
               <span class="txt">${h(c.fonction || nomDe(ROLES_ROUTAGE, c.role))}</span><span class="txt">${h(c.email || '—')}</span><span class="txt">${h(tel(c.mobile) || '—')}</span>
               <span class="txt">${h(c.departements ? c.departements.split(/[,;]/).length + ' dpts · ' + c.departements.split(/[,;]/).slice(0, 3).join(',') + '…' : '—')}</span>
               <span>${acces(c)}</span><span>${connexion(c)}</span>
@@ -1064,7 +1108,7 @@
       const champs = [
         ligne('Nom', `<input name="nom" value="${h(c.nom)}" autocomplete="off">`),
         ligne('Fonction', `<input name="fonction" value="${h(c.fonction)}" placeholder="ex. RSO, Comptabilité, Back-office SAV">`),
-        ligne('Service', sel('service', [['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance'], ['direction', 'Direction']], c.service || c.service_equipe || 'sav')),
+        ligne('Service', sel('service', [['sav', 'SAV'], ['commerce', 'Commerce'], ['finance', 'Finance'], ['rh', 'RH'], ['direction', 'Direction']], c.service || c.service_equipe || 'sav')),
         ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`, 'Sert aussi d\'identifiant de connexion.'),
         ligne('Portable', `<input name="mobile" value="${h(c.mobile)}" placeholder="06 12 34 56 78">`, 'Reçoit le SMS des demandes SAV qui lui sont transmises. Jamais communiqué aux clients.'),
         ligne('Rôle dans l\'envoi des demandes', sel('role', ROLES_ROUTAGE, role), 'Détermine quelles demandes lui sont envoyées (menu « Qui reçoit quoi »).'),

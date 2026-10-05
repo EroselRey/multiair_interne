@@ -515,6 +515,57 @@ try {
                         logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
                         out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin || $apres['service'] === $portee]);
                     }
+                    if (($parts[3] ?? null) === 'pieces') {
+                        // Pièces jointes : envoi (Make depuis l'e-mail du client, ou l'équipe depuis la page),
+                        // lecture (le fichier lui-même), suppression (administrateur).
+                        $pid = (int) ($parts[4] ?? 0);
+                        if ($method === 'POST' && !$pid) {
+                            $limite = ini_get('post_max_size');
+                            $octets = (int) $limite * (['k' => 1024, 'm' => 1048576, 'g' => 1073741824][strtolower(substr((string) $limite, -1))] ?? 1);
+                            if (empty($_FILES) && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > $octets && $octets > 0) {
+                                ma_piece_ajouter($db, $id, (string) ($_GET['nom'] ?? 'pièce jointe'), null, null, $viaApiKey ? 'email' : 'equipe',
+                                    $user['nom'] ?? null, null, 'trop lourd pour le serveur (limite ' . $limite . ')');
+                                fail('Fichier trop lourd pour le serveur (limite ' . $limite . ')', 413);
+                            }
+                            $recues = ma_pieces_recues();
+                            if (!$recues && !empty($body['data']) && !empty($body['nom'])) {
+                                // Variante JSON : contenu en base64.
+                                $recues = [['nom' => (string) $body['nom'], 'contenu' => base64_decode((string) $body['data'], true) ?: null, 'chemin' => null, 'erreur' => null]];
+                            }
+                            if (!$recues) {
+                                fail('Aucun fichier reçu');
+                            }
+                            $source = $viaApiKey ? (ma_str($body['source'] ?? null) ?? 'email') : 'equipe';
+                            $advId = (int) ($body['adv_id'] ?? 0) ?: null;
+                            $faites = [];
+                            foreach ($recues as $f) {
+                                $faites[] = ma_piece_ajouter($db, $id, $f['nom'], $f['chemin'], $f['contenu'] ?? null, $source,
+                                    $user['nom'] ?? ($source === 'email' ? null : 'Make'), $advId, $f['erreur']);
+                            }
+                            logEvent($db, 'repondeur', 'ok', 'piece_jointe', 'Demande ' . $id . ' : ' . count($faites) . ' pièce(s) jointe(s) — '
+                                . implode(', ', array_map(fn($x) => $x['nom'] . ($x['erreur'] ? ' (' . $x['erreur'] . ')' : ''), $faites)));
+                            out(['ok' => true, 'pieces' => ma_pieces_liste($db, $id),
+                                'erreurs' => array_values(array_filter(array_map(fn($x) => $x['erreur'] ? $x['nom'] . ' : ' . $x['erreur'] : null, $faites)))]);
+                        }
+                        if ($pid) {
+                            $st = $db->prepare('SELECT * FROM rep_pieces WHERE id = ? AND demande_id = ?');
+                            $st->execute([$pid, $id]);
+                            $piece = $st->fetch() ?: fail('Pièce jointe introuvable', 404);
+                            if ($method === 'DELETE') {
+                                if (!$estAdmin) {
+                                    fail('Seul un administrateur peut supprimer une pièce jointe', 403);
+                                }
+                                if ($piece['fichier']) {
+                                    @unlink(ma_pieces_dossier() . '/' . basename((string) $piece['fichier']));
+                                }
+                                $db->prepare('DELETE FROM rep_pieces WHERE id = ?')->execute([$pid]);
+                                ma_rep_evenement($db, $id, 'modifiee', $user['nom'] ?? null, 'plateforme', 'Pièce jointe supprimée : ' . $piece['nom'], []);
+                                out(['ok' => true]);
+                            }
+                            ma_piece_servir($piece, isset($_GET['telecharger']));
+                        }
+                        out(['ok' => true, 'pieces' => ma_pieces_liste($db, $id)]);
+                    }
                     if ($method === 'PATCH' || $method === 'POST') {
                         $d = $body;
                         // Statut, rappel prévu, note : même logique que la page interne, client prévenu.
@@ -559,7 +610,7 @@ try {
                             out(['ok' => true, 'historique' => ma_rep_historique($db, $dem)]);
                         }
                     }
-                    out(['ok' => true, 'demande' => $dem, 'historique' => ma_rep_historique($db, $dem)]);
+                    out(['ok' => true, 'demande' => $dem, 'historique' => ma_rep_historique($db, $dem), 'pieces' => ma_pieces_liste($db, $id)]);
                 }
                 $q = $_GET;
                 if ($portee !== null) {

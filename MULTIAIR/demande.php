@@ -19,6 +19,17 @@ if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $connecte = ma_user();
 
+// Une pièce jointe de la demande : le lien secret suffit, comme pour la demande elle-même.
+if ($dem && isset($_GET['piece'])) {
+    $st = $db->prepare('SELECT * FROM rep_pieces WHERE id = ? AND demande_id = ?');
+    $st->execute([(int) $_GET['piece'], (int) $dem['id']]);
+    if ($piece = $st->fetch()) {
+        ma_piece_servir($piece, isset($_GET['telecharger']));
+    }
+    http_response_code(404);
+    exit('Pièce jointe introuvable.');
+}
+
 if ($dem && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $qui = trim((string) ($_POST['qui'] ?? ''));
     if ($qui === '__autre') {
@@ -56,6 +67,20 @@ if ($dem && $_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'note':
             $message = 'Note ajoutée.';
             break;
+        case 'piece':
+            $recues = ma_pieces_recues();
+            if (!$recues && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0 && empty($_FILES)) {
+                $recues = [['nom' => 'pièce jointe', 'chemin' => null, 'erreur' => 'trop lourd pour le serveur (limite ' . ini_get('post_max_size') . ')']];
+            }
+            $ko = [];
+            foreach ($recues as $f) {
+                $p = ma_piece_ajouter($db, (int) $dem['id'], $f['nom'], $f['chemin'], null, 'equipe', $qui ?: null, null, $f['erreur']);
+                if ($p['erreur']) {
+                    $ko[] = $p['nom'] . ' : ' . $p['erreur'];
+                }
+            }
+            $message = !$recues ? 'Aucun fichier choisi.' : ($ko ? 'Non enregistré — ' . implode(' ; ', $ko) : (count($recues) > 1 ? 'Pièces jointes ajoutées.' : 'Pièce jointe ajoutée.'));
+            break;
     }
     if (trim((string) ($_POST['note'] ?? '')) !== '') {
         $chg['note'] = mb_substr((string) $_POST['note'], 0, 1000);
@@ -84,6 +109,7 @@ $canal = $dem ? ma_canal($dem) : 'telephone';
 $svc = $dem ? (['SAV' => 'SAV', 'COMMERCIAL' => 'Commerce', 'FINANCE' => 'Finance', 'AUTRE' => 'À orienter'][$dem['service']] ?? $dem['service']) : '';
 [$materiel, $sujet] = $dem ? ma_rep_objet_client($dem) : ['', ''];
 $trouve = in_array($quiDefaut, $personnes, true);
+$pieces = $dem ? ma_pieces_liste($db, (int) $dem['id']) : [];
 $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) => !in_array($x['type'], ['message_client', 'reponse_claire'], true))) : [];
 ?><!DOCTYPE html>
 <html lang="fr">
@@ -119,6 +145,9 @@ $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) =
   .ev div { border-left: 3px solid var(--border-2); padding-left: 10px; }
   .ev small { display: block; color: var(--muted); }
   .pied { font-size: 13px; color: var(--muted); text-align: center; }
+  .pj { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .pj img, .pj video { width: 100%; max-height: 320px; object-fit: contain; background: #000; border-radius: 10px; }
+  .pj small { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -157,6 +186,27 @@ $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) =
       <span class="gris">Transmise à <?= $e($dem['destinataires'] ?: str_replace(';', ', ', (string) $dem['dest_to'])) ?>
         <?= $dem['pris_par'] ? ' · prise en charge par ' . $e($dem['pris_par']) : '' ?>
         <?= $dem['rappel_prevu'] ? ' · rappel prévu ' . $e(ma_date_fr($dem['rappel_prevu'])) : '' ?></span>
+    </section>
+
+    <section class="m-card">
+      <span class="lab">PIÈCES JOINTES<?= $pieces ? ' (' . count($pieces) . ')' : '' ?></span>
+      <?php if (!$pieces): ?><span class="gris">Aucune pièce jointe.</span><?php endif; ?>
+      <?php foreach ($pieces as $p): $url = 'demande.php?t=' . $jeton . '&piece=' . (int) $p['id']; ?>
+        <div class="pj">
+          <?php if (!$p['erreur'] && str_starts_with((string) $p['type'], 'image/') && $p['en_ligne']): ?><a href="<?= $e($url) ?>" target="_blank" rel="noopener"><img src="<?= $e($url) ?>" alt="<?= $e($p['nom']) ?>" loading="lazy"></a>
+          <?php elseif (!$p['erreur'] && str_starts_with((string) $p['type'], 'video/')): ?><video src="<?= $e($url) ?>" controls preload="metadata" playsinline></video><?php endif; ?>
+          <?php if ($p['erreur']): ?><b><?= $e($p['nom']) ?></b><small style="color:var(--danger)">Non enregistrée : <?= $e($p['erreur']) ?> — voir l'e-mail d'origine</small>
+          <?php else: ?><a href="<?= $e($url) ?>" target="_blank" rel="noopener"><b><?= $e($p['nom']) ?></b></a>
+            <small><?= $e(($p['taille'] >= 1048576 ? round($p['taille'] / 1048576, 1) . ' Mo' : max(1, (int) round($p['taille'] / 1024)) . ' Ko') . ' · ' . ($p['source'] === 'email' ? 'reçue avec l\'e-mail' : 'ajoutée' . ($p['ajoute_par'] ? ' par ' . $p['ajoute_par'] : ''))) ?> · <a href="<?= $e($url) ?>&telecharger=1">Télécharger</a></small><?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+      <details><summary>Ajouter une photo, une vidéo ou un document</summary>
+        <form method="post" enctype="multipart/form-data" class="m-form">
+          <input type="hidden" name="t" value="<?= $e($jeton) ?>">
+          <input type="hidden" name="qui" value="<?= $e($quiDefaut) ?>">
+          <input type="file" name="fichier[]" multiple required aria-label="Fichiers à ajouter">
+          <button class="btn" name="action" value="piece">Ajouter à la demande</button>
+        </form></details>
     </section>
 
     <form method="post" class="m-form">

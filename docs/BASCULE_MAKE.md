@@ -140,6 +140,16 @@ Scénario Make 9209946 mis à jour le 05/10 (prompt de Claire ADV inchangé, vé
 4. Module 5 (réponse automatique de Claire) : corps = `20.data.mail`, qui se termine par le n° de demande et le lien de suivi.
 5. Module 21 (escalade ADV) : seulement si la demande est commerciale (validation d'une proposition de prix).
 
+Pièces jointes gardées sur la plateforme (correctif 38, scénario 9209946 du 05/10) :
+- table `rep_pieces`, fichiers dans `data/pieces/` (dossier fermé au web), servis par `api.php?r=rep/demandes/{id}/pieces/{pid}`
+  (connexion) ou `demande.php?t=…&piece={pid}` (lien de l'équipe) ; lecture partielle gérée (vidéos sur iPhone) ;
+- Make (modules 36-37) envoie chaque pièce jointe de l'e-mail à `rep/demandes/{id}/pieces` (multipart, champ `fichier`),
+  sauf les petites images de signature ; l'e-mail à l'équipe garde aussi les pièces jointes ;
+- l'équipe peut ajouter photos, vidéos ou documents depuis la plateforme et depuis le lien reçu par e-mail / SMS ;
+- limite : paramètre `pieces_max_mo` (250 Mo) et limites PHP du serveur (`upload_max_filesize`, `post_max_size`) ;
+  un fichier refusé reste listé avec la raison, pour aller le chercher dans l'e-mail d'origine.
+- Service « RH » ajouté dans la fiche d'une personne (Équipe et accès).
+
 Reclassement des e-mails déjà reçus (05/10) :
 - demandes créées : Veolia n° 86 (SAV urgent, Julien Jardin, client prévenu), ETE FLOEX n° 87, Richardson n° 88,
   Vasconcelos n° 89, TEC-ASI n° 90, Valorys n° 91 (équipe prévenue, client non prévenu) ;

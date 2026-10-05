@@ -85,6 +85,20 @@ CREATE TABLE IF NOT EXISTS rep_equipements (
 );
 CREATE INDEX IF NOT EXISTS idx_rep_equipements_client ON rep_equipements(client_id);
 
+-- Pièces jointes d'une demande (photos, vidéos, PDF reçus par e-mail ou ajoutés par l'équipe).
+-- Les fichiers sont dans data/pieces/ (dossier fermé au web) et servis par api.php ou demande.php.
+CREATE TABLE IF NOT EXISTS rep_pieces (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  demande_id INTEGER NOT NULL,
+  adv_id INTEGER,                 -- e-mail d'origine (adv_demandes)
+  nom TEXT NOT NULL, type TEXT, taille INTEGER,
+  fichier TEXT,                   -- nom du fichier stocké (aléatoire)
+  source TEXT,                    -- email | equipe
+  ajoute_par TEXT, erreur TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rep_pieces_demande ON rep_pieces(demande_id);
+
 -- Historique d'une demande, pour la traçabilité : réception, transmission (à qui, par quel
 -- canal), messages envoyés au client, prise en charge, rappels, notes, clôture.
 CREATE TABLE IF NOT EXISTS rep_evenements (

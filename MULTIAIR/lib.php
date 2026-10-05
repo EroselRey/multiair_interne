@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05d';
+const MA_VERSION = '2026-10-05e';
 
 function ma_config(): array
 {
@@ -54,7 +54,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
         'rep_contacts', 'rep_regles', 'rep_evenements', 'rep_clients', 'rep_equipements',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
-        'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions'];
+        'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions', 'rep_pieces'];
     $colonnes = [
         'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0', 'demande_id' => 'INTEGER',
             // Ce que le chatbot recueille comme Claire au téléphone (SAV, commande, facture, relance).
@@ -1754,7 +1754,7 @@ function ma_rep_avancer(PDO $db, int $id, array $chg, string $par = '', string $
 // commerce, finance, direction) et un accès : admin (tout, réglages compris), sav, commerce ou
 // finance (les demandes de ce service), ou aucun. Les boîtes partagées n'ont jamais d'accès.
 
-const MA_SERVICES = ['sav' => 'SAV', 'commerce' => 'Commerce', 'finance' => 'Finance', 'direction' => 'Direction'];
+const MA_SERVICES = ['sav' => 'SAV', 'commerce' => 'Commerce', 'finance' => 'Finance', 'rh' => 'RH', 'direction' => 'Direction'];
 /** Responsables de repli (clé => paramètre). « rh » reçoit les candidatures et sujets RH. */
 const MA_RESPONSABLES = ['sav' => 'resp_sav', 'finance' => 'resp_finance', 'commercial' => 'resp_commerce',
     'autre' => 'resp_indetermine', 'rh' => 'resp_rh'];
@@ -2688,6 +2688,166 @@ function ma_email_vers_demande(PDO $db, array $a): array
         $d['relance_demande_id'] = (int) $m[1];
     }
     return $d;
+}
+
+// ------------------------------------------------------------------ Pièces jointes des demandes
+// Ce que le client a envoyé (photo, vidéo, PDF) est gardé avec la demande : rien ne reste seulement
+// dans une boîte e-mail. Fichiers dans data/pieces/ (fermé au web), servis après contrôle d'accès.
+
+const MA_PIECES_TYPES = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+    'heic' => 'image/heic', 'heif' => 'image/heif', 'pdf' => 'application/pdf', 'mp4' => 'video/mp4', 'm4v' => 'video/mp4', 'mov' => 'video/quicktime',
+    'webm' => 'video/webm', '3gp' => 'video/3gpp', 'avi' => 'video/x-msvideo', 'mp3' => 'audio/mpeg', 'm4a' => 'audio/mp4', 'wav' => 'audio/wav',
+    'ogg' => 'audio/ogg', 'opus' => 'audio/ogg', 'doc' => 'application/msword', 'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls' => 'application/vnd.ms-excel', 'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'csv' => 'text/csv',
+    'txt' => 'text/plain', 'zip' => 'application/zip', 'eml' => 'message/rfc822', 'msg' => 'application/vnd.ms-outlook'];
+/** Types affichés dans le navigateur ; tout le reste est proposé au téléchargement. */
+const MA_PIECES_EN_LIGNE = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'video/mp4', 'video/quicktime',
+    'video/webm', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg'];
+
+function ma_pieces_dossier(): string
+{
+    $d = __DIR__ . '/data/pieces';
+    if (!is_dir($d)) {
+        @mkdir($d, 0755, true);
+    }
+    return $d;
+}
+
+/** Nom affichable et sans danger (pas de chemin, pas de caractères de contrôle). */
+function ma_piece_nom(string $nom): string
+{
+    $nom = basename(str_replace('\\', '/', $nom));
+    $nom = trim(preg_replace('/[\x00-\x1F\x7F"<>|]+/u', '', $nom));
+    return mb_substr($nom !== '' ? $nom : 'piece-jointe', 0, 150);
+}
+
+/**
+ * Enregistre une pièce jointe pour une demande. $source : chemin d'un fichier reçu (upload) ou contenu brut.
+ * Rend la ligne enregistrée. Un fichier refusé (trop lourd, vide) est noté avec l'erreur, pour que
+ * l'équipe sache qu'il existe et aille le chercher dans l'e-mail d'origine.
+ */
+function ma_piece_ajouter(PDO $db, int $demandeId, string $nom, ?string $chemin, ?string $contenu, string $source = 'equipe', ?string $par = null, ?int $advId = null, ?string $erreur = null): array
+{
+    $nom = ma_piece_nom($nom);
+    $ext = strtolower(pathinfo($nom, PATHINFO_EXTENSION));
+    $taille = $chemin !== null && is_file($chemin) ? (int) filesize($chemin) : ($contenu !== null ? strlen($contenu) : 0);
+    $max = (int) (ma_param($db, 'pieces_max_mo', '250') ?: 250) * 1048576;
+    if ($erreur === null && $taille === 0) {
+        $erreur = 'fichier vide ou non reçu';
+    }
+    if ($erreur === null && $taille > $max) {
+        $erreur = 'trop lourd (' . round($taille / 1048576) . ' Mo, limite ' . round($max / 1048576) . ' Mo)';
+    }
+    $type = MA_PIECES_TYPES[$ext] ?? 'application/octet-stream';
+    $fichier = null;
+    if ($erreur === null) {
+        $fichier = bin2hex(random_bytes(16));
+        $dest = ma_pieces_dossier() . '/' . $fichier;
+        $ok = $chemin !== null ? (is_uploaded_file($chemin) ? move_uploaded_file($chemin, $dest) : copy($chemin, $dest)) : file_put_contents($dest, $contenu) !== false;
+        if (!$ok) {
+            $fichier = null;
+            $erreur = 'enregistrement impossible sur le serveur';
+        }
+    }
+    $id = ma_inserer($db, 'rep_pieces', ['demande_id' => $demandeId, 'adv_id' => $advId, 'nom' => $nom, 'type' => $type, 'taille' => $taille,
+        'fichier' => $fichier, 'source' => $source, 'ajoute_par' => $par, 'erreur' => $erreur, 'created_at' => ma_now()]);
+    $poids = $taille >= 1048576 ? round($taille / 1048576, 1) . ' Mo' : max(1, (int) round($taille / 1024)) . ' Ko';
+    ma_rep_evenement($db, $demandeId, 'piece', $par ?: ($source === 'email' ? 'Client' : null), $source === 'email' ? 'email' : 'plateforme',
+        $erreur === null ? 'Pièce jointe : ' . $nom . ' (' . $poids . ')' : 'Pièce jointe non enregistrée : ' . $nom . ' — ' . $erreur,
+        ['piece_id' => $id, 'nom' => $nom, 'taille' => $taille]);
+    $st = $db->prepare('SELECT * FROM rep_pieces WHERE id = ?');
+    $st->execute([$id]);
+    return $st->fetch();
+}
+
+/** Pièces d'une demande, pour l'affichage (sans le nom de fichier interne). */
+function ma_pieces_liste(PDO $db, int $demandeId): array
+{
+    $st = $db->prepare('SELECT id, demande_id, nom, type, taille, source, ajoute_par, erreur, created_at FROM rep_pieces WHERE demande_id = ? ORDER BY id');
+    $st->execute([$demandeId]);
+    return array_map(fn($p) => $p + ['en_ligne' => in_array($p['type'], MA_PIECES_EN_LIGNE, true)], $st->fetchAll());
+}
+
+/** Envoie le fichier au navigateur (lecture partielle gérée : les vidéos se lisent aussi sur iPhone). */
+function ma_piece_servir(array $p, bool $telecharger = false): never
+{
+    $chemin = ma_pieces_dossier() . '/' . basename((string) $p['fichier']);
+    if (empty($p['fichier']) || !is_file($chemin)) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Pièce jointe introuvable.';
+        exit;
+    }
+    $taille = (int) filesize($chemin);
+    $enLigne = !$telecharger && in_array($p['type'], MA_PIECES_EN_LIGNE, true);
+    $nomAscii = preg_replace('/[^A-Za-z0-9._ -]/', '_', (string) $p['nom']);
+    header_remove('Content-Type');
+    header('Content-Type: ' . ($enLigne ? $p['type'] : 'application/octet-stream'));
+    header('Content-Disposition: ' . ($enLigne ? 'inline' : 'attachment') . '; filename="' . $nomAscii . '"; filename*=UTF-8\'\'' . rawurlencode((string) $p['nom']));
+    header('X-Content-Type-Options: nosniff');
+    header("Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox");
+    header('Cache-Control: private, max-age=3600');
+    header('Accept-Ranges: bytes');
+    $debut = 0;
+    $fin = $taille - 1;
+    if (isset($_SERVER['HTTP_RANGE']) && preg_match('/bytes=(\d*)-(\d*)/', (string) $_SERVER['HTTP_RANGE'], $m)) {
+        if ($m[1] === '' && $m[2] !== '') {
+            $debut = max(0, $taille - (int) $m[2]);
+        } else {
+            $debut = (int) $m[1];
+            if ($m[2] !== '') {
+                $fin = min($fin, (int) $m[2]);
+            }
+        }
+        if ($debut > $fin || $debut >= $taille) {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $taille);
+            exit;
+        }
+        http_response_code(206);
+        header('Content-Range: bytes ' . $debut . '-' . $fin . '/' . $taille);
+    }
+    header('Content-Length: ' . ($fin - $debut + 1));
+    $f = fopen($chemin, 'rb');
+    fseek($f, $debut);
+    $reste = $fin - $debut + 1;
+    while ($reste > 0 && !feof($f)) {
+        $bloc = fread($f, (int) min(1048576, $reste));
+        echo $bloc;
+        $reste -= strlen($bloc);
+        flush();
+    }
+    fclose($f);
+    exit;
+}
+
+/** Fichiers envoyés dans un formulaire (champ « fichier » ou « fichier[] ») → liste [nom, chemin, erreur]. */
+function ma_pieces_recues(): array
+{
+    $out = [];
+    foreach (['fichier', 'fichiers', 'file'] as $champ) {
+        $f = $_FILES[$champ] ?? null;
+        if (!$f) {
+            continue;
+        }
+        $noms = (array) $f['name'];
+        foreach ($noms as $i => $nom) {
+            $err = (int) ((array) $f['error'])[$i];
+            $tmp = (string) ((array) $f['tmp_name'])[$i];
+            $msg = match ($err) {
+                UPLOAD_ERR_OK => null,
+                UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'trop lourd pour le serveur (limite ' . ini_get('upload_max_filesize') . ')',
+                UPLOAD_ERR_PARTIAL => 'envoi interrompu',
+                UPLOAD_ERR_NO_FILE => 'aucun fichier',
+                default => 'erreur d\'envoi (' . $err . ')',
+            };
+            if ($err === UPLOAD_ERR_NO_FILE) {
+                continue;
+            }
+            $out[] = ['nom' => (string) $nom, 'chemin' => $msg === null ? $tmp : null, 'erreur' => $msg];
+        }
+    }
+    return $out;
 }
 
 // ------------------------------------------------------------------ Transfert d'une demande
