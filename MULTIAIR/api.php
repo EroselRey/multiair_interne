@@ -1154,6 +1154,11 @@ try {
                         } else {
                             $maj = array_filter($d, fn($v) => $v !== null && $v !== '');
                             unset($maj['date'], $maj['message_id'], $maj['commentaire']);
+                            // Rejeu d'un e-mail déjà traité ou validé : on garde le statut et ce qui a été envoyé.
+                            if (in_array($existant['statut_suivi'] ?? '', ['valide', 'traite'], true)) {
+                                unset($maj['statut_suivi'], $maj['mail_envoye'], $maj['envoye_at']);
+                                $d['statut_suivi'] = $existant['statut_suivi'];
+                            }
                         }
                         if ($maj) {
                             update($db, 'adv_demandes', $id, $maj);

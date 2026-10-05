@@ -163,6 +163,16 @@ Reclassement des e-mails déjà reçus (05/10) :
 - rattachés à la demande déjà ouverte par le chatbot : candidature → n° 85, Rubix → n° 80, Quickparts → n° 78 ;
 - laissés tels quels : e-mails internes (tests, réaction Teams), Joozeo et TG Filter (fournisseurs).
 
+Pièces jointes des anciens e-mails récupérées (05/10, relance des exécutions Make) :
+- module 21 (escalade ADV) : lui aussi seulement si l'e-mail est nouveau (`20.data.action` ≠ updated) ;
+- module 37 : filtre « hors logos » corrigé — Make nomme les champs `contentId` et `fileSize` (pas `cid` / `size`) ;
+  une image intégrée à la signature de moins de 30 Ko n'est plus rangée ;
+- rangées : candidature n° 85 (CV + lettre de motivation), Richardson n° 88 (facture PDF + image), GIMAEX n° 89
+  (2 PDF, 1,6 et 8,4 Mo), Quickparts n° 78 (photo), TEC-ASI n° 90 (image), Rubix n° 80 (3 PDF), Valorys n° 91 (image),
+  ETE FLOEX n° 87 (2 photos WhatsApp) ; aucun e-mail ni SMS reparti (vérifié au nombre d'opérations) ;
+- correctif 40 : relancer un e-mail déjà « traité » ou « validé » ne le remet plus « à valider »
+  (statut, texte envoyé et date d'envoi conservés).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
