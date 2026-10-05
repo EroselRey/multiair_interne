@@ -148,6 +148,10 @@ Pièces jointes gardées sur la plateforme (correctif 38, scénario 9209946 du 0
 - l'équipe peut ajouter photos, vidéos ou documents depuis la plateforme et depuis le lien reçu par e-mail / SMS ;
 - limite : paramètre `pieces_max_mo` (250 Mo) et limites PHP du serveur (`upload_max_filesize`, `post_max_size`) ;
   un fichier refusé reste listé avec la raison, pour aller le chercher dans l'e-mail d'origine.
+- Vérifié le 05/10 : l'exécution Veolia (demande n° 86) relancée avec le nouveau scénario a rangé la vidéo de 18 Mo
+  dans la demande ; lecture partielle OK en ligne.
+- Module 5 (réponse automatique de Claire) : seulement si l'e-mail est nouveau (`20.data.action` ≠ updated),
+  pour ne jamais répondre deux fois au même e-mail (rejeu Make, relance d'exécution).
 - Service « RH » ajouté dans la fiche d'une personne (Équipe et accès).
 - Correctif 39 : « RH » devient un service de demande à part entière (candidatures, recrutement : chat, e-mail,
   téléphone), avec l'accès « Service RH » (ne voit que les demandes RH) et le filtre RH dans les listes.
