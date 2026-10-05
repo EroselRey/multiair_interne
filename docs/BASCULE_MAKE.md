@@ -131,21 +131,20 @@ Maintenant, côté plateforme (`adv/demandes` POST, `ma_email_demande`) :
 - les demandes de pièces (filtres, kits, clapets, entretien…) partent en « devis pièces » et non « devis équipement ».
 - interrupteur : paramètre `adv_demandes_auto` (1 par défaut, 0 pour couper).
 
-À faire dans Make (accès à rétablir : le connecteur est actuellement ouvert avec un compte qui ne voit pas
-l'organisation Multiair) :
-1. Module 20 `adv/demandes` : ajouter `pieces_jointes` = `{{join(map(10.attachments; "fileName"); ", ")}}`,
-   `equipe_par_make` = 1 et `ticket_dans_reponse` = 1.
-2. Nouveau module e-mail à l'équipe : à `20.data.equipe_to`, copie `20.data.equipe_cc`, objet
-   `20.data.equipe_objet`, corps `20.data.equipe_html`, répondre à l'expéditeur, **pièces jointes = `10.attachments`**,
-   filtre « demande créée » (`20.data.demande_id` existe). En cas d'erreur (pièces trop lourdes), même e-mail
-   sans pièces jointes avec la mention « pièces jointes dans la boîte service clients ».
-3. SMS SAV : `20.data.equipe_sms` / `equipe_sms_texte` (Brevo), comme le chatbot.
-4. Réponse automatique au client (module 5) : corps = `20.data.mail` (la réponse de Claire suivie du n° de demande et du lien).
-5. Mail d'escalade ADV (module 21) : seulement si `20.data.demande_service` = COMMERCIAL (validation d'une
-   proposition de prix) ; les autres e-mails sont déjà routés par la demande.
+Scénario Make 9209946 mis à jour le 05/10 (prompt de Claire ADV inchangé, vérifié) :
+1. Module 20 `adv/demandes` : `pieces_jointes`, `equipe_par_make` = 1, `ticket_dans_reponse` = 1.
+2. Module 30 : e-mail à l'équipe de la demande (`equipe_to`, `equipe_cc`, `equipe_objet`, `equipe_html`), répondre à
+   l'expéditeur, **pièces jointes de l'e-mail d'origine**. En cas d'erreur (pièces trop lourdes), module 31 : même
+   e-mail sans pièces jointes avec un avertissement.
+3. Modules 33-34 : SMS SAV par Brevo (`equipe_sms`, `equipe_sms_texte`).
+4. Module 5 (réponse automatique de Claire) : corps = `20.data.mail`, qui se termine par le n° de demande et le lien de suivi.
+5. Module 21 (escalade ADV) : seulement si la demande est commerciale (validation d'une proposition de prix).
 
-Tant que ces changements ne sont pas faits, la plateforme envoie elle-même l'e-mail à l'équipe (sans les
-pièces jointes : elles restent dans la boîte service clients).
+Reclassement des e-mails déjà reçus (05/10) :
+- demandes créées : Veolia n° 86 (SAV urgent, Julien Jardin, client prévenu), ETE FLOEX n° 87, Richardson n° 88,
+  Vasconcelos n° 89, TEC-ASI n° 90, Valorys n° 91 (équipe prévenue, client non prévenu) ;
+- rattachés à la demande déjà ouverte par le chatbot : candidature → n° 85, Rubix → n° 80, Quickparts → n° 78 ;
+- laissés tels quels : e-mails internes (tests, réaction Teams), Joozeo et TG Filter (fournisseurs).
 
 ## Reste à faire
 
