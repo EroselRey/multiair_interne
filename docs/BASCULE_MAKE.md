@@ -173,6 +173,22 @@ Pièces jointes des anciens e-mails récupérées (05/10, relance des exécution
 - correctif 40 : relancer un e-mail déjà « traité » ou « validé » ne le remet plus « à valider »
   (statut, texte envoyé et date d'envoi conservés).
 
+Prix des équipements tirés du tarif Multiair en vigueur (05/10) :
+- base Supabase du tarif (projet `tarif_wcf`) : fonction publique `prix_tarif_claire_brut(text)` appelée en POST text/plain
+  (corps = références séparées par « ; »), clé dans l'en-tête `x-cle-claire` (empreinte SHA-256 dans la table
+  `cles_outils`, sans accès public) ; `prix_tarif_claire` / `prix_tarif_claire_txt` restent internes (pas d'accès anon) ;
+  lecture seule ;
+  renvoie pour chaque référence ou nom de modèle : statut (actif / obsolete / introuvable), désignation, prix tarif HT,
+  puissance, débit, pression — jamais de remise ni de prix distributeur ;
+- Claire ADV (9209946) : 3e outil « Prix tarif en vigueur » (appel GET de la fonction) ; consignes : les références se
+  choisissent avec le catalogue, le prix vient uniquement du tarif ; référence obsolète ou introuvable → remplacée ou
+  escalade ; tarif injoignable → escalade ;
+- constaté au test : le catalogue de Claire avait des prix périmés (RLR15 XV PM 10 : 10 121 € au lieu de 10 323 € ;
+  RLR15 V PM : 13 809 € au lieu de 14 085 €).
+- Outil d'agent Make : un champ rempli par l'IA vaut exactement `{{1.<nom du champ>}}` (ici `data` = `{{1.data}}`),
+  déclaré dans `metadata.expect` (type text) avec une aide `metadata.restore.expect.<champ>.extra.aiHelp` ;
+  une valeur glissée dans l'URL ou dans `qs` part vide.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
