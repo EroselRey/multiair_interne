@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05a';
+const MA_VERSION = '2026-10-05b';
 
 function ma_config(): array
 {
@@ -1158,6 +1158,18 @@ function ma_rep_router(PDO $db, array $d): array
     } else {
         $notes[] = 'Aucune règle ne correspond';
     }
+    // Candidature, recrutement : ce n'est ni un client ni un prospect, elle part au responsable RH.
+    $rh = null;
+    if ($service === 'autre' && ma_est_rh($d)) {
+        $rh = ma_responsables($db)['rh'] ?? null;
+        if ($rh && (int) $rh['actif'] === 1 && ma_liste_emails($rh['email'] ?? null)) {
+            $personnes = [$rh];
+            $notes[] = 'Sujet RH (candidature, recrutement) : transmise au responsable RH (' . $rh['nom'] . ')';
+        } else {
+            $rh = null;
+            $notes[] = 'Sujet RH, mais aucun responsable RH n\'est choisi dans « Équipe et accès »';
+        }
+    }
 
     // Personne de joignable : le responsable du service, puis le responsable des sujets indéterminés.
     $joignable = fn(array $liste) => array_filter($liste, fn($p) => ma_liste_emails($p['email'] ?? null));
@@ -1214,7 +1226,7 @@ function ma_rep_router(PDO $db, array $d): array
         'service' => $service, 'marque' => $marque, 'nature' => $nature, 'type_client' => $typeClient, 'urgent' => $urgent,
         'type_equipement' => $equip, 'departement' => $dep,
         'regle_id' => $regle ? (int) $regle['id'] : null,
-        'regle_libelle' => $regle['libelle'] ?? 'Aucune règle (repli)',
+        'regle_libelle' => $rh ? 'Ressources humaines' : ($regle['libelle'] ?? 'Aucune règle (repli)'),
         'personnes' => array_map(fn($p) => ['id' => (int) $p['id'], 'nom' => $p['nom'], 'role' => $p['role'],
             'email' => $p['email'], 'mobile' => $p['mobile'], 'membres' => $p['membres'] ?? null], $personnes),
         'to' => implode(';', array_values($to)),
@@ -1743,6 +1755,19 @@ function ma_rep_avancer(PDO $db, int $id, array $chg, string $par = '', string $
 // finance (les demandes de ce service), ou aucun. Les boîtes partagées n'ont jamais d'accès.
 
 const MA_SERVICES = ['sav' => 'SAV', 'commerce' => 'Commerce', 'finance' => 'Finance', 'direction' => 'Direction'];
+/** Responsables de repli (clé => paramètre). « rh » reçoit les candidatures et sujets RH. */
+const MA_RESPONSABLES = ['sav' => 'resp_sav', 'finance' => 'resp_finance', 'commercial' => 'resp_commerce',
+    'autre' => 'resp_indetermine', 'rh' => 'resp_rh'];
+
+/** La demande parle-t-elle de recrutement (candidature, CV, stage, alternance…) ? */
+function ma_est_rh(array $d): bool
+{
+    $t = str_replace(['’', '`'], "'", ma_plat(implode(' ', [$d['besoin_resume'] ?? '', $d['resume'] ?? '', $d['nature'] ?? ''])));
+    // « mode d'emploi » ou « stage de formation produit » ne sont pas des sujets RH : on cherche des mots précis.
+    return (bool) preg_match("/\\b(candidatures?|recrutements?|recrute[rz]?|cv|curriculum|embauches?|postuler|postule|stagiaires?"
+        . "|stage (de fin d'etudes|en entreprise|d'observation)|alternance|alternant|apprentie?s?|apprentissage|ressources humaines|rh|job)\\b"
+        . "|(offre|demande|recherche) d'emploi/u", $t);
+}
 const MA_ACCES = ['admin' => 'Administrateur', 'sav' => 'Service SAV', 'commerce' => 'Service Commerce', 'finance' => 'Service Finance'];
 
 /** Service d'une personne : celui qui est renseigné, sinon celui de son rôle de routage. */
@@ -1823,7 +1848,7 @@ function ma_equipe_initiale(PDO $db): void
 function ma_responsables(PDO $db): array
 {
     $out = [];
-    foreach (['sav' => 'resp_sav', 'finance' => 'resp_finance', 'commercial' => 'resp_commerce', 'autre' => 'resp_indetermine'] as $svc => $cle) {
+    foreach (MA_RESPONSABLES as $svc => $cle) {
         $id = (int) ma_param($db, $cle, '0');
         $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ?');
         $st->execute([$id]);
@@ -2292,6 +2317,9 @@ function ma_chat_service(array $l): string
     if (isset($parCat[$cat])) {
         return $parCat[$cat];
     }
+    if (ma_est_rh($l)) {
+        return 'AUTRE';
+    }
     $t = ma_plat(($l['besoin_resume'] ?? '') . ' ' . ($l['statut'] ?? ''));
     foreach (['FINANCE' => ['factur', 'reglement', 'paiement', 'compta', 'avoir', 'relance de paiement', 'impaye'],
         'SAV' => ['panne', 'fuite', 'depann', 'intervention', 'ne demarre', 'alarme', 'reparation', 'probleme technique', 'entretien', 'maintenance', 'sav'],
@@ -2511,10 +2539,19 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
             'texte' => '', 'lien' => $lien, 'sms' => $sms, 'sms_texte' => $contenu['sms_texte']]);
     }
     $envois = array_values(array_map(fn($a) => ['canal' => 'E-mail', 'a' => $a], ma_liste_emails($cible['email'] ?? null)));
+    // Adresse hors équipe (RH, partenaire…) : la suite se fait chez elle, la demande peut être close ici.
+    if (!empty($cible['cloturer']) && $apres['statut'] !== 'traite') {
+        $db->prepare("UPDATE rep_demandes SET statut = 'traite', traite_at = ?, traite_par = ? WHERE id = ?")
+            ->execute([ma_now(), $par ?: null, $apres['id']]);
+        $st->execute([$dem['id']]);
+        $apres = $st->fetch();
+    }
     if ($sms !== '') {
         $envois[] = ['canal' => 'SMS', 'a' => ma_tel_lisible($sms)];
     }
-    ma_rep_evenement($db, (int) $apres['id'], 'transferee', $par ?: null, 'plateforme', 'Transférée à ' . $cible['nom'] . ($svcCible !== $dem['service'] ? ', passée au ' . ma_rep_service_libelle($svcCible) : ''),
+    ma_rep_evenement($db, (int) $apres['id'], 'transferee', $par ?: null, 'plateforme', 'Transférée à ' . $cible['nom']
+        . ($svcCible !== $dem['service'] ? ', passée au ' . ma_rep_service_libelle($svcCible) : '')
+        . (!empty($cible['cloturer']) ? ' — close ici, la suite se fait hors plateforme' : ''),
         ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
     return $apres;
 }

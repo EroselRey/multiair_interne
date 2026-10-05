@@ -595,7 +595,7 @@
     const joignable = (c) => c.joignable ?? !!c.email;
     const actifs = eq.rows.filter((c) => Number(c.actif ?? 1) && joignable(c));
     const resp = eq.responsables || {};
-    const nomsResp = {sav: 'Responsable SAV', finance: 'Responsable compta / finance', commercial: 'Responsable commerce', autre: 'Sujets indéterminés'};
+    const nomsResp = {sav: 'Responsable SAV', finance: 'Responsable compta / finance', commercial: 'Responsable commerce', autre: 'Sujets indéterminés', rh: 'Ressources humaines'};
     const opt = (c, lib) => `<option value="${c.id}">${h(lib || c.nom)}${c.fonction && !lib ? ' — ' + h(c.fonction) : ''}</option>`;
     const groupe = (t, liste) => liste.length ? `<optgroup label="${h(t)}">${liste.join('')}</optgroup>` : '';
     const parSvc = (s) => actifs.filter((c) => !boite(c) && c.service_equipe === s).sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map((c) => opt(c));
@@ -607,14 +607,25 @@
       <p class="hint" style="margin:0">La personne choisie reçoit la demande par e-mail (et par SMS pour le SAV), avec le lien pour la prendre en charge.
         La demande repasse « à traiter » chez elle. Le client n'est pas prévenu.</p>
       <label class="field"><span>Transférer à</span>${choix}</label>
+      <label class="field"><span>… ou à une autre adresse e-mail</span><input type="email" name="email_libre" class="inp" placeholder="ex. rh@multiairfrance.fr" autocomplete="off"></label>
+      <label id="transfClore" style="display:none;gap:6px;align-items:flex-start;font-size:13px"><input type="checkbox" name="cloturer" checked>Marquer la demande traitée ici : la suite se fait chez ce destinataire (le client n'est pas prévenu)</label>
       <label class="field"><span>Message (facultatif)</span><textarea name="message" class="inp" rows="3" placeholder="ex. Double règlement de facture, peux-tu regarder ?"></textarea></label>`,
       '<button class="btn primary" id="transfOk">Transférer</button>');
+    const champLibre = $('#drawerBody [name=email_libre]');
+    champLibre.oninput = () => {
+      $('#transfClore').style.display = champLibre.value.trim() ? 'flex' : 'none';
+      if (champLibre.value.trim()) $('#drawerBody [name=cible]').value = '';
+    };
+    $('#drawerBody [name=cible]').onchange = () => { if ($('#drawerBody [name=cible]').value) { champLibre.value = ''; $('#transfClore').style.display = 'none'; } };
     $('#transfOk').onclick = async () => {
       const cible = $('#drawerBody [name=cible]').value;
-      if (!cible) return toast('Choisissez à qui transférer', true);
+      const libre = champLibre.value.trim();
+      if (!cible && !libre) return toast('Choisissez à qui transférer, ou saisissez une adresse e-mail', true);
       $('#transfOk').disabled = true;
       try {
-        const r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body: {contact_id: Number(cible), message: $('#drawerBody [name=message]').value.trim()}});
+        const message = $('#drawerBody [name=message]').value.trim();
+        const body = libre ? {email: libre, cloturer: $('#drawerBody [name=cloturer]').checked ? 1 : 0, message} : {contact_id: Number(cible), message};
+        const r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body});
         closeDrawer(); toast('Demande transférée — la personne est prévenue'); refreshBadges();
         if (r.visible) show('demande', d.id, false); else show('a-traiter');
       } catch (e) { toast(e.message, true); $('#transfOk').disabled = false; }
@@ -1005,7 +1016,7 @@
     const acces = (c) => c.acces === 'admin' ? '<span class="pill admin">Admin</span>' : (c.acces ? `<span class="pill info">${h(MA.acces[c.acces] || c.acces)}</span>` : '<span class="pill muted">Aucun</span>');
     const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : (c.a_mot_de_passe ? `<span class="hint">${c.derniere_connexion ? 'Vu ' + h(rel(c.derniere_connexion)) : 'Mot de passe choisi'}</span>`
       : (c.invitation_en_cours ? '<span class="pill warn">Invitation envoyée</span>' : '<span class="pill warn">À inviter</span>'));
-    const RESP = [['sav', 'SAV'], ['finance', 'Compta / finance'], ['commercial', 'Commerce'], ['autre', 'Sujet indéterminé']];
+    const RESP = [['sav', 'SAV'], ['finance', 'Compta / finance'], ['commercial', 'Commerce'], ['autre', 'Sujet indéterminé'], ['rh', 'RH (candidatures)']];
     const render = () => {
       const liste = gens.filter((c) => (!vueEquipe.service || c.service_equipe === vueEquipe.service)
         && (!vueEquipe.q || [c.nom, c.email, c.fonction, c.departements].join(' ').toLowerCase().includes(vueEquipe.q.toLowerCase())));

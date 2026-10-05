@@ -494,11 +494,22 @@ try {
                         fail('Cette demande relève d\'un autre service', 403);
                     }
                     if ($method === 'POST' && ($parts[3] ?? null) === 'transferer') {
-                        $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
-                        $st->execute([(int) ($body['contact_id'] ?? 0)]);
-                        $cible = $st->fetch() ?: fail('Choisissez à qui transférer la demande');
-                        if (!ma_liste_emails($cible['email'] ?? null)) {
-                            fail($cible['nom'] . ' n\'a pas d\'adresse e-mail : complétez sa fiche dans « Équipe et accès »');
+                        $libre = trim((string) ($body['email'] ?? ''));
+                        if ($libre !== '') {
+                            // Adresse hors équipe (service RH, partenaire…) : saisie libre.
+                            $mails = ma_liste_emails($libre);
+                            if (!$mails || count($mails) !== count(array_filter(preg_split('/[;,\s]+/', $libre)))) {
+                                fail('Adresse e-mail invalide : ' . $libre);
+                            }
+                            $cible = ['id' => 0, 'nom' => implode(', ', $mails), 'email' => implode(';', $mails), 'mobile' => null,
+                                'service' => '', 'role' => '', 'cloturer' => ma_bool($body['cloturer'] ?? false)];
+                        } else {
+                            $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
+                            $st->execute([(int) ($body['contact_id'] ?? 0)]);
+                            $cible = $st->fetch() ?: fail('Choisissez à qui transférer la demande');
+                            if (!ma_liste_emails($cible['email'] ?? null)) {
+                                fail($cible['nom'] . ' n\'a pas d\'adresse e-mail : complétez sa fiche dans « Équipe et accès »');
+                            }
                         }
                         $apres = ma_rep_transferer($db, $dem, $cible, (string) ($user['nom'] ?? ''), trim((string) ($body['message'] ?? '')));
                         logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
@@ -707,7 +718,7 @@ try {
             };
             if ($sub === 'responsables' && ($method === 'POST' || $method === 'PATCH')) {
                 $ins = $db->prepare('INSERT OR REPLACE INTO parametres(cle, valeur) VALUES (?, ?)');
-                foreach (['sav' => 'resp_sav', 'finance' => 'resp_finance', 'commercial' => 'resp_commerce', 'autre' => 'resp_indetermine'] as $k => $cle) {
+                foreach (MA_RESPONSABLES as $k => $cle) {
                     if (isset($body[$k])) {
                         $ins->execute([$cle, (string) (int) $body[$k]]);
                     }
