@@ -1142,7 +1142,18 @@ try {
                     // relances_dues : ce que le scénario Make envoie aujourd'hui.
                     // relances_prevues : toutes les relances programmées, pour l'aperçu dans la page.
                     $due = ma_relances_planifiees($db, $sub2 === 'relances_dues', !empty($_GET['inclure_ecart']));
-                    out(['ok' => true, 'nb' => count($due), 'rows' => $due]);
+                    $total = count($due);
+                    if ($sub2 === 'relances_dues') {
+                        // Un petit lot par passage (les plus anciennes d'abord) : le reste part
+                        // au passage suivant. ?limit=… prime sur le paramètre, 0 = sans limite.
+                        $st = $db->prepare("SELECT valeur FROM parametres WHERE cle = 'cso_relances_par_passage'");
+                        $st->execute();
+                        $max = (int) ($_GET['limit'] ?? ($st->fetchColumn() ?: 0));
+                        if ($max > 0) {
+                            $due = array_slice($due, 0, $max);
+                        }
+                    }
+                    out(['ok' => true, 'nb' => count($due), 'total' => $total, 'rows' => $due]);
                 }
                 if ($sub2 === 'modeles_relance') {
                     out(['ok' => true, 'modeles' => ma_relance_modeles($db)]);

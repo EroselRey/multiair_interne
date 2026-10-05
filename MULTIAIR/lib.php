@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-09-30a';
+const MA_VERSION = '2026-10-05a';
 
 function ma_config(): array
 {
@@ -125,6 +125,9 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     }
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('rep_standard_tel', '01 34 32 95 00')");
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_boite', 'cso@multiairfrance.store')");
+    // one.com bloque les envois en rafale : le scénario de relances CSO passe plusieurs
+    // fois dans la matinée et n'envoie qu'un petit lot à chaque passage.
+    $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_relances_par_passage', '15')");
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('domaines_internes',
         'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr')");
     // Les leads importés du Google Sheet n'étaient pas regroupés : on le fait une

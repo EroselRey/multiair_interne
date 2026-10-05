@@ -97,6 +97,18 @@ plateforme : son Sheet est son unique stockage, ce n'est pas un doublon. Il rest
 Les Sheets peuvent être archivés (ne pas les supprimer tout de suite : ils gardent l'historique
 d'avant la bascule).
 
+## Relances CSO : envoi par petits lots (05/10/2026, correctif 34)
+
+one.com bloque les envois en rafale : le lundi 28/09 et le lundi 05/10, le scénario 9776471 s'est
+arrêté en erreur après 60 mails envoyés en moins d'une minute, et les relances suivantes sont
+restées en attente jusqu'au lendemain.
+
+- `cso/devis/relances_dues` ne renvoie plus qu'un lot (les plus anciennes d'abord). Taille du lot :
+  paramètre `cso_relances_par_passage` (15 par défaut), ou `&limit=…` dans l'URL (0 = sans limite).
+  La réponse indique `nb` (lot envoyé) et `total` (toutes les relances dues).
+- Dans Make, le scénario passe toutes les 30 minutes de 8 h à 11 h, du lundi au vendredi
+  (7 passages, soit jusqu'à 105 relances par jour). Un passage sans relance due coûte 1 crédit.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
