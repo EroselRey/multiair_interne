@@ -149,6 +149,9 @@ Pièces jointes gardées sur la plateforme (correctif 38, scénario 9209946 du 0
 - limite : paramètre `pieces_max_mo` (250 Mo) et limites PHP du serveur (`upload_max_filesize`, `post_max_size`) ;
   un fichier refusé reste listé avec la raison, pour aller le chercher dans l'e-mail d'origine.
 - Service « RH » ajouté dans la fiche d'une personne (Équipe et accès).
+- Correctif 39 : « RH » devient un service de demande à part entière (candidatures, recrutement : chat, e-mail,
+  téléphone), avec l'accès « Service RH » (ne voit que les demandes RH) et le filtre RH dans les listes.
+  Les demandes de recrutement déjà classées « à orienter » passent en RH au premier chargement.
 
 Reclassement des e-mails déjà reçus (05/10) :
 - demandes créées : Veolia n° 86 (SAV urgent, Julien Jardin, client prévenu), ETE FLOEX n° 87, Richardson n° 88,

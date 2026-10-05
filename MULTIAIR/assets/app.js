@@ -228,7 +228,7 @@
   const MA = window.MA || {user: {nom: 'Administrateur', acces: 'admin'}, admin: true};
   const moi = MA.user || {nom: '', acces: ''};
   const ADMIN = !!MA.admin;
-  const SERVICE_MOI = {sav: 'SAV', commerce: 'COMMERCIAL', finance: 'FINANCE'}[moi.acces] || null;
+  const SERVICE_MOI = {sav: 'SAV', commerce: 'COMMERCIAL', finance: 'FINANCE', rh: 'RH'}[moi.acces] || null;
   const PAGES_SERVICE = ['a-traiter', 'demandes', 'demande', 'appel', 'stats', 'clients', 'client'];
   const main = $('#main');
   const app = $('#app');
@@ -314,7 +314,7 @@
     return s.includes('chat') ? 'chat' : (['email', 'adv'].includes(s) ? 'email' : (s === 'whatsapp' ? 'whatsapp' : 'telephone'));
   };
   const canalHtml = (c, court = false) => `<span class="canal">${ic(c, 's')}${h(CANAUX[c] || c)}${court ? '' : ''}</span>`;
-  const SERVICES = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Finance', AUTRE: 'À orienter'};
+  const SERVICES = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Finance', RH: 'RH', AUTRE: 'À orienter'};
   const ETATS = {qualification: 'Avec Claire', a_traiter: 'À traiter', en_cours: 'En cours', traite: 'Traitée'};
   const etatDe = (d) => (d.fiche ? 'qualification' : d.statut);
   const estUrgente = (d) => !d.fiche && d.priorite === 'URGENT' && d.statut === 'a_traiter';
@@ -404,7 +404,7 @@
           ${SERVICE_MOI ? `<div class="seg" role="group" aria-label="Périmètre">
               <button class="${vueATraiter.portee === 'tout' ? 'on' : ''}" data-portee="tout">Tout le ${h(SERVICES[SERVICE_MOI])}</button>
               <button class="${vueATraiter.portee === 'moi' ? 'on' : ''}" data-portee="moi">Mes demandes</button></div>`
-            : `<div class="frow">${[['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['AUTRE', 'À orienter']].map(([v, t]) =>
+            : `<div class="frow">${[['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']].map(([v, t]) =>
               `<button class="chip ${vueATraiter.service === v ? 'on' : ''}" data-svc="${v}">${t}</button>`).join('')}</div>`}
         </div>
         <div class="tiles">
@@ -498,7 +498,7 @@
           <div class="frow"><span class="lab">Suivi</span>${chips('etat', [['', 'Toutes'], ['qualification', 'Avec Claire', 'st-qualification'], ['a_traiter', 'À traiter', 'st-a_traiter'],
             ['en_cours', 'En cours', 'st-en_cours'], ['traite', 'Traitées', 'st-traite']])}</div>
           <div class="frow"><span class="lab">Canal</span>${chips('canal', [['', 'Tous'], ...Object.entries(CANAUX).map(([k, t]) => [k, ic(k, 's') + h(t)])])}</div>
-          ${SERVICE_MOI ? '' : `<div class="frow"><span class="lab">Service</span>${chips('service', [['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['AUTRE', 'À orienter']])}</div>`}
+          ${SERVICE_MOI ? '' : `<div class="frow"><span class="lab">Service</span>${chips('service', [['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']])}</div>`}
           <div class="frow"><span class="lab">Affiner</span>
             ${select('periode', 'Période', [['1', 'Dernières 24 h'], ['7', '7 derniers jours'], ['30', '30 derniers jours'], ['90', '3 derniers mois']]).replace(': tous', ': tout')}
             ${select('priorite', 'Priorité', [['URGENT', 'Urgent'], ['NORMAL', 'Normal']]).replace(': tous', ': toutes')}
@@ -1825,7 +1825,7 @@
         const box = $('#advApercu');
         if (!box) return;
         if (!a.possible) { box.textContent = a.raison; return; }
-        const svc = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Compta / finance', AUTRE: 'Autre'}[a.service] || a.service;
+        const svc = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Compta / finance', RH: 'RH', AUTRE: 'Autre'}[a.service] || a.service;
         box.className = '';
         box.innerHTML = `<h4>Demande à créer</h4>${kv([
           ['Service', h(svc) + (a.urgent ? ' ' + pill('URGENT', 'danger') : '') + (a.nature ? ' — ' + h((NATURES_COM.find((x) => x[0] === a.nature) || [0, a.nature])[1]) : '')],

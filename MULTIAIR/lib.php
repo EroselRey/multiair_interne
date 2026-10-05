@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05e';
+const MA_VERSION = '2026-10-05f';
 
 function ma_config(): array
 {
@@ -130,6 +130,17 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('cso_relances_par_passage', '15')");
     $pdo->exec("INSERT OR IGNORE INTO parametres(cle, valeur) VALUES ('domaines_internes',
         'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr')");
+    // Demandes de recrutement classées « à orienter » avant l'arrivée du service RH : on les range une fois.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rh_reclassees'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('rep_demandes', $present, true)) {
+        foreach ($pdo->query("SELECT id, resume, besoin_commercial, type_panne FROM rep_demandes WHERE service = 'AUTRE'")->fetchAll() as $x) {
+            if (ma_est_rh(['resume' => implode(' ', [$x['resume'], $x['besoin_commercial'], $x['type_panne']])])) {
+                $pdo->prepare("UPDATE rep_demandes SET service = 'RH' WHERE id = ?")->execute([$x['id']]);
+            }
+        }
+        $pdo->exec("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rh_reclassees', '1')");
+    }
     // Les leads importés du Google Sheet n'étaient pas regroupés : on le fait une
     // seule fois, automatiquement, au premier chargement après le dépôt.
     $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'dedup_initial'");
@@ -1073,7 +1084,7 @@ function ma_rep_urgent(array $d): bool
 function ma_rep_service(?string $s): string
 {
     $s = ma_plat($s);
-    return ['sav' => 'sav', 'technique' => 'sav', 'commercial' => 'commercial', 'finance' => 'finance'][$s] ?? ($s ?: 'autre');
+    return ['sav' => 'sav', 'technique' => 'sav', 'commercial' => 'commercial', 'finance' => 'finance', 'rh' => 'rh'][$s] ?? ($s ?: 'autre');
 }
 
 /** Une règle s'applique-t-elle à ces critères (déjà normalisés) ? Un critère vide vaut « tous ». */
@@ -1160,7 +1171,7 @@ function ma_rep_router(PDO $db, array $d): array
     }
     // Candidature, recrutement : ce n'est ni un client ni un prospect, elle part au responsable RH.
     $rh = null;
-    if ($service === 'autre' && ma_est_rh($d)) {
+    if ($service === 'rh' || ($service === 'autre' && ma_est_rh($d))) {
         $rh = ma_responsables($db)['rh'] ?? null;
         if ($rh && (int) $rh['actif'] === 1 && ma_liste_emails($rh['email'] ?? null)) {
             $personnes = [$rh];
@@ -1239,7 +1250,7 @@ function ma_rep_router(PDO $db, array $d): array
 /** Objet, corps HTML et texte SMS de la transmission. L'urgence se voit dès l'objet. */
 function ma_rep_message(array $d, array $x): array
 {
-    $svc = ['sav' => 'SAV', 'commercial' => 'Commercial', 'finance' => 'Finance'][$x['service']] ?? 'Sujet à orienter';
+    $svc = ['sav' => 'SAV', 'commercial' => 'Commercial', 'finance' => 'Finance', 'rh' => 'RH — candidature'][$x['service']] ?? 'Sujet à orienter';
     $marque = (string) ($x['marque_libelle'] ?? '');
     $societe = trim((string) ($d['societe'] ?? $d['distributeur'] ?? '')) ?: 'Société non précisée';
     $contact = trim((string) ($d['contact'] ?? ''));
@@ -1513,7 +1524,7 @@ function ma_date_fr(?string $dt, bool $heure = true): string
 
 function ma_rep_service_libelle(?string $svc): string
 {
-    return ['SAV' => 'service après-vente', 'COMMERCIAL' => 'service commercial', 'FINANCE' => 'service comptabilité'][strtoupper((string) $svc)]
+    return ['SAV' => 'service après-vente', 'COMMERCIAL' => 'service commercial', 'FINANCE' => 'service comptabilité', 'RH' => 'service ressources humaines'][strtoupper((string) $svc)]
         ?? 'service client';
 }
 
@@ -1768,7 +1779,7 @@ function ma_est_rh(array $d): bool
         . "|stage (de fin d'etudes|en entreprise|d'observation)|alternance|alternant|apprentie?s?|apprentissage|ressources humaines|rh|job)\\b"
         . "|(offre|demande|recherche) d'emploi/u", $t);
 }
-const MA_ACCES = ['admin' => 'Administrateur', 'sav' => 'Service SAV', 'commerce' => 'Service Commerce', 'finance' => 'Service Finance'];
+const MA_ACCES = ['admin' => 'Administrateur', 'sav' => 'Service SAV', 'commerce' => 'Service Commerce', 'finance' => 'Service Finance', 'rh' => 'Service RH'];
 
 /** Service d'une personne : celui qui est renseigné, sinon celui de son rôle de routage. */
 function ma_contact_service(array $c): string
@@ -1784,7 +1795,7 @@ function ma_contact_service(array $c): string
 /** Service d'une demande (SAV, COMMERCIAL, FINANCE, AUTRE) pour un accès (sav, commerce, finance). */
 function ma_acces_service_demande(string $acces): ?string
 {
-    return ['sav' => 'SAV', 'commerce' => 'COMMERCIAL', 'finance' => 'FINANCE'][$acces] ?? null;
+    return ['sav' => 'SAV', 'commerce' => 'COMMERCIAL', 'finance' => 'FINANCE', 'rh' => 'RH'][$acces] ?? null;
 }
 
 /** Équipe de départ : les accès et les responsables de service convenus avec Multiair. */
@@ -2227,9 +2238,10 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
     }
     $svc = strtoupper(ma_plat(ma_str($d['service'] ?? null) ?? ''));
     $map = ['TECHNIQUE' => 'SAV', 'SAV' => 'SAV', 'COMMERCIAL' => 'COMMERCIAL', 'COMMERCE' => 'COMMERCIAL', 'FINANCE' => 'FINANCE',
-        'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE'];
-    // Sujet que personne n'a su classer : il part au responsable des sujets indéterminés.
-    $d['service'] = $map[$svc] ?? 'AUTRE';
+        'COMPTABILITE' => 'FINANCE', 'COMPTA' => 'FINANCE', 'RH' => 'RH'];
+    // Sujet que personne n'a su classer : il part au responsable des sujets indéterminés,
+    // sauf une candidature ou un sujet de recrutement, qui va aux RH.
+    $d['service'] = $map[$svc] ?? (ma_est_rh($d) ? 'RH' : 'AUTRE');
     $d['canal'] = ma_canal($d);
     $d['priorite'] = $d['service'] === 'SAV'
         && (ma_bool($d['urgence'] ?? ($d['priorite'] ?? false)) || strtoupper((string) ($d['priorite'] ?? '')) === 'URGENT') ? 'URGENT' : 'Normal';
@@ -2318,7 +2330,7 @@ function ma_chat_service(array $l): string
         return $parCat[$cat];
     }
     if (ma_est_rh($l)) {
-        return 'AUTRE';
+        return 'RH';
     }
     $t = ma_plat(($l['besoin_resume'] ?? '') . ' ' . ($l['statut'] ?? ''));
     foreach (['FINANCE' => ['factur', 'reglement', 'paiement', 'compta', 'avoir', 'relance de paiement', 'impaye'],
@@ -2524,7 +2536,7 @@ function ma_email_corps(?string $txt): string
 function ma_email_service(string $sujet, string $corps, ?string $famille): string
 {
     if (ma_est_rh(['resume' => $sujet . ' ' . $corps])) {
-        return 'AUTRE';
+        return 'RH';
     }
     $sav = '/\b(pannes?|en panne|depann\w*|fuites?|alarmes?|interventions?|repar\w*|ne (?:demarre|fonctionne|marche) (?:plus|pas)|code (?:d.)?erreur'
         . '|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|bruit anormal|surchauffe|disjonct\w*|sav)\b/u';
@@ -2859,7 +2871,7 @@ function ma_pieces_recues(): array
  */
 function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, string $message = ''): array
 {
-    $svcCible = ['sav' => 'SAV', 'finance' => 'FINANCE', 'commerce' => 'COMMERCIAL'][ma_contact_service($cible)] ?? $dem['service'];
+    $svcCible = ['sav' => 'SAV', 'finance' => 'FINANCE', 'commerce' => 'COMMERCIAL', 'rh' => 'RH'][ma_contact_service($cible)] ?? $dem['service'];
     $sms = $svcCible === 'SAV' ? (ma_mobile_sms($cible['mobile'] ?? null) ?? '') : '';
     $maj = ['service' => $svcCible, 'destinataires' => $cible['nom'], 'dest_to' => implode(';', ma_liste_emails($cible['email'] ?? null)),
         'dest_cc' => '', 'dest_sms' => $sms, 'statut' => 'a_traiter', 'pris_par' => null, 'pris_at' => null,

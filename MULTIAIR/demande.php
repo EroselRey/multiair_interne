@@ -106,7 +106,7 @@ $urgent = $dem && $dem['priorite'] === 'URGENT' && $dem['statut'] === 'a_traiter
 $etat = $dem ? ($urgent ? ['URGENT', 'urgent'] : ([
     'a_traiter' => ['À traiter', 'a_traiter'], 'en_cours' => ['En cours', 'en_cours'], 'traite' => ['Traitée', 'traite']][$dem['statut']] ?? [$dem['statut'], ''])) : null;
 $canal = $dem ? ma_canal($dem) : 'telephone';
-$svc = $dem ? (['SAV' => 'SAV', 'COMMERCIAL' => 'Commerce', 'FINANCE' => 'Finance', 'AUTRE' => 'À orienter'][$dem['service']] ?? $dem['service']) : '';
+$svc = $dem ? (['SAV' => 'SAV', 'COMMERCIAL' => 'Commerce', 'FINANCE' => 'Finance', 'RH' => 'RH', 'AUTRE' => 'À orienter'][$dem['service']] ?? $dem['service']) : '';
 [$materiel, $sujet] = $dem ? ma_rep_objet_client($dem) : ['', ''];
 $trouve = in_array($quiDefaut, $personnes, true);
 $pieces = $dem ? ma_pieces_liste($db, (int) $dem['id']) : [];

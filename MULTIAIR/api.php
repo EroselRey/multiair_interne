@@ -112,7 +112,7 @@ if (!$estAdmin) {
         fail('Accès réservé aux administrateurs', 403);
     }
 }
-$SVC_FICHE = ['SAV' => 'technique', 'COMMERCIAL' => 'commercial', 'FINANCE' => 'finance'];
+$SVC_FICHE = ['SAV' => 'technique', 'COMMERCIAL' => 'commercial', 'FINANCE' => 'finance', 'RH' => 'rh'];
 
 // ------------------------------------------------------------------ Helpers SQL
 function cols(PDO $db, string $table): array
