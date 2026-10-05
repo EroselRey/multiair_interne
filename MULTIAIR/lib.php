@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05c';
+const MA_VERSION = '2026-10-05d';
 
 function ma_config(): array
 {
@@ -2632,6 +2632,28 @@ function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
     if (($a['tag'] === 'RECU' && empty($opt['forcer'])) || !str_contains($from, '@') || ma_est_interne($from, ma_domaines_internes($db))) {
         return null;
     }
+    $d = ma_email_vers_demande($db, $a);
+    $svc = $d['service'];
+    $notifier = $opt['notifier_client'] ?? !($a['tag'] === 'AUTO' && !empty($opt['ticket_dans_reponse']));
+    $r = ma_rep_creer_demande($db, $d, ['notifier' => (bool) $notifier]);
+    $db->prepare('UPDATE adv_demandes SET demande_id = ? WHERE id = ?')->execute([$r['id'], $advId]);
+    if (empty($opt['equipe_par_make'])) {
+        $rt = $r['rt'];
+        $dest = array_values(ma_liste_emails(str_replace(';', ',', $rt['to'] . ',' . $rt['cc'])));
+        $envoi = $dest ? ma_webhook_suivi($db, ['evenement' => 'transfert', 'demande_id' => (int) $r['id'], 'mobile' => false, 'tel' => '',
+            'email' => implode(',', $dest), 'objet' => $rt['objet'], 'html' => $rt['mail_html'], 'texte' => '', 'lien' => $r['liens']['interne'] ?? '',
+            'sms' => $svc === 'SAV' ? $rt['sms'] : '', 'sms_texte' => $rt['sms_texte']]) : 'aucune adresse';
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+            ->execute(['adv', ma_now(), str_starts_with($envoi, 'échec') ? 'erreur' : 'ok', 'demande_email',
+                'E-mail ' . $advId . ' → demande n° ' . $r['id'] . ' (' . $svc . ') : équipe prévenue — ' . $envoi]);
+    }
+    return $r + ['nouvelle' => empty($r['relance'])];
+}
+
+/** Ce que la demande d'un e-mail contiendra (sans rien enregistrer) : sert aussi à l'aperçu du routage. */
+function ma_email_vers_demande(PDO $db, array $a): array
+{
+    $from = trim((string) $a['from_email']);
     $sujet = trim((string) $a['sujet']);
     $corps = ma_email_corps($a['message']);
     $svc = ma_email_service($sujet, $corps, $a['famille']);
@@ -2652,7 +2674,9 @@ function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
         'societe' => $info['societe'], 'contact' => ma_email_nom($a['from_nom']), 'email' => $from, 'telephone' => $info['tel'],
         'marque' => $info['marque'], 'code_postal' => $info['code_postal'],
         'departement' => $info['code_postal'] ? ma_departement($info['code_postal']) : null,
-        'nature' => $svc === 'COMMERCIAL' ? (ma_plat($a['famille']) === 'maintenance' ? 'devis_pieces' : 'devis_equipement') : null,
+        'nature' => $svc === 'COMMERCIAL' ? (ma_plat($a['famille']) === 'maintenance'
+            || preg_match('/\b(pieces?|filtres?|kits?|clapets?|soupapes?|cartouches?|courroies?|separateurs?|huile|entretien|revision|maintenance)\b/u', ma_plat($sujet . ' ' . $corps))
+            ? 'devis_pieces' : 'devis_equipement') : null,
         'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
         'type_panne' => $svc === 'SAV' ? $extrait : null,
         'resume' => $resume,
@@ -2663,20 +2687,7 @@ function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
     if (preg_match('/demande\s+n\W{0,2}\s*(\d{1,7})\b/iu', $sujet . ' ' . $corps, $m)) {
         $d['relance_demande_id'] = (int) $m[1];
     }
-    $notifier = !($a['tag'] === 'AUTO' && !empty($opt['ticket_dans_reponse']));
-    $r = ma_rep_creer_demande($db, $d, ['notifier' => $notifier]);
-    $db->prepare('UPDATE adv_demandes SET demande_id = ? WHERE id = ?')->execute([$r['id'], $advId]);
-    if (empty($opt['equipe_par_make'])) {
-        $rt = $r['rt'];
-        $dest = array_values(ma_liste_emails(str_replace(';', ',', $rt['to'] . ',' . $rt['cc'])));
-        $envoi = $dest ? ma_webhook_suivi($db, ['evenement' => 'transfert', 'demande_id' => (int) $r['id'], 'mobile' => false, 'tel' => '',
-            'email' => implode(',', $dest), 'objet' => $rt['objet'], 'html' => $rt['mail_html'], 'texte' => '', 'lien' => $r['liens']['interne'] ?? '',
-            'sms' => $svc === 'SAV' ? $rt['sms'] : '', 'sms_texte' => $rt['sms_texte']]) : 'aucune adresse';
-        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
-            ->execute(['adv', ma_now(), str_starts_with($envoi, 'échec') ? 'erreur' : 'ok', 'demande_email',
-                'E-mail ' . $advId . ' → demande n° ' . $r['id'] . ' (' . $svc . ') : équipe prévenue — ' . $envoi]);
-    }
-    return $r + ['nouvelle' => empty($r['relance'])];
+    return $d;
 }
 
 // ------------------------------------------------------------------ Transfert d'une demande

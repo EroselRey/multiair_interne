@@ -1768,7 +1768,7 @@
           ['Techno', h(d.techno)], ['Critère', h(d.critere)], ['Pression', h(d.pression)], ['Configuration', h(d.configuration)], ['Options retenues', h(d.options_retenues)],
           ['Envoyé le', fmtDate(d.envoye_at)], ['Pièces jointes', h(d.pieces_jointes || '—')], ['Demande', d.demande_id ? `<a href="#demande/${d.demande_id}" data-dem="${d.demande_id}">n° ${d.demande_id}</a>` : '<span class="hint">aucune</span>'],
           ['Message-ID', h(d.message_id)]])}
-        ${d.demande_id ? '' : '<p><button class="btn" id="advTicket">Créer la demande (routée vers le bon service)</button></p>'}
+        ${d.demande_id ? '' : '<div id="advApercu" class="hint">Calcul du routage…</div>'}
         <h4>Question du client</h4><pre class="raw">${h(d.message || '—')}</pre>
         <h4>Réponse de Claire ${d.tag === 'RECU' ? '<span class="hint">(aucune : e-mail écarté par les filtres)</span>' : ''}</h4><pre class="raw">${h(d.mail_envoye || '—')}</pre>
         ${d.analyse_brute ? `<h4>Bloc d'analyse</h4><pre class="raw">${h(d.analyse_brute)}</pre>` : ''}
@@ -1777,14 +1777,29 @@
       $('#drawerDelete').onclick = async () => { if (confirm('Supprimer ?')) { await api('adv/demandes/' + d.id, {method: 'DELETE'}); closeDrawer(); show('adv'); } };
       const lienDem = $('#drawerBody [data-dem]');
       if (lienDem) lienDem.onclick = (e) => { e.preventDefault(); closeDrawer(); show('demande', Number(lienDem.dataset.dem)); };
-      if ($('#advTicket')) $('#advTicket').onclick = async () => {
-        if (!confirm("Créer la demande ? L'équipe concernée est prévenue et le client reçoit son n° de suivi.")) return;
-        $('#advTicket').disabled = true;
-        try {
-          const r = await api('adv/demandes/' + d.id + '/demande', {method: 'POST', body: {}});
-          toast('Demande n° ' + r.demande_id + ' créée'); closeDrawer(); refreshBadges(); show('demande', r.demande_id);
-        } catch (e) { toast(e.message, true); $('#advTicket').disabled = false; }
-      };
+      if ($('#advApercu')) api('adv/demandes/' + d.id + '/apercu').then((a) => {
+        const box = $('#advApercu');
+        if (!box) return;
+        if (!a.possible) { box.textContent = a.raison; return; }
+        const svc = {SAV: 'SAV', COMMERCIAL: 'Commerce', FINANCE: 'Compta / finance', AUTRE: 'Autre'}[a.service] || a.service;
+        box.className = '';
+        box.innerHTML = `<h4>Demande à créer</h4>${kv([
+          ['Service', h(svc) + (a.urgent ? ' ' + pill('URGENT', 'danger') : '') + (a.nature ? ' — ' + h((NATURES_COM.find((x) => x[0] === a.nature) || [0, a.nature])[1]) : '')],
+          ['Envoyée à', h(a.destinataires || '—') + ` <span class="hint">(${h(a.regle)})</span>`],
+          ['Client', h([a.contact, a.societe].filter(Boolean).join(' — ') || '—')], ['Téléphone', h(a.tel || '—')], ['Code postal', h(a.code_postal || '—')],
+          ...(a.relance_de ? [['Relance', 'de la demande n° ' + a.relance_de + ' (pas de nouvelle demande)']] : []),
+          ...(a.notes && a.notes.length ? [['Notes', h(a.notes.join(' ; '))]] : [])])}
+          <p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-tk="1">Créer et prévenir l'équipe et le client</button>
+          <button class="btn" data-tk="0">Créer et prévenir l'équipe seulement</button></p>
+          <p class="hint">Le client reçoit son n° de demande et son lien de suivi. Pour un e-mail ancien, préférez « l'équipe seulement ».</p>`;
+        box.querySelectorAll('[data-tk]').forEach((b) => b.onclick = async () => {
+          box.querySelectorAll('[data-tk]').forEach((x) => x.disabled = true);
+          try {
+            const r = await api('adv/demandes/' + d.id + '/demande', {method: 'POST', body: {notifier_client: Number(b.dataset.tk)}});
+            toast('Demande n° ' + r.demande_id + (r.nouvelle ? ' créée' : ' relancée')); closeDrawer(); refreshBadges(); show('demande', r.demande_id);
+          } catch (e) { toast(e.message, true); box.querySelectorAll('[data-tk]').forEach((x) => x.disabled = false); }
+        });
+      }).catch((e) => { if ($('#advApercu')) $('#advApercu').textContent = e.message; });
     };
     table('#adv_tbl', dem.rows, [
       {key: 'date', label: 'Date', render: (r) => fmtDate(r.date)},

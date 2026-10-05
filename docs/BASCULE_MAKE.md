@@ -109,7 +109,7 @@ restées en attente jusqu'au lendemain.
 - Dans Make, le scénario passe toutes les 30 minutes de 8 h à 11 h, du lundi au vendredi
   (7 passages, soit jusqu'à 105 relances par jour). Un passage sans relance due coûte 1 crédit.
 
-## Boîte service clients : chaque e-mail devient une demande (05/10/2026, correctif 36)
+## Boîte service clients : chaque e-mail devient une demande (05/10/2026, correctifs 36 et 37)
 
 Avant : le scénario Claire ADV (9209946) ne savait traiter que les demandes de prix d'équipements et
 de maintenance. Un e-mail SAV (ex. « Demande de dépannage urgente » de Veolia, 05/10) partait en
@@ -126,7 +126,9 @@ Maintenant, côté plateforme (`adv/demandes` POST, `ma_email_demande`) :
   reçoit son n° et son lien de suivi ;
 - une réponse à un de nos e-mails de suivi (« demande n° 63 ») relance la demande existante au lieu d'en créer une ;
 - e-mails internes et e-mails écartés par les filtres (RECU) : pas de demande ;
-- bouton « Créer la demande » dans le détail d'un e-mail, pour ceux reçus avant le correctif ;
+- dans le détail d'un e-mail reçu avant le correctif : aperçu du routage (service, destinataires, règle) et
+  deux boutons « Créer et prévenir l'équipe et le client » / « … l'équipe seulement » (correctif 37) ;
+- les demandes de pièces (filtres, kits, clapets, entretien…) partent en « devis pièces » et non « devis équipement ».
 - interrupteur : paramètre `adv_demandes_auto` (1 par défaut, 0 pour couper).
 
 À faire dans Make (accès à rétablir : le connecteur est actuellement ouvert avec un compte qui ne voit pas

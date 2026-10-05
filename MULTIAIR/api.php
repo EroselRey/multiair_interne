@@ -1137,9 +1137,23 @@ try {
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
+                    if ($method === 'GET' && ($parts[3] ?? null) === 'apercu') {
+                        // Où partirait cet e-mail s'il devenait une demande (rien n'est enregistré).
+                        $a = getOne($db, 'adv_demandes', $id) ?? fail('E-mail introuvable', 404);
+                        if (ma_est_interne($a['from_email'], ma_domaines_internes($db)) || !str_contains((string) $a['from_email'], '@')) {
+                            out(['ok' => true, 'possible' => false, 'raison' => 'E-mail interne ou sans expéditeur : pas de demande']);
+                        }
+                        $d = ma_email_vers_demande($db, $a);
+                        $rt = ma_rep_router($db, $d + ['jeton_interne' => '']);
+                        $rel = !empty($d['relance_demande_id']) ? ma_rep_demande_du_client($db, (int) $d['relance_demande_id'], $d) : null;
+                        out(['ok' => true, 'possible' => true, 'service' => $d['service'], 'urgent' => (bool) $rt['urgent'],
+                            'destinataires' => implode(', ', array_map(fn($p) => $p['nom'], $rt['personnes'])) ?: $rt['to'],
+                            'regle' => $rt['regle_libelle'], 'notes' => $rt['notes'], 'relance_de' => $rel ? (int) $rel['id'] : null,
+                            'contact' => $d['contact'], 'societe' => $d['societe'], 'tel' => $d['telephone'], 'code_postal' => $d['code_postal'], 'nature' => $d['nature']]);
+                    }
                     if ($method === 'POST' && ($parts[3] ?? null) === 'demande') {
                         // E-mail reçu avant le circuit des demandes (ou écarté) : on en fait une demande à la main.
-                        $r = ma_email_demande($db, $id, ['forcer' => true]) ?? fail('Pas de demande possible : expéditeur absent ou interne');
+                        $r = ma_email_demande($db, $id, ['forcer' => true, 'notifier_client' => ma_bool($body['notifier_client'] ?? true)]) ?? fail('Pas de demande possible : expéditeur absent ou interne');
                         logEvent($db, 'adv', 'ok', 'demande_email', 'E-mail ' . $id . ' → demande n° ' . $r['id'] . ($user ? ' par ' . $user['nom'] : ''), null);
                         out(['ok' => true, 'demande_id' => $r['id'], 'nouvelle' => $r['nouvelle'] ?? false]);
                     }
