@@ -203,6 +203,26 @@ Mauguière et Pneumatech chiffrés comme Worthington (05/10) :
 - testé le 05/10 : « Mauguière vitesse variable 15 ch 10 bar châssis » → MAVX V 141 10 (9 807 €) et MAVP V 141 13
   (14 085 €), le MAVD V 151 « sur devis » écarté.
 
+Incident du 28/10 — base SQLite abîmée (« database disk image is malformed ») :
+- constat : à 8 h 00 min 50 s, pendant la salve de relances CSO (deux appels Make dans la même seconde), la base
+  s'est abîmée ; ensuite toute écriture dans `executions_log` échoue, et chaque route qui journalise répond 500
+  alors que son travail est fait (ex. transfert de la demande 103 : fait deux fois, erreur affichée) ; les relances
+  CSO de 8 h 30 et 9 h n'ont pas eu lieu (scénario probablement désactivé par Make après les erreurs) ;
+- toutes les tables restaient lisibles : export CSV complet fait le 28/10 avant toute intervention ;
+- correctif 41 (lib.php, api.php) :
+  - `logEvent` ne fait plus jamais échouer l'opération (erreur seulement dans le journal PHP) ;
+  - `GET api.php?r=base` : état (version SQLite, taille, contrôle rapide, `?complet=1` pour integrity_check,
+    lignes par table, sauvegardes) ; `POST base/sauvegarder` ; `POST base/reparer` : reconstruction dans un fichier
+    neuf (tables recopiées sans passer par les index, compteurs AUTOINCREMENT repris, index recréés),
+    integrity_check, puis bascule ; pendant la réparation les autres requêtes attendent (verrou
+    `data/maintenance.lock`, 20 s au plus) ; l'ancien fichier est gardé dans `data/sauvegardes/…_corrompue.sqlite` ;
+    s'il manque des lignes, rien n'est basculé (sauf `{"forcer":1}`) ; clé API ou compte administrateur ;
+  - sauvegarde quotidienne automatique (`VACUUM INTO`, 7 gardées, `data/sauvegardes`, fermé au web) avec
+    contrôle rapide ; en cas d'anomalie, e-mail à `recovery_email` ;
+  - export CSV des tables sans colonne `id` (parametres, routage) réparé.
+- testé sur une copie abîmée au même endroit (index du journal) : écriture concurrente mise en attente puis
+  écrite dans la base neuve, aucune ligne perdue, integrity_check ok.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-05g';
+const MA_VERSION = '2026-10-28a';
 
 function ma_config(): array
 {
@@ -32,6 +32,8 @@ function ma_db(): PDO
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
+        // Réparation en cours (ma_base_reparer) : on attend la bascule au lieu d'écrire dans l'ancien fichier.
+        ma_base_attendre_maintenance();
         $fresh = !is_file($path);
         $pdo = new PDO('sqlite:' . $path, null, null, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -40,8 +42,338 @@ function ma_db(): PDO
         $pdo->exec('PRAGMA foreign_keys = ON');
         $pdo->exec('PRAGMA busy_timeout = 5000');
         ma_migrate($pdo, $fresh);
+        try {
+            ma_base_sauvegarde_quotidienne($pdo);
+        } catch (Throwable $e) {
+            error_log('MULTIAIR sauvegarde quotidienne : ' . $e->getMessage());
+        }
     }
     return $pdo;
+}
+
+// ------------------------------------------------------------------ Maintenance de la base
+// Sauvegarde quotidienne (data/sauvegardes, fermé au web), contrôle d'intégrité et réparation :
+// la réparation reconstruit la base dans un fichier neuf (tables recopiées, index recréés), vérifie
+// l'intégrité puis bascule ; l'ancien fichier est gardé dans data/sauvegardes.
+
+const MA_SAUVEGARDES_GARDEES = 7;
+
+function ma_base_dossier_sauvegardes(): string
+{
+    $dir = dirname(ma_config()['db_path']) . '/sauvegardes';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    return $dir;
+}
+
+function ma_base_verrou(): string
+{
+    return dirname(ma_config()['db_path']) . '/maintenance.lock';
+}
+
+/** Attend la fin d'une réparation en cours (20 s au plus ; un verrou de plus de 5 min est ignoré). */
+function ma_base_attendre_maintenance(): void
+{
+    $lock = ma_base_verrou();
+    $fin = microtime(true) + 20;
+    while (is_file($lock) && time() - (int) @filemtime($lock) < 300) {
+        if (microtime(true) > $fin) {
+            throw new RuntimeException('Base de données en maintenance, réessayez dans une minute.');
+        }
+        usleep(250000);
+        clearstatcache(true, $lock);
+    }
+}
+
+/** Connexion directe, sans mise à niveau ni sauvegarde (contrôle, réparation). */
+function ma_base_ouvrir_brut(string $path): PDO
+{
+    $pdo = new PDO('sqlite:' . $path, null, null, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    $pdo->exec('PRAGMA busy_timeout = 10000');
+    return $pdo;
+}
+
+/** Résultat de PRAGMA quick_check / integrity_check : ['ok'] si la base est saine. */
+function ma_base_controle(PDO $pdo, bool $complet = false): array
+{
+    try {
+        $lignes = $pdo->query($complet ? 'PRAGMA integrity_check(50)' : 'PRAGMA quick_check(50)')->fetchAll(PDO::FETCH_COLUMN);
+        return $lignes ?: ['(aucun résultat)'];
+    } catch (Throwable $e) {
+        return ['erreur : ' . $e->getMessage()];
+    }
+}
+
+function ma_base_q(string $nom): string
+{
+    return '"' . str_replace('"', '""', $nom) . '"';
+}
+
+/** Copie cohérente de la base (VACUUM INTO, sinon copie du fichier) et contrôle rapide. */
+function ma_base_sauvegarder(PDO $pdo, string $motif): array
+{
+    $dir = ma_base_dossier_sauvegardes();
+    $fichier = $dir . '/multiair_' . date('Y-m-d_His') . '_' . $motif . '.sqlite';
+    $res = ['date' => ma_now(), 'fichier' => basename($fichier), 'methode' => 'vacuum_into', 'erreur' => null];
+    try {
+        $pdo->exec('VACUUM INTO ' . $pdo->quote($fichier));
+    } catch (Throwable $e) {
+        @unlink($fichier);
+        $res['methode'] = 'copie';
+        $res['erreur'] = $e->getMessage();
+        if (!@copy(ma_config()['db_path'], $fichier)) {
+            $res['fichier'] = null;
+            $res['erreur'] .= ' ; copie du fichier impossible';
+        }
+    }
+    $res['taille'] = $res['fichier'] ? (int) @filesize($fichier) : 0;
+    $res['controle'] = ma_base_controle($pdo);
+    // On ne garde que les dernières sauvegardes automatiques ; les copies de réparation restent.
+    $auto = glob($dir . '/multiair_*_quotidienne.sqlite') ?: [];
+    rsort($auto);
+    foreach (array_slice($auto, MA_SAUVEGARDES_GARDEES) as $vieux) {
+        @unlink($vieux);
+    }
+    return $res;
+}
+
+/** Une sauvegarde par jour, faite par la première requête de la journée. */
+function ma_base_sauvegarde_quotidienne(PDO $pdo): void
+{
+    $dir = ma_base_dossier_sauvegardes();
+    $marque = $dir . '/derniere.json';
+    $jour = date('Y-m-d');
+    $lire = fn() => is_file($marque) ? (json_decode((string) @file_get_contents($marque), true) ?: []) : [];
+    if (($lire()['jour'] ?? '') === $jour) {
+        return;
+    }
+    // Verrou par création de dossier (atomique, y compris sur les disques réseau des hébergements mutualisés).
+    $verrou = $dir . '/.sauvegarde_en_cours';
+    clearstatcache(true, $verrou);
+    if (is_dir($verrou) && time() - (int) @filemtime($verrou) > 600) {
+        @rmdir($verrou); // reste d'une sauvegarde interrompue
+    }
+    if (!@mkdir($verrou)) {
+        return;
+    }
+    try {
+        clearstatcache(true, $marque);
+        if (($lire()['jour'] ?? '') === $jour) {
+            return;
+        }
+        $res = ma_base_sauvegarder($pdo, 'quotidienne');
+        @file_put_contents($marque, json_encode(['jour' => $jour] + $res, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        if ($res['controle'] !== ['ok']) {
+            $detail = implode("\n", array_slice($res['controle'], 0, 10));
+            error_log('MULTIAIR : contrôle de la base en échec — ' . $detail);
+            $alerte = (string) (ma_config()['recovery_email'] ?? '');
+            if ($alerte !== '') {
+                @ma_send_mail($alerte, '[MULTIAIR] Base de données à réparer',
+                    "Le contrôle quotidien de la base MULTIAIR a trouvé une anomalie :\n\n" . $detail
+                    . "\n\nUne sauvegarde du jour a été faite (" . ($res['fichier'] ?? 'aucune') . ").\n"
+                    . "Réparation : api.php?r=base/reparer (POST, clé API ou compte administrateur).");
+            }
+        }
+    } finally {
+        @rmdir($verrou);
+    }
+}
+
+/** État de la base : version SQLite, taille, contrôle, nombre de lignes par table, sauvegardes. */
+function ma_base_etat(bool $complet = false): array
+{
+    $path = ma_config()['db_path'];
+    $pdo = ma_base_ouvrir_brut($path);
+    $pragma = function (string $nom) use ($pdo) {
+        try {
+            return $pdo->query("PRAGMA $nom")->fetchColumn();
+        } catch (Throwable $e) {
+            return 'erreur : ' . $e->getMessage();
+        }
+    };
+    $tables = [];
+    foreach ($pdo->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")->fetchAll(PDO::FETCH_COLUMN) as $t) {
+        try {
+            $tables[$t] = (int) $pdo->query('SELECT count(*) FROM ' . ma_base_q($t) . ' NOT INDEXED')->fetchColumn();
+        } catch (Throwable $e) {
+            $tables[$t] = 'erreur : ' . $e->getMessage();
+        }
+    }
+    $fichiers = function (string $dir) {
+        $l = [];
+        foreach (glob($dir . '/*') ?: [] as $f) {
+            if (is_file($f)) {
+                $l[] = ['nom' => basename($f), 'taille' => (int) filesize($f), 'modifie' => date('Y-m-d H:i:s', (int) filemtime($f))];
+            }
+        }
+        return $l;
+    };
+    $dir = ma_base_dossier_sauvegardes();
+    return [
+        'sqlite' => $pdo->query('SELECT sqlite_version()')->fetchColumn(),
+        'taille' => (int) @filesize($path),
+        'journal_mode' => $pragma('journal_mode'),
+        'page_size' => $pragma('page_size'),
+        'page_count' => $pragma('page_count'),
+        'freelist_count' => $pragma('freelist_count'),
+        'controle' => ma_base_controle($pdo, $complet),
+        'controle_type' => $complet ? 'integrity_check' : 'quick_check',
+        'tables' => $tables,
+        'fichiers_data' => $fichiers(dirname($path)),
+        'sauvegardes' => $fichiers($dir),
+        'derniere_sauvegarde' => is_file($dir . '/derniere.json') ? json_decode((string) file_get_contents($dir . '/derniere.json'), true) : null,
+        'espace_libre' => @disk_free_space(dirname($path)) ?: null,
+    ];
+}
+
+/**
+ * Reconstruit la base : nouveau fichier avec le même schéma, toutes les lignes recopiées (lecture sans
+ * index), compteurs AUTOINCREMENT repris, index recréés, integrity_check, puis bascule. Pendant ce temps
+ * les autres requêtes attendent (verrou de maintenance). Sans perte de ligne, sinon on n'échange rien
+ * (sauf $forcer). L'ancien fichier est gardé dans data/sauvegardes (…_corrompue.sqlite).
+ */
+function ma_base_reparer(bool $forcer = false): array
+{
+    $path = ma_config()['db_path'];
+    $dir = dirname($path);
+    $sauv = ma_base_dossier_sauvegardes();
+    $ts = date('Y-m-d_His');
+    $tmp = $dir . '/multiair_reparation.sqlite';
+    $lock = ma_base_verrou();
+    $rapport = ['debut' => ma_now()];
+    @set_time_limit(600);
+    ignore_user_abort(true);
+    if (@file_put_contents($lock, ma_now()) === false) {
+        throw new RuntimeException('Impossible de poser le verrou de maintenance dans ' . $dir);
+    }
+    $old = $new = null;
+    try {
+        sleep(2); // laisse finir les requêtes déjà commencées
+        $old = ma_base_ouvrir_brut($path);
+        $rapport['controle_avant'] = ma_base_controle($old, true);
+
+        foreach ([$tmp, $tmp . '-journal'] as $f) {
+            if (is_file($f)) {
+                @unlink($f);
+            }
+        }
+        $schema = $old->query("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid")->fetchAll();
+        $userVersion = (int) $old->query('PRAGMA user_version')->fetchColumn();
+
+        // 1. Tables vides dans le fichier neuf.
+        $new = ma_base_ouvrir_brut($tmp);
+        foreach ($schema as $s) {
+            if ($s['type'] === 'table') {
+                $new->exec($s['sql']);
+            }
+        }
+        $new = null;
+
+        // 2. Données recopiées, sans passer par les index (ce sont souvent eux qui sont abîmés).
+        $old->exec('ATTACH DATABASE ' . $old->quote($tmp) . ' AS neuve');
+        $old->exec('BEGIN IMMEDIATE');
+        $copie = [];
+        $perte = false;
+        foreach ($schema as $s) {
+            if ($s['type'] !== 'table') {
+                continue;
+            }
+            $q = ma_base_q($s['name']);
+            $cols = implode(', ', array_map('ma_base_q', array_column($old->query("PRAGMA main.table_info($q)")->fetchAll(), 'name')));
+            $avant = (int) $old->query("SELECT count(*) FROM main.$q NOT INDEXED")->fetchColumn();
+            $erreur = null;
+            try {
+                $old->exec("INSERT INTO neuve.$q ($cols) SELECT $cols FROM main.$q NOT INDEXED");
+            } catch (Throwable $e) {
+                // Lecture en bloc impossible : ligne à ligne, dans l'ordre des rowid.
+                $erreur = $e->getMessage();
+                $old->exec("DELETE FROM neuve.$q");
+                $ins = $old->prepare("INSERT INTO neuve.$q ($cols) SELECT $cols FROM main.$q NOT INDEXED WHERE rowid = ?");
+                $dernier = 0;
+                for ($essais = 0; $essais < 100000; $essais++) {
+                    try {
+                        $suivant = $old->query("SELECT rowid FROM main.$q NOT INDEXED WHERE rowid > $dernier ORDER BY rowid LIMIT 1")->fetchColumn();
+                    } catch (Throwable $e2) {
+                        break;
+                    }
+                    if ($suivant === false) {
+                        break;
+                    }
+                    $dernier = (int) $suivant;
+                    try {
+                        $ins->execute([$dernier]);
+                    } catch (Throwable $e3) {
+                        // ligne illisible : perdue
+                    }
+                }
+            }
+            $apres = (int) $old->query("SELECT count(*) FROM neuve.$q")->fetchColumn();
+            $copie[$s['name']] = ['avant' => $avant, 'apres' => $apres] + ($erreur ? ['erreur' => $erreur] : []);
+            if ($apres < $avant) {
+                $perte = true;
+            }
+        }
+        // Compteurs AUTOINCREMENT : les identifiants déjà donnés ne sont jamais réattribués.
+        $seqNeuve = (bool) $old->query("SELECT count(*) FROM neuve.sqlite_master WHERE name = 'sqlite_sequence'")->fetchColumn();
+        $seqMain = (bool) $old->query("SELECT count(*) FROM main.sqlite_master WHERE name = 'sqlite_sequence'")->fetchColumn();
+        if ($seqNeuve && $seqMain) {
+            $old->exec('DELETE FROM neuve.sqlite_sequence');
+            $old->exec('INSERT INTO neuve.sqlite_sequence (name, seq) SELECT name, seq FROM main.sqlite_sequence');
+        }
+        $old->exec('COMMIT');
+        $old->exec('DETACH DATABASE neuve');
+        $rapport['tables'] = $copie;
+
+        // 3. Index (et déclencheurs / vues éventuels) recréés à partir des données.
+        $new = ma_base_ouvrir_brut($tmp);
+        foreach ($schema as $s) {
+            if ($s['type'] !== 'table') {
+                $new->exec($s['sql']);
+            }
+        }
+        $new->exec('PRAGMA user_version = ' . $userVersion);
+        $rapport['controle_apres'] = ma_base_controle($new, true);
+        $new = null;
+
+        if ($rapport['controle_apres'] !== ['ok']) {
+            throw new RuntimeException('La base reconstruite n\'est pas saine : ' . implode(' | ', $rapport['controle_apres']));
+        }
+        if ($perte && !$forcer) {
+            $rapport['resultat'] = 'non basculée : des lignes n\'ont pas pu être relues (voir « tables ») ; relancer avec forcer=1 pour accepter la perte';
+            @unlink($tmp);
+            return $rapport;
+        }
+
+        // 4. Bascule : l'ancien fichier part dans data/sauvegardes, le neuf prend sa place.
+        $old = null;
+        $corrompue = $sauv . '/multiair_' . $ts . '_corrompue.sqlite';
+        if (!@rename($path, $corrompue)) {
+            throw new RuntimeException('Impossible de mettre de côté l\'ancien fichier');
+        }
+        if (is_file($path . '-journal')) {
+            @rename($path . '-journal', $corrompue . '-journal');
+        }
+        if (!@rename($tmp, $path)) {
+            @rename($corrompue, $path);
+            throw new RuntimeException('Impossible de mettre en place le fichier reconstruit (ancien fichier remis)');
+        }
+        $rapport['ancien_fichier'] = basename($corrompue);
+        $rapport['resultat'] = 'base reconstruite et en service';
+        return $rapport;
+    } catch (Throwable $e) {
+        if ($old instanceof PDO && $old->inTransaction()) {
+            $old->rollBack();
+        }
+        $rapport['resultat'] = 'échec : ' . $e->getMessage();
+        return $rapport;
+    } finally {
+        $old = $new = null;
+        @unlink($lock);
+    }
 }
 
 /**

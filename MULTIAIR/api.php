@@ -90,7 +90,37 @@ if (!$viaApiKey && !$viaSession) {
     fail('Non autorisé (clé API ou session requise)', 401);
 }
 
-$db = ma_db();
+// ------------------------------------------------------------------ Maintenance de la base
+// Avant toute ouverture normale de la base : doit marcher même si elle est abîmée.
+//   GET  base                 état, contrôle rapide (?complet=1 : integrity_check), sauvegardes
+//   POST base/sauvegarder     sauvegarde immédiate
+//   POST base/reparer         reconstruction + bascule ({"forcer":1} pour accepter des lignes perdues)
+if (($parts[0] ?? '') === 'base') {
+    if (!$viaApiKey && (ma_user()['acces'] ?? '') !== 'admin') {
+        fail('Accès réservé aux administrateurs', 403);
+    }
+    try {
+        if ($method === 'GET' && !isset($parts[1])) {
+            out(['ok' => true] + ma_base_etat(isset($_GET['complet'])));
+        }
+        if ($method === 'POST' && ($parts[1] ?? '') === 'sauvegarder') {
+            out(['ok' => true] + ma_base_sauvegarder(ma_base_ouvrir_brut(ma_config()['db_path']), 'manuelle'));
+        }
+        if ($method === 'POST' && ($parts[1] ?? '') === 'reparer') {
+            $r = ma_base_reparer(ma_bool($body['forcer'] ?? false));
+            out(['ok' => str_starts_with((string) ($r['resultat'] ?? ''), 'base reconstruite')] + $r);
+        }
+    } catch (Throwable $e) {
+        fail('Maintenance de la base : ' . $e->getMessage(), 500);
+    }
+    fail('Route inconnue : ' . $route, 404);
+}
+
+try {
+    $db = ma_db();
+} catch (Throwable $e) {
+    fail('Base de données indisponible : ' . $e->getMessage(), 503);
+}
 $now = ma_now();
 
 // ------------------------------------------------------------------ Droits
@@ -234,8 +264,13 @@ function listRows(PDO $db, string $table, string $dateCol, array $q, array $text
 
 function logEvent(PDO $db, string $scenario, string $statut, string $type, ?string $resume, $payload = null): void
 {
-    $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
-        ->execute([$scenario, ma_now(), $statut, $type, $resume, is_null($payload) ? null : json_encode($payload, JSON_UNESCAPED_UNICODE)]);
+    // Le journal ne doit jamais faire échouer l'opération qu'il décrit (base abîmée, disque plein…).
+    try {
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume, payload) VALUES (?,?,?,?,?,?)')
+            ->execute([$scenario, ma_now(), $statut, $type, $resume, is_null($payload) ? null : json_encode($payload, JSON_UNESCAPED_UNICODE)]);
+    } catch (Throwable $e) {
+        error_log('MULTIAIR journal non écrit (' . $scenario . '/' . $type . ') : ' . $e->getMessage());
+    }
 }
 
 function idFrom(array $parts, int $i): int
@@ -1639,7 +1674,7 @@ try {
             echo "\xEF\xBB\xBF";
             $fp = fopen('php://output', 'w');
             $first = true;
-            foreach ($db->query("SELECT * FROM $table ORDER BY id DESC") as $row) {
+            foreach ($db->query("SELECT * FROM $table ORDER BY rowid DESC") as $row) {
                 if ($first) {
                     fputcsv($fp, array_keys($row), ';');
                     $first = false;
