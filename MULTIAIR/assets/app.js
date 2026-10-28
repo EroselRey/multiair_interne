@@ -53,7 +53,7 @@
       throw new Error('Session expirée');
     }
     const j = await r.json().catch(() => ({ok: false, erreur: 'Réponse invalide'}));
-    if (!j.ok) throw new Error(j.erreur || 'Erreur API');
+    if (!j.ok) throw Object.assign(new Error(j.erreur || 'Erreur API'), {data: j});
     return j;
   }
   const patch = (route, body) => api(route, {method: 'PATCH', body});
@@ -626,7 +626,17 @@
       try {
         const message = $('#drawerBody [name=message]').value.trim();
         const body = libre ? {email: libre, cloturer: $('#drawerBody [name=cloturer]').checked ? 1 : 0, message} : {contact_id: Number(cible), message};
-        const r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body});
+        let r;
+        try {
+          r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body});
+        } catch (e) {
+          // Déjà chez cette personne : on ne renvoie l'e-mail que si on le demande vraiment.
+          if (!e.data?.deja) throw e;
+          if (!confirm(e.message + '\n\nLui renvoyer quand même ?')) {
+            closeDrawer(); toast('Rien n\'a été renvoyé : la demande est déjà chez cette personne'); return;
+          }
+          r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body: {...body, confirmer: 1}});
+        }
         closeDrawer(); toast('Demande transférée — la personne est prévenue'); refreshBadges();
         if (r.visible) show('demande', d.id, false); else show('a-traiter');
       } catch (e) { toast(e.message, true); $('#transfOk').disabled = false; }

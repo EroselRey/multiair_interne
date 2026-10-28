@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-28a';
+const MA_VERSION = '2026-10-28b';
 
 function ma_config(): array
 {

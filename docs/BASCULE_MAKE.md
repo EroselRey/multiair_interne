@@ -219,7 +219,10 @@ Incident du 28/10 — base SQLite abîmée (« database disk image is malformed 
     s'il manque des lignes, rien n'est basculé (sauf `{"forcer":1}`) ; clé API ou compte administrateur ;
   - sauvegarde quotidienne automatique (`VACUUM INTO`, 7 gardées, `data/sauvegardes`, fermé au web) avec
     contrôle rapide ; en cas d'anomalie, e-mail à `recovery_email` ;
-  - export CSV des tables sans colonne `id` (parametres, routage) réparé.
+  - export CSV des tables sans colonne `id` (parametres, routage) réparé ;
+  - transfert : si la demande est déjà chez la personne choisie, rien n'est renvoyé — message « Déjà transférée à …
+    le … » et choix « Lui renvoyer quand même ? » (champ `confirmer` côté API) ; évite les e-mails en double
+    (la demande 103 était partie 4 fois chez Eric Rouhier).
 - conséquence côté Make : « CSO — Relances devis » (9776471) envoie l'e-mail PUIS enregistre la relance ; l'enregistrement
   (annulé à cause du journal) répondait 500 sans que Make le traite comme une erreur (handleErrors désactivé) ;
   les 15 devis « dus » ont donc reçu la même relance à chaque passage (8 h 30 → 10 h 30, 5 à 6 fois) ;

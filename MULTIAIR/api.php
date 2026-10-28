@@ -546,6 +546,19 @@ try {
                                 fail($cible['nom'] . ' n\'a pas d\'adresse e-mail : complétez sa fiche dans « Équipe et accès »');
                             }
                         }
+                        // Déjà chez cette personne : on ne renvoie pas l'e-mail sans confirmation (double clic, nouvel essai…).
+                        if (!ma_bool($body['confirmer'] ?? false) && (string) ($dem['destinataires'] ?? '') === (string) $cible['nom']) {
+                            $prefixe = 'Transférée à ' . $cible['nom'];
+                            $st = $db->prepare("SELECT date FROM rep_evenements WHERE demande_id = ? AND type = 'transferee'
+                                AND substr(resume, 1, length(?)) = ? ORDER BY id DESC LIMIT 1");
+                            $st->execute([$id, $prefixe, $prefixe]);
+                            $le = $st->fetchColumn();
+                            if ($le) {
+                                out(['ok' => false, 'deja' => true, 'deja_le' => $le,
+                                    'erreur' => 'Déjà transférée à ' . $cible['nom'] . ' le ' . date('d/m à H:i', strtotime((string) $le))
+                                        . ' : l\'e-mail lui a été envoyé.'], 409);
+                            }
+                        }
                         $apres = ma_rep_transferer($db, $dem, $cible, (string) ($user['nom'] ?? ''), trim((string) ($body['message'] ?? '')));
                         logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
                         out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin || $apres['service'] === $portee]);
