@@ -222,7 +222,11 @@ Incident du 28/10 — base SQLite abîmée (« database disk image is malformed 
   - export CSV des tables sans colonne `id` (parametres, routage) réparé ;
   - transfert : si la demande est déjà chez la personne choisie, rien n'est renvoyé — message « Déjà transférée à …
     le … » et choix « Lui renvoyer quand même ? » (champ `confirmer` côté API) ; évite les e-mails en double
-    (la demande 103 était partie 4 fois chez Eric Rouhier).
+    (la demande 103 était partie 4 fois chez Eric Rouhier) ;
+  - droits relus à chaque page (`ma_user_actualiser`) : un passage administrateur ou un changement de service
+    s'applique sans se reconnecter, une personne désactivée est déconnectée (avant : droits figés dans la session
+    jusqu'à 30 jours) ;
+  - l'accès « Service RH » peut se connecter (il manquait dans la vérification du mot de passe).
 - conséquence côté Make : « CSO — Relances devis » (9776471) envoie l'e-mail PUIS enregistre la relance ; l'enregistrement
   (annulé à cause du journal) répondait 500 sans que Make le traite comme une erreur (handleErrors désactivé) ;
   les 15 devis « dus » ont donc reçu la même relance à chaque passage (8 h 30 → 10 h 30, 5 à 6 fois) ;

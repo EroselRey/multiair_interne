@@ -3,6 +3,14 @@
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 $user = ma_user();
+if ($user) {
+    // Droits relus à chaque chargement : un passage administrateur s'applique sans se reconnecter.
+    try {
+        $user = ma_user_actualiser(ma_db());
+    } catch (Throwable $err) {
+        // base indisponible : on garde la session telle quelle
+    }
+}
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $admin = ($user['acces'] ?? '') === 'admin';
 $initiales = '';

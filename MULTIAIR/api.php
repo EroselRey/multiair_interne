@@ -126,7 +126,10 @@ $now = ma_now();
 // ------------------------------------------------------------------ Droits
 // Make (clé API) et les administrateurs : tout. Un service (sav, commerce, finance) : les demandes
 // de son service, leur suivi, les conversations qui s'y rattachent, et les noms de l'équipe.
-$user = $viaApiKey ? null : ma_user();
+$user = $viaApiKey ? null : ma_user_actualiser($db);
+if (!$viaApiKey && !$user) {
+    fail('Session expirée : votre accès a changé, reconnectez-vous', 401);
+}
 $estAdmin = $viaApiKey || (($user['acces'] ?? '') === 'admin');
 $portee = $estAdmin ? null : ma_acces_service_demande((string) ($user['acces'] ?? ''));
 if (!$estAdmin) {

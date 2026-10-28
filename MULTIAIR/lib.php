@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-28b';
+const MA_VERSION = '2026-10-28c';
 
 function ma_config(): array
 {
@@ -2210,6 +2210,31 @@ function ma_user(): ?array
     return $_SESSION['ma_user'] ?? ['id' => 0, 'nom' => (string) ($_SESSION['ma_login'] ?? 'admin'), 'email' => '', 'acces' => 'admin'];
 }
 
+/**
+ * Relit la fiche de la personne connectée : un changement d'accès (passage administrateur, autre service)
+ * s'applique tout de suite, sans se reconnecter ; une personne désactivée ou sans accès est déconnectée.
+ */
+function ma_user_actualiser(PDO $db): ?array
+{
+    $u = ma_user();
+    if (!$u || (int) ($u['id'] ?? 0) <= 0) {
+        return $u; // identifiant de secours de config.php : toujours administrateur
+    }
+    $st = $db->prepare('SELECT id, nom, email, acces, actif FROM rep_contacts WHERE id = ?');
+    $st->execute([(int) $u['id']]);
+    $c = $st->fetch();
+    if (!$c || !(int) $c['actif'] || !isset(MA_ACCES[(string) $c['acces']])) {
+        $_SESSION = [];
+        session_destroy();
+        return null;
+    }
+    $frais = ['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces']];
+    if ($frais !== $u) {
+        $_SESSION['ma_user'] = $frais;
+    }
+    return $frais;
+}
+
 /** Vérifie un identifiant (e-mail, ou l'identifiant de secours de config.php) et un mot de passe. */
 function ma_verifier_connexion(PDO $db, string $login, string $pass): ?array
 {
@@ -2221,7 +2246,9 @@ function ma_verifier_connexion(PDO $db, string $login, string $pass): ?array
     if (!str_contains($login, '@') || $pass === '') {
         return null;
     }
-    $st = $db->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ('admin','sav','commerce','finance')
+    // Tous les accès de MA_ACCES (y compris « Service RH ») peuvent se connecter.
+    $acces = implode(',', array_map(fn($a) => $db->quote($a), array_keys(MA_ACCES)));
+    $st = $db->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ($acces)
         AND mdp_hash IS NOT NULL AND mdp_hash != '' LIMIT 1");
     $st->execute([$login]);
     $c = $st->fetch();
