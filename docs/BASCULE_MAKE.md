@@ -220,6 +220,10 @@ Incident du 28/10 — base SQLite abîmée (« database disk image is malformed 
   - sauvegarde quotidienne automatique (`VACUUM INTO`, 7 gardées, `data/sauvegardes`, fermé au web) avec
     contrôle rapide ; en cas d'anomalie, e-mail à `recovery_email` ;
   - export CSV des tables sans colonne `id` (parametres, routage) réparé.
+- conséquence côté Make : « CSO — Relances devis » (9776471) envoie l'e-mail PUIS enregistre la relance ; l'enregistrement
+  (annulé à cause du journal) répondait 500 sans que Make le traite comme une erreur (handleErrors désactivé) ;
+  les 15 devis « dus » ont donc reçu la même relance à chaque passage (8 h 30 → 10 h 30, 5 à 6 fois) ;
+  scénario désactivé le 28/10 vers 10 h 45, à réactiver après réparation de la base ;
 - testé sur une copie abîmée au même endroit (index du journal) : écriture concurrente mise en attente puis
   écrite dans la base neuve, aucune ligne perdue, integrity_check ok.
 
