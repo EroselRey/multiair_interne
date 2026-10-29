@@ -277,6 +277,14 @@ Claire ADV v10 (29/10, demande de Cyril : « il faut le numéro de série et le 
 - Claire reçoit la liste des pièces jointes (noms et tailles) ; elle ne lit pas leur contenu, mais elles sont
   enregistrées sur la demande (`rep_pieces`, hors logos de signature < 30 Ko) et jointes à l'e-mail envoyé à l'équipe ;
 - suffixe T non précisé : plan commun + mention que les lignes sécheur ne concernent que la version T (plus de question).
+- v11 (même jour) : une image citée dans le corps en `[cid:…]` (logo de signature, image collée) ne compte pas comme
+  pièce jointe — sinon presque tous les e-mails « avaient une pièce jointe » et Claire ne demandait jamais le numéro de série.
+- rejeu des e-mails de 13 h 41 et 14 h 01 (Se2M Industrie, Mauguière MAVR 91 270, n° ITJ481545) → demandes 107 et 108 ;
+  réponse v10 conforme (modèle et numéro de série repris, aucune question), pas de seconde réponse au client (garde 2 h).
+  La 108 (réponse du client : « nous ne connaissons pas […] le nombre d'heures ni l'échéance ») est partie à la compta :
+  le mot « échéance » comptait comme mot de facturation. Correctif 42 (lib.php, `ma_email_service`) : « échéance » ne
+  compte plus que dans « échéance de paiement / règlement / facture » ou « échéancier ». La 108 est à rattacher à la 107
+  (même machine, même client) ; la compta peut l'ignorer.
 
 ## Reste à faire
 

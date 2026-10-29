@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-28c';
+const MA_VERSION = '2026-10-29a';
 
 function ma_config(): array
 {
@@ -2899,7 +2899,9 @@ function ma_email_service(string $sujet, string $corps, ?string $famille): strin
     }
     $sav = '/\b(pannes?|en panne|depann\w*|fuites?|alarmes?|interventions?|repar\w*|ne (?:demarre|fonctionne|marche) (?:plus|pas)|code (?:d.)?erreur'
         . '|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|bruit anormal|surchauffe|disjonct\w*|sav)\b/u';
-    $fin = '/\b(factur\w*|reglements?|paiements?|virement|releve de compte|impayes?|echeances?|lettrage)\b/u';
+    // « échéance » seule désigne souvent une échéance d'entretien (« nombre d'heures ni l'échéance ») :
+    // elle ne compte comme mot de compta que suivie de paiement, règlement ou facture.
+    $fin = '/\b(factur\w*|reglements?|paiements?|virement|releve de compte|impayes?|echeancier|echeances? (?:de|du|des) (?:paiement|reglement|facture)s?|lettrage)\b/u';
     $s = ma_plat($sujet);
     $t = ma_plat($sujet . ' ' . $corps);
     // L'objet tranche d'abord ; dans le corps, une panne passe avant une question de facture.
