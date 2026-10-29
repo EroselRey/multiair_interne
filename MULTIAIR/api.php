@@ -344,6 +344,14 @@ try {
 
         // ============================================================ Répondeur IA
         case 'rep':
+            if ($sub === 'relances_equipe') {
+                // Rappels internes 24 h / 48 h et alerte 72 h (Make, toutes les heures en semaine).
+                // GET : aperçu (rien n'est écrit ni envoyé) ; POST : passe réelle.
+                if (!$estAdmin) {
+                    fail('Réservé à l\'administrateur', 403);
+                }
+                out(ma_rep_relances_equipe($db, $method === 'POST'));
+            }
             if ($sub === 'fiches') {
                 if ($sub2 === 'find') {
                     // Remplace filterRows QUALIFICATION_EN_COURS : ?tel=…&statut=En attente,Urgent

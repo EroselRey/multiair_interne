@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-10-29a';
+const MA_VERSION = '2026-10-29b';
 
 function ma_config(): array
 {
@@ -1609,7 +1609,7 @@ function ma_rep_message(array $d, array $x): array
     $site = trim((string) ($d['code_postal'] ?? '')) ?: ($x['departement'] ?? '');
     $lien = (string) ($x['lien_interne'] ?? '');
     $html = ma_mail_gabarit([
-        'surtitre' => !empty($x['transfert']) ? 'Demande transférée' : 'Nouvelle demande ' . $svc,
+        'surtitre' => $x['surtitre'] ?? (!empty($x['transfert']) ? 'Demande transférée' : 'Nouvelle demande ' . $svc),
         'bandeau' => $x['urgent'] ? 'URGENT — production arrêtée · à rappeler tout de suite' : '',
         'etiquettes' => [
             $x['urgent'] ? ['URGENT', '#b3261e', '#ffffff'] : ['À rappeler', '#fff1e0', '#9a4a06'],
@@ -3271,6 +3271,225 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
         . (!empty($cible['cloturer']) ? ' — close ici, la suite se fait hors plateforme' : ''),
         ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
     return $apres;
+}
+
+// ------------------------------------------------------------------ Relances internes des demandes
+//
+// Une demande « à traiter » ou « en cours » sans action de l'équipe depuis 24 h : rappel à la personne
+// qui l'a prise (sinon à ses destinataires) ; 48 h : second rappel ; 72 h : alerte à l'administrateur.
+// Les samedis et dimanches ne comptent pas. Une action de l'équipe (prise en charge, note, rappel prévu,
+// transfert, modification…) remet le compteur à zéro ; un rappel client prévu plus tard le suspend.
+
+/** Heures écoulées depuis une date, samedis et dimanches non comptés. */
+function ma_heures_ouvrees(string $depuis, ?int $maintenant = null): float
+{
+    $t = strtotime($depuis);
+    $fin = $maintenant ?? time();
+    if (!$t || $t >= $fin) {
+        return 0.0;
+    }
+    $total = 0;
+    while ($t < $fin) {
+        $bout = min(strtotime('tomorrow', $t), $fin);
+        if ((int) date('N', $t) <= 5) {
+            $total += $bout - $t;
+        }
+        $t = $bout;
+    }
+    return $total / 3600;
+}
+
+/**
+ * Date de la dernière action de l'équipe sur une demande : arrivée, prise en charge, réouverture, ou
+ * événement fait par une personne depuis la plateforme ou le lien interne. Les appels du client et les
+ * étapes automatiques (Claire, Make, la plateforme) ne comptent pas. Un rappel prévu passé compte aussi.
+ */
+function ma_rep_derniere_action(PDO $db, array $dem): string
+{
+    $dates = [(string) $dem['created_at']];
+    if (!empty($dem['pris_at'])) {
+        $dates[] = (string) $dem['pris_at'];
+    }
+    $st = $db->prepare("SELECT MAX(date) FROM rep_evenements WHERE demande_id = ? AND (type = 'rouverte'
+        OR (type IN ('prise_en_charge', 'modifiee', 'rappel', 'note', 'transferee', 'piece', 'traitee')
+            AND via IN ('plateforme', 'lien_equipe') AND COALESCE(qui, '') NOT IN ('', 'Claire', 'Plateforme', 'Make')))");
+    $st->execute([(int) $dem['id']]);
+    if ($d = $st->fetchColumn()) {
+        $dates[] = (string) $d;
+    }
+    if (!empty($dem['rappel_prevu']) && strtotime((string) $dem['rappel_prevu']) <= time()) {
+        $dates[] = date('Y-m-d H:i:s', strtotime((string) $dem['rappel_prevu']));
+    }
+    return max($dates);
+}
+
+/** Adresses à relancer : la personne qui a pris la demande, sinon ses destinataires, sinon l'adresse de repli. */
+function ma_rep_relance_adresses(PDO $db, array $dem): array
+{
+    $qui = trim((string) ($dem['pris_par'] ?? ''));
+    if ($dem['statut'] === 'en_cours' && $qui !== '') {
+        $st = $db->prepare('SELECT email FROM rep_contacts WHERE nom = ? AND actif = 1 ORDER BY id LIMIT 1');
+        $st->execute([$qui]);
+        $a = ma_liste_emails((string) $st->fetchColumn());
+        if ($a) {
+            return array_values($a);
+        }
+    }
+    $a = ma_liste_emails(str_replace(';', ',', ($dem['dest_to'] ?? '') . ',' . ($dem['dest_cc'] ?? '')));
+    return array_values($a ?: ma_liste_emails(ma_param($db, 'rep_repli_email', 'cyril.mortier@airwco.com')));
+}
+
+/**
+ * Passe des relances internes (appelé par Make toutes les heures en semaine). Chaque relance est d'abord
+ * inscrite dans l'historique de la demande (type relance_equipe), puis envoyée : un passage rejoué ou
+ * concurrent ne renvoie rien. Une demande déjà à 72 h au premier passage reçoit seulement l'alerte.
+ * Ne suit que les demandes arrivées depuis `rep_relances_equipe_depuis` (fixé au premier passage à
+ * 7 jours avant) : l'ancien stock n'inonde pas l'administrateur. $envoyer = false : aperçu sans rien écrire.
+ */
+function ma_rep_relances_equipe(PDO $db, bool $envoyer = true): array
+{
+    if (ma_param($db, 'rep_relances_equipe_actif', '1') === '0') {
+        return ['ok' => true, 'actif' => false, 'rappels' => [], 'alertes' => []];
+    }
+    $verrou = null;
+    if ($envoyer) {
+        $verrou = fopen(dirname(ma_config()['db_path']) . '/relances_equipe.lock', 'c');
+        if (!$verrou || !flock($verrou, LOCK_EX | LOCK_NB)) {
+            return ['ok' => true, 'deja_en_cours' => true, 'rappels' => [], 'alertes' => []];
+        }
+    }
+    try {
+        $depuis = ma_param($db, 'rep_relances_equipe_depuis');
+        if ($depuis === '') {
+            $depuis = date('Y-m-d H:i:s', time() - 7 * 86400);
+            if ($envoyer) {
+                $db->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_relances_equipe_depuis', ?)")->execute([$depuis]);
+            }
+        }
+        $seuil = max(1, (int) ma_param($db, 'rep_relances_equipe_heures', '24'));
+        $st = $db->prepare("SELECT * FROM rep_demandes WHERE statut IN ('a_traiter', 'en_cours') AND created_at >= ? ORDER BY id");
+        $st->execute([$depuis]);
+        $dejaEnvoye = $db->prepare("SELECT detail FROM rep_evenements WHERE demande_id = ? AND type = 'relance_equipe' AND date >= ?");
+        $base = ma_url_base($db);
+        $destAlerte = array_values(ma_liste_emails(ma_param($db, 'rep_relances_alerte_email', ma_param($db, 'rep_repli_email', 'cyril.mortier@airwco.com'))));
+        $rappels = [];
+        $alertes = [];
+        foreach ($st->fetchAll() as $dem) {
+            if (!empty($dem['rappel_prevu']) && strtotime((string) $dem['rappel_prevu']) > time()) {
+                continue;
+            }
+            $ref = ma_rep_derniere_action($db, $dem);
+            $h = ma_heures_ouvrees($ref);
+            $palier = min(3, (int) floor($h / $seuil));
+            if ($palier < 1) {
+                continue;
+            }
+            $dejaEnvoye->execute([(int) $dem['id'], $ref]);
+            $fait = 0;
+            foreach ($dejaEnvoye->fetchAll(PDO::FETCH_COLUMN) as $det) {
+                $fait = max($fait, (int) (json_decode((string) $det, true)['niveau'] ?? 0));
+            }
+            if ($fait >= $palier) {
+                continue;
+            }
+            $prise = $dem['statut'] === 'en_cours';
+            $etat = $prise ? 'prise en charge par ' . (trim((string) $dem['pris_par']) ?: 'l\'équipe') . ' mais pas encore traitée'
+                : 'pas encore prise en charge';
+            $heures = $palier * $seuil;
+            $ligne = ['id' => (int) $dem['id'], 'niveau' => $palier, 'heures' => round($h, 1), 'depuis' => $ref, 'etat' => $etat,
+                'service' => $dem['service'], 'societe' => $dem['societe'], 'chez' => $prise ? $dem['pris_par'] : $dem['destinataires'],
+                'recue' => $dem['created_at'], 'lien' => ma_rep_liens($db, $dem)['interne'] ?: $base];
+            if ($palier < 3) {
+                $ligne['a'] = ma_rep_relance_adresses($db, $dem);
+                $rappels[] = $ligne;
+            } else {
+                $alertes[] = $ligne;
+            }
+            if (!$envoyer) {
+                continue;
+            }
+            // Inscrite AVANT l'envoi : si l'envoi échoue, elle n'est pas renvoyée en boucle.
+            ma_rep_evenement($db, (int) $dem['id'], 'relance_equipe', 'Plateforme', 'plateforme',
+                ($palier < 3 ? 'Rappel à l\'équipe : ' : 'Alerte à l\'administrateur : ') . $etat . ', sans action depuis ' . $heures . ' h',
+                ['niveau' => $palier, 'heures' => round($h, 1), 'depuis' => $ref,
+                    'envois' => array_map(fn($a) => ['canal' => 'E-mail', 'a' => $a], $ligne['a'] ?? $destAlerte)]);
+        }
+        if (!$envoyer) {
+            return ['ok' => true, 'apercu' => true, 'depuis' => $depuis, 'rappels' => $rappels, 'alertes' => $alertes];
+        }
+
+        // Rappels à l'équipe : le mail habituel de la demande, avec un bandeau de rappel.
+        $echecs = 0;
+        foreach ($rappels as $r) {
+            $q = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+            $q->execute([$r['id']]);
+            $dem = $q->fetch();
+            $svc = ma_rep_service($dem['service']);
+            $heures = $r['niveau'] * $seuil;
+            $contenu = ma_rep_message($dem, [
+                'marque_libelle' => $dem['marque'] ?? '', 'nature_libelle' => '', 'service' => $svc, 'marque' => $dem['marque_norm'] ?? '',
+                'type_client' => $dem['type_client'] ?? 'direct', 'urgent' => $dem['priorite'] === 'URGENT' && $svc === 'sav',
+                'departement' => $dem['departement'], 'personnes' => array_map(fn($n) => ['nom' => $n], array_filter([(string) $r['chez']])),
+                'url' => $base, 'lien_interne' => $r['lien'], 'surtitre' => ($r['niveau'] === 1 ? 'Rappel' : 'Second rappel') . ' — ' . $heures . ' h',
+                'transfert' => 'Rappel : demande n° ' . $dem['id'] . ' reçue ' . ma_date_fr($dem['created_at']) . ', ' . $r['etat']
+                    . ' (aucune action depuis ' . $heures . ' h ouvrées). Sans action dans les ' . $seuil * (3 - $r['niveau'])
+                    . ' h, l\'administrateur sera prévenu.',
+            ]);
+            foreach ($r['a'] as $adresse) {
+                $envoi = ma_webhook_suivi($db, ['evenement' => 'rappel_equipe', 'demande_id' => $r['id'], 'mobile' => false, 'tel' => '',
+                    'email' => $adresse, 'objet' => 'RAPPEL ' . $heures . ' h — demande n° ' . $r['id'] . ' — ' . $contenu['objet'],
+                    'html' => $contenu['mail_html'], 'texte' => '', 'lien' => $r['lien']]);
+                if ($envoi !== 'envoyé') {
+                    $echecs++;
+                }
+            }
+        }
+
+        // Alerte à l'administrateur : un seul e-mail récapitulatif pour toutes les demandes à 72 h.
+        $envoiAlerte = '';
+        if ($alertes) {
+            $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+            $lignes = '';
+            foreach ($alertes as $a) {
+                $lignes .= '<tr><td style="padding:8px 10px;border-bottom:1px solid #e5e9ef;white-space:nowrap"><a href="' . $e($a['lien']) . '" style="color:#0f2f52;font-weight:700">n° '
+                    . $a['id'] . '</a></td><td style="padding:8px 10px;border-bottom:1px solid #e5e9ef">' . $e(ma_rep_service_libelle($a['service'])) . '<br>'
+                    . $e($a['societe'] ?: 'Société non précisée') . '</td><td style="padding:8px 10px;border-bottom:1px solid #e5e9ef">' . $e($a['chez'] ?: '—')
+                    . '<br><span style="color:#5b6675">' . $e($a['etat']) . '</span></td><td style="padding:8px 10px;border-bottom:1px solid #e5e9ef;white-space:nowrap">reçue '
+                    . $e(ma_date_fr($a['recue'])) . '<br><b>' . (int) floor($a['heures']) . ' h</b> sans action</td></tr>';
+            }
+            $html = ma_mail_gabarit([
+                'surtitre' => 'Alerte 72 h',
+                'bandeau' => count($alertes) . ' demande' . (count($alertes) > 1 ? 's' : '') . ' sans action de l\'équipe depuis 72 h ouvrées',
+                'titre' => 'Demandes à reprendre en main',
+                'corps' => '<p style="margin:0 0 12px">Aucune action de l\'équipe (prise en charge, note, rappel prévu, transfert…) sur ces demandes depuis 72 h ouvrées.</p>'
+                    . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;border-collapse:collapse">' . $lignes . '</table>',
+                'bouton' => ['Ouvrir la plateforme Multiair', $base],
+                'pied' => 'Plateforme Multiair — samedis et dimanches non comptés. Une action de l\'équipe sur la demande remet le compteur à zéro.',
+            ]);
+            foreach ($destAlerte as $adresse) {
+                $envoiAlerte = ma_webhook_suivi($db, ['evenement' => 'alerte_72h', 'demande_id' => 0, 'mobile' => false, 'tel' => '',
+                    'email' => $adresse, 'objet' => 'ALERTE 72 h — ' . count($alertes) . ' demande' . (count($alertes) > 1 ? 's' : '') . ' sans action ('
+                        . implode(', ', array_map(fn($a) => 'n° ' . $a['id'], $alertes)) . ')', 'html' => $html, 'texte' => '', 'lien' => $base]);
+                if ($envoiAlerte !== 'envoyé') {
+                    $echecs++;
+                }
+            }
+        }
+        if ($rappels || $alertes) {
+            $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+                ->execute(['plateforme', ma_now(), $echecs ? 'erreur' : 'ok', 'relances_equipe',
+                    count($rappels) . ' rappel(s) à l\'équipe, ' . count($alertes) . ' alerte(s) 72 h'
+                    . ($rappels ? ' — rappels : ' . implode(', ', array_map(fn($r) => 'n° ' . $r['id'] . ' (' . $r['niveau'] * $seuil . ' h)', $rappels)) : '')
+                    . ($alertes ? ' — alertes : ' . implode(', ', array_map(fn($a) => 'n° ' . $a['id'], $alertes)) : '')
+                    . ($echecs ? ' — ' . $echecs . ' envoi(s) en échec' : '')]);
+        }
+        return ['ok' => true, 'depuis' => $depuis, 'rappels' => $rappels, 'alertes' => $alertes, 'echecs' => $echecs];
+    } finally {
+        if ($verrou) {
+            flock($verrou, LOCK_UN);
+            fclose($verrou);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ Base clients et reconnaissance

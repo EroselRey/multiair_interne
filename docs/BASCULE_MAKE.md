@@ -286,6 +286,49 @@ Claire ADV v10 (29/10, demande de Cyril : « il faut le numéro de série et le 
   compte plus que dans « échéance de paiement / règlement / facture » ou « échéancier ». La 108 est à rattacher à la 107
   (même machine, même client) ; la compta peut l'ignorer.
 
+## Rattrapage approuvé le 29/10 (« ok pour les 3 »)
+
+- 15 relances CSO du 28/10 enregistrées (`POST cso/relances`, numéro = `relance_due`) : 9 devis en « Relance 3 »
+  (373, 375, 377, 378, 380, 381, 389, 391, 392), 6 en « Relance 2 » (517, 518, 519, 520, 522, 524) ; date d'envoi
+  inscrite : le 29/10 (l'API date la relance du jour) ;
+- « CSO — Relances devis » (9776471) : nouvelle version publiée (enregistrer la relance d'abord, n'envoyer l'e-mail que
+  si la plateforme répond `ok`, alerte si l'envoi échoue) et réactivée le 29/10 à 17 h 28 ; premier passage le 30/10 à
+  8 h ; 81 relances encore dues à ce moment-là (stock accumulé pendant l'arrêt), envoyées par lots de 15 toutes les
+  30 min (`cso_relances_par_passage`) ;
+- rejeu des 50 analyses CSO manquées, une par une dans l'ordre chronologique (voir plus haut).
+
+## Relances internes des demandes : 24 h / 48 h / alerte 72 h (correctif 43)
+
+Demande de Cyril : « des relances au bout de 24/48 h si personne n'a pris ou pas géré ; si au bout de 72 h toujours
+rien, un e-mail pour me prévenir afin que je puisse agir ».
+
+- `ma_rep_relances_equipe()` (lib.php), route `rep/relances_equipe` (clé API ou administrateur) : GET = aperçu (rien
+  n'est écrit ni envoyé), POST = passe réelle ;
+- scénario Make 10068036 « MULTIAIR — Relances internes des demandes » : POST toutes les heures, du lundi au vendredi,
+  de 8 h à 18 h — **créé inactif, à activer une fois le correctif 43 déposé** ;
+- demandes concernées : « à traiter » ou « en cours », arrivées depuis `rep_relances_equipe_depuis` (fixé au premier
+  passage à 7 jours avant, pour ne pas envoyer d'un coup l'ancien stock : 58 demandes ouvertes de plus de 7 jours le 29/10) ;
+- compteur : heures depuis la dernière action de l'équipe, samedis et dimanches non comptés. Remettent à zéro :
+  l'arrivée, une prise en charge, une réouverture, et tout événement fait par une personne depuis la plateforme ou le
+  lien interne (note, rappel prévu, transfert, modification, pièce ajoutée…). Ne remettent PAS à zéro : un appel ou une
+  relance du client, les étapes automatiques (Claire, Make, la plateforme). Un rappel client prévu plus tard suspend
+  les relances ; une fois passé, il compte comme dernière action ;
+- 24 h : rappel à la personne qui a pris la demande (son adresse dans l'équipe), sinon à ses destinataires
+  (`dest_to` + `dest_cc`), sinon à `rep_repli_email` ; 48 h : second rappel ; 72 h : un seul e-mail récapitulatif à
+  `rep_relances_alerte_email` (par défaut `rep_repli_email`, soit Cyril) avec le lien de chaque demande. Une demande
+  déjà à 48 h ou 72 h au premier passage ne reçoit que le palier atteint (pas trois e-mails d'un coup) ;
+- chaque relance est inscrite dans l'historique de la demande (« Relance interne », avec les destinataires) AVANT
+  l'envoi : un passage rejoué ou simultané ne renvoie rien (verrou `data/relances_equipe.lock` en plus) ; résumé de
+  chaque passage dans le journal (`relances_equipe`) ;
+- réglages (table `parametres`) : `rep_relances_equipe_actif` (0 = arrêt), `rep_relances_equipe_heures` (24 par défaut :
+  paliers 24/48/72), `rep_relances_alerte_email`, `rep_relances_equipe_depuis` ;
+- envoi par le webhook « Répondeur IA — Suivi client » (9885724), un appel par adresse (événements `rappel_equipe`,
+  `alerte_72h`) ;
+- testé sur une base de test : 25 h → rappel 24 h aux deux destinataires ; 50 h → rappel 48 h seul ; 80 h → alerte ;
+  prise en charge il y a 30 h → rappel à la personne ; note il y a 10 h → rien ; rappel prévu demain → rien ;
+  relance du client il y a 5 h → alerte quand même ; modification par Claire → rappel quand même ; second passage →
+  rien ; heures ouvrées vendredi 17 h → lundi 17 h = 24 h.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
