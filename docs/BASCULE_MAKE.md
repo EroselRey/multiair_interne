@@ -266,6 +266,18 @@ Claire ADV v9 (29/10, scénario 9209946) :
 - route 41 : si la plateforme répond sans `ok` (500, 503…), alerte à Cyril « E-mail non enregistré sur la plateforme »
   au lieu d'une réponse au client ; module 20 : en cas d'erreur réseau, même alerte (« Plateforme injoignable »).
 
+Claire ADV v10 (29/10, demande de Cyril : « il faut le numéro de série et le nom de la machine, mais pas les heures ») :
+- toute demande sur une machine que le client possède déjà (entretien, pièces, panne, réparation, intervention) passe
+  par la partie maintenance (sauf marque concurrente, toujours REGLE ABSOLUE 0) ;
+- panne, intervention, palier d'heures absent, modèle introuvable : modèle TRANSMISSION, envoyé au client en [AUTO]
+  (une escalade n'est jamais envoyée au client : seul l'accusé de réception de la plateforme partait) — « transmise dès
+  maintenant à notre service après-vente », avec marque, modèle et numéro de série repris ;
+- seules questions permises : le modèle et le numéro de série, s'ils manquent ET si aucune pièce jointe n'accompagne
+  l'e-mail (une photo de la plaque signalétique suffit) ; jamais les heures, la date de mise en service, le téléphone ;
+- Claire reçoit la liste des pièces jointes (noms et tailles) ; elle ne lit pas leur contenu, mais elles sont
+  enregistrées sur la demande (`rep_pieces`, hors logos de signature < 30 Ko) et jointes à l'e-mail envoyé à l'équipe ;
+- suffixe T non précisé : plan commun + mention que les lignes sécheur ne concernent que la version T (plus de question).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
