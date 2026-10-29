@@ -295,7 +295,12 @@ Claire ADV v10 (29/10, demande de Cyril : « il faut le numéro de série et le 
   si la plateforme répond `ok`, alerte si l'envoi échoue) et réactivée le 29/10 à 17 h 28 ; premier passage le 30/10 à
   8 h ; 81 relances encore dues à ce moment-là (stock accumulé pendant l'arrêt), envoyées par lots de 15 toutes les
   30 min (`cso_relances_par_passage`) ;
-- rejeu des 50 analyses CSO manquées, une par une dans l'ordre chronologique (voir plus haut).
+- rejeu des 50 analyses CSO manquées, une par une dans l'ordre chronologique (29/10, 17 h 30 → 17 h 45) : 50 SUCCESS,
+  aucune erreur au journal ; 37 devis nouveaux, 1 révision (PROFIX MARTINIQUE 987397788 v2, dans le bon ordre),
+  5 commandes reçues (OUTILS SERVICES 987391877 → Gagné, BIHR, BOURGES MACHINES A BOIS, AUTODISTRIBUTION 987393048,
+  CETIB DEXIS), 4 réponses de clients, 4 « reçu à nouveau sans changement » (déjà enregistrés : aucune fausse
+  révision), 2 réponses non rattachées (ANA INDUSTRIE, commande PO-YFF26-0786, sans n° d'offre — probablement le devis
+  987397965 ; BAP France « RE: DEVIS + DISPO »).
 
 ## Relances internes des demandes : 24 h / 48 h / alerte 72 h (correctif 43)
 
