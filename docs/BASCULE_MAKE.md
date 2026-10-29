@@ -207,7 +207,7 @@ Incident du 28/10 — base SQLite abîmée (« database disk image is malformed 
 - constat : à 8 h 00 min 50 s, pendant la salve de relances CSO (deux appels Make dans la même seconde), la base
   s'est abîmée ; ensuite toute écriture dans `executions_log` échoue, et chaque route qui journalise répond 500
   alors que son travail est fait (ex. transfert de la demande 103 : fait deux fois, erreur affichée) ; les relances
-  CSO de 8 h 30 et 9 h n'ont pas eu lieu (scénario probablement désactivé par Make après les erreurs) ;
+  CSO sont reparties à chaque passage de 8 h à 10 h 30 (voir plus bas) ;
 - toutes les tables restaient lisibles : export CSV complet fait le 28/10 avant toute intervention ;
 - correctif 41 (lib.php, api.php) :
   - `logEvent` ne fait plus jamais échouer l'opération (erreur seulement dans le journal PHP) ;
@@ -233,6 +233,38 @@ Incident du 28/10 — base SQLite abîmée (« database disk image is malformed 
   scénario désactivé le 28/10 vers 10 h 45, à réactiver après réparation de la base ;
 - testé sur une copie abîmée au même endroit (index du journal) : écriture concurrente mise en attente puis
   écrite dans la base neuve, aucune ligne perdue, integrity_check ok.
+
+Réparation du 29/10 et rattrapage :
+- base reconstruite le 29/10 à 14 h 12 (`POST base/reparer`) : integrity_check ok, 23 tables, 8 434 lignes, aucune
+  perte ; ancien fichier gardé (`data/sauvegardes/multiair_2026-10-29_141223_corrompue.sqlite`) ; le journal
+  s'écrit de nouveau ;
+- pendant la panne (28/10 8 h 00 → 29/10 14 h 12), Make a tourné normalement mais rien n'a été enregistré :
+  - Claire ADV : 3 e-mails du 29/10 (10 h 13, 13 h 41, 14 h 01) ; la réponse de Claire est quand même partie au client
+    (l'ancien filtre du module 5 laissait passer quand la plateforme ne répondait pas) ; l'e-mail de 10 h 13 (Rubix,
+    relance OUTILACIER) a été rejoué → demande 106 ; les deux autres sont rejoués après 16 h, une fois passées les
+    2 heures de garde (voir Claire v9) ;
+  - CSO analyse des devis (9775498) : 50 exécutions à rejouer (devis PDF et réponses de clients, celles à 4 opérations
+    et plus ; celles à 2 opérations sont les copies des relances, sans rien à enregistrer). À rejouer une par une,
+    dans l'ordre chronologique (pas d'unicité sur `n_offre` : deux rejeux simultanés du même devis créeraient un
+    doublon ou inverseraient les versions). Ne pas rejouer une exécution déjà enregistrée : si l'IA relit le PDF un
+    peu différemment, l'empreinte change et la plateforme crée une fausse révision (statut et relances remis à zéro).
+    Aucun événement CSO n'est au journal entre le 28/10 8 h 00 min 50 s et la réparation : aucune des 50 n'est passée ;
+  - relances CSO : les 15 devis relancés en double le 28/10 (ids 373, 375, 377, 378, 380, 381, 389, 391, 392, 517,
+    518, 519, 520, 522, 524) figurent toujours dans `relances_dues` ; enregistrer leur relance (`POST cso/relances`,
+    `numero` = `relance_due`) AVANT de réactiver 9776471, sinon ils la reçoivent une septième fois.
+- relances CSO, nouvelle version prête (non publiée) : chaque route enregistre d'abord la relance (`cso/relances`),
+  puis n'envoie l'e-mail que si la plateforme a répondu `ok` ; si l'e-mail échoue, alerte à Cyril (« relance enregistrée
+  mais e-mail non parti ») et on passe au devis suivant. Une panne de la plateforme ne peut plus produire de doublons.
+
+Claire ADV v9 (29/10, scénario 9209946) :
+- prompt : Claire ne demande plus au client de compléter sa demande (heures, date de mise en service, numéro de série,
+  téléphone, photos) ; sans palier d'heures, panne ou intervention → [ESCALADE] immédiate avec un mail sans question
+  qui reprend marque, modèle et numéro de série (« transmise dès maintenant à notre service après-vente ») ;
+- module 5 (réponse au client) : seulement si la plateforme a enregistré la demande (`envoyer_au_client` = true),
+  si c'est une création (pas `updated`) et si l'e-mail date de moins de 2 heures — un rejeu ne renvoie pas de
+  seconde réponse ;
+- route 41 : si la plateforme répond sans `ok` (500, 503…), alerte à Cyril « E-mail non enregistré sur la plateforme »
+  au lieu d'une réponse au client ; module 20 : en cas d'erreur réseau, même alerte (« Plateforme injoignable »).
 
 ## Reste à faire
 
