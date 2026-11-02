@@ -334,6 +334,18 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   relance du client il y a 5 h → alerte quand même ; modification par Claire → rappel quand même ; second passage →
   rien ; heures ouvrées vendredi 17 h → lundi 17 h = 24 h.
 
+## Lignes des devis CSO invisibles dans le panneau (correctif 44, 02/11)
+
+- constat de Cyril : « dans la partie CSO, je ne vois plus les produits du devis » ; les données sont intactes
+  (709 devis, tous avec leurs lignes : 2 117 lignes, versions concordantes) ;
+- cause : depuis le nouveau design du 29/09 (dca4515), le corps du panneau latéral est une colonne flex ; dès que le
+  panneau dépasse la hauteur de l'écran (toujours le cas pour un devis), les blocs qui défilent eux-mêmes
+  (`.tbl-wrap` du tableau des lignes, `pre.raw` des réponses du client) étaient écrasés à 2 px ;
+- correctif : `.drawer .db > * { flex-shrink: 0; }` (style.css) — le panneau défile en entier, chaque bloc garde sa
+  hauteur ; vérifié sur une copie locale avec les vraies données (tableau de 4 lignes de nouveau visible) ;
+- le correctif 44 reprend aussi le 43 (relances internes) : lib.php, api.php, assets/app.js, assets/style.css.
+- au passage : relances CSO depuis la réactivation (30/10) : 105 par jour ouvré (7 passages × 15), aucune en double.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
