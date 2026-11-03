@@ -310,7 +310,8 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - `ma_rep_relances_equipe()` (lib.php), route `rep/relances_equipe` (clé API ou administrateur) : GET = aperçu (rien
   n'est écrit ni envoyé), POST = passe réelle ;
 - scénario Make 10068036 « MULTIAIR — Relances internes des demandes » : POST toutes les heures, du lundi au vendredi,
-  de 8 h à 18 h — **créé inactif, à activer une fois le correctif 43 déposé** ;
+  de 8 h à 18 h — activé le 03/11 à 15 h 37 après dépôt du correctif 44 ; premier passage : 3 alertes 72 h
+  (demandes 106, 107, 108) en un seul e-mail, aucun rappel d'équipe ; passage suivant : rien en double ;
 - demandes concernées : « à traiter » ou « en cours », arrivées depuis `rep_relances_equipe_depuis` (fixé au premier
   passage à 7 jours avant, pour ne pas envoyer d'un coup l'ancien stock : 58 demandes ouvertes de plus de 7 jours le 29/10) ;
 - compteur : heures depuis la dernière action de l'équipe, samedis et dimanches non comptés. Remettent à zéro :
