@@ -346,6 +346,21 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - le correctif 44 reprend aussi le 43 (relances internes) : lib.php, api.php, assets/app.js, assets/style.css.
 - au passage : relances CSO depuis la réactivation (30/10) : 105 par jour ouvré (7 passages × 15), aucune en double.
 
+## Incident one.com du 03/11 (vérification anti-robot)
+
+- du 02/11 après 17 h 47 au 03/11 vers 13 h, one.com a renvoyé à tout appel automatique vers multiairfrance.store une
+  page « Please wait while we verify your request » (proof of work, HTTP 503, serveur Varnish) au lieu de la réponse
+  de la plateforme ; un navigateur la passe seul, Make non. Bug côté one.com, levé par leur support ;
+- effets : Claire ADV a reçu la page HTML comme réponse de `adv/demandes` ; Make l'a découpée sur les « ; » pour
+  l'e-mail à l'équipe (module 30, puis 31) → avertissement « Validation failed for 332 parameter(s). Invalid email
+  address in parameter 'to' », aucun e-mail parti ; l'alerte « E-mail non enregistré » (route 41) est bien partie ;
+  relances CSO : `relances_dues` illisible → aucun envoi ce matin-là (reprise le lendemain, sans doublon) ;
+- rattrapage le 03/11 à 15 h 35 : e-mail ADV de 11 h 47 (candidature spontanée, alternance BTS NDRC) → demande 109,
+  service RH, CV et lettre joints (pas de réponse automatique au candidat : garde des 2 h) ; 7 analyses CSO rejouées
+  dans l'ordre : 2 devis nouveaux (CAT OI, COFAQ), 3 réponses de clients (ACARA 63, RUBIX, RATP), 1 déjà enregistré
+  (DENEUX), 1 réponse non rattachée (Prolians Angers, demande de garantie SG Y 74 90373) ;
+- aucun autre scénario n'a appelé la plateforme pendant la coupure (répondeur, chatbot, WhatsApp, WCF : 0 exécution).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
