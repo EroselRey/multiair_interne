@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-02a';
+const MA_VERSION = '2026-11-04a';
 
 function ma_config(): array
 {
@@ -1330,6 +1330,11 @@ function ma_rep_marque(?string $marque, ?string $modele = null, ?array $marques 
                 }
             }
         }
+    }
+    // Gammes Mauguière à piston (ME 30, MT 50, MN, MPS, MF) : préfixe court suivi d'un nombre, sur le modèle
+    // seulement et quand aucune marque n'est dite (« Metabo » ou « Mecafer » ne doivent pas devenir Mauguière).
+    if ($m === '' && in_array('mauguiere', $codes, true) && preg_match('/(^|[^a-z0-9])(me|mt|mn|mps|mf)[ -]?\\d/', ma_plat($modele))) {
+        return 'mauguiere';
     }
     return $m === '' ? '' : 'autre';
 }
@@ -2679,7 +2684,22 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
 
 // ------------------------------------------------------------------ Chatbot du site : chaque lead est une demande
 
-/** Service d'une demande du chat : la catégorie donnée par Claire, sinon les mots de la demande. */
+/**
+ * Demande de documents d'une machine (notice, certificat, déclaration de conformité, documents
+ * réglementaires…) : c'est l'équipe équipement (commande / livraison) qui les fournit, pas la compta.
+ */
+function ma_demande_documents(string $texte): bool
+{
+    $t = str_replace(['’', '`'], "'", ma_plat($texte));
+    return (bool) preg_match("/\\b(notices?|mode d'emploi|manuels? d'utilisation|certificats?|declarations? (?:ce |ue )?(?:de )?conformite|conformite ce"
+        . "|documents? (?:reglementaires?|techniques?|constructeur|de conformite)|documentation|fiches? techniques?|dossier technique"
+        . "|proces[- ]verbal d'epreuve|pv d'epreuve)\\b/u", $t);
+}
+
+/**
+ * Service d'une demande du chat : la catégorie donnée par Claire, sinon les mots de la demande.
+ * Mots entiers seulement : « réglementaire » n'est pas « règlement », « savoir » n'est pas « SAV ».
+ */
 function ma_chat_service(array $l): string
 {
     $cat = ma_plat($l['categorie'] ?? null);
@@ -2691,14 +2711,19 @@ function ma_chat_service(array $l): string
     if (ma_est_rh($l)) {
         return 'RH';
     }
-    $t = ma_plat(($l['besoin_resume'] ?? '') . ' ' . ($l['statut'] ?? ''));
-    foreach (['FINANCE' => ['factur', 'reglement', 'paiement', 'compta', 'avoir', 'relance de paiement', 'impaye'],
-        'SAV' => ['panne', 'fuite', 'depann', 'intervention', 'ne demarre', 'alarme', 'reparation', 'probleme technique', 'entretien', 'maintenance', 'sav'],
-        'COMMERCIAL' => ['devis', 'prix', 'tarif', 'achat', 'commande', 'piece', 'compresseur', 'secheur', 'documentation', 'livraison']] as $svc => $mots) {
-        foreach ($mots as $m) {
-            if (str_contains($t, $m)) {
-                return $svc;
-            }
+    $t = str_replace(['’', '`'], "'", ma_plat(($l['besoin_resume'] ?? '') . ' ' . ($l['statut'] ?? '')));
+    if (ma_demande_documents($t)) {
+        return 'COMMERCIAL';
+    }
+    foreach ([
+        // Compta : factures, avoirs, paiements. « Avoir » seulement comme nom (« un avoir », « mon avoir », « demande d'avoir »).
+        'FINANCE' => "/\\b(factur\\w*|reglements?|paiements?|compta\\w*|relances? de paiement|impayes?|virements?|echeancier"
+            . "|(?:un|mon|son|notre|votre|leur|cet|l') ?avoir|avoirs|demandes? d'avoirs?)\\b/u",
+        'SAV' => "/\\b(pannes?|en panne|fuites?|depann\\w*|interventions?|ne demarre|alarmes?|repar\\w*|probleme technique|entretien|maintenance|sav)\\b/u",
+        'COMMERCIAL' => "/\\b(devis|prix|tarifs?|achats?|commandes?|pieces?|compresseurs?|secheurs?|documentation|livraisons?|colis)\\b/u",
+    ] as $svc => $motif) {
+        if (preg_match($motif, $t)) {
+            return $svc;
         }
     }
     return 'AUTRE';
@@ -2746,6 +2771,10 @@ function ma_chat_vers_demande(array $l): array
     $nature = in_array($nature, $natures, true) ? $nature : (['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? null);
     $ref = $propre($l['reference'] ?? null);
     $svc = ma_chat_service($l);
+    // Documents d'une machine (notice, certificat…) : équipe équipement, commande / livraison.
+    if ($svc === 'COMMERCIAL' && in_array($nature, [null, 'autre'], true) && ma_demande_documents((string) ($l['besoin_resume'] ?? ''))) {
+        $nature = 'commande_equipement';
+    }
     // Marque : celle de la machine concernée (SAV, pièces), sinon la marque vers laquelle le chat oriente.
     $marque = $propre($l['marque_materiel'] ?? null) ?? $propre($l['marque_orientee'] ?? ($l['marque'] ?? null));
     $besoin = $propre($l['besoin_resume'] ?? null);
@@ -3047,9 +3076,9 @@ function ma_email_vers_demande(PDO $db, array $a): array
         'societe' => $info['societe'], 'contact' => ma_email_nom($a['from_nom']), 'email' => $from, 'telephone' => $info['tel'],
         'marque' => $info['marque'], 'code_postal' => $info['code_postal'],
         'departement' => $info['code_postal'] ? ma_departement($info['code_postal']) : null,
-        'nature' => $svc === 'COMMERCIAL' ? (ma_plat($a['famille']) === 'maintenance'
+        'nature' => $svc === 'COMMERCIAL' ? (ma_demande_documents($sujet . ' ' . $corps) ? 'commande_equipement' : (ma_plat($a['famille']) === 'maintenance'
             || preg_match('/\b(pieces?|filtres?|kits?|clapets?|soupapes?|cartouches?|courroies?|separateurs?|huile|entretien|revision|maintenance)\b/u', ma_plat($sujet . ' ' . $corps))
-            ? 'devis_pieces' : 'devis_equipement') : null,
+            ? 'devis_pieces' : 'devis_equipement')) : null,
         'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
         'type_panne' => $svc === 'SAV' ? $extrait : null,
         'resume' => $resume,

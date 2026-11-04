@@ -362,6 +362,28 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   (DENEUX), 1 réponse non rattachée (Prolians Angers, demande de garantie SG Y 74 90373) ;
 - aucun autre scénario n'a appelé la plateforme pendant la coupure (répondeur, chatbot, WhatsApp, WCF : 0 exécution).
 
+## Routage des demandes du chat : documents et mots coupés (correctif 45, 04/11)
+
+- constat de Cyril : demande 110 (chat, Kiloutou, compresseur neuf ME30, « documents réglementaires manquants :
+  déclaration de conformité, notice ou certificat ») partie à la compta ; « la compta c'est facture, avoir ; les
+  documents (notice, certificat) vont à l'équipe équipement » ;
+- cause : `ma_chat_service` cherchait des morceaux de mots (`str_contains`) quand Claire classe la demande « autre » :
+  « réglementaires » contient « règlement », « savoir » contient « avoir », « sav » est dans « savoir ». Sur les 55
+  demandes du chat, 3 étaient parties à tort à la compta : 110 (Kiloutou), 77 (colis reçu « sans savoir » à qui il
+  est destiné), 45 (intervention avant un contrôle réglementaire) ;
+- correctif 45 (lib.php) :
+  - mots entiers seulement ; compta = facture, règlement, paiement, virement, impayé, échéancier, avoir comme nom
+    (« un / mon / votre / l'avoir », « avoirs », « demande d'avoir ») — « les avoir » (verbe) ne compte pas ;
+  - `ma_demande_documents()` : notice, mode d'emploi, certificat, déclaration (CE) de conformité, documents
+    réglementaires / techniques, documentation, fiche technique, dossier technique, PV d'épreuve → service commerce,
+    nature « Équipement : commande / livraison » (chat et e-mails) ;
+  - « colis » ajouté aux mots du commerce ;
+  - marque déduite du modèle : gammes Mauguière à piston ME, MT, MN, MPS, MF suivies d'un nombre (« ME30 », « MT 50 »),
+    seulement si aucune marque n'est dite (« Metabo ME30 » reste « autre marque ») ;
+- vérifié avec le vrai tableau de routage : Kiloutou ME30 → « Équipement : commande / livraison — Mauguière → AIM
+  commandes » (commandes.materiel@) ; notice d'un RLR → AIM commandes ; sans marque reconnaissable → repli commerce
+  (Stéphanie Leblanc) ; 12 cas types (facture, avoir, « savoir le prix », panne, notice, réglementation, RH) corrects.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
