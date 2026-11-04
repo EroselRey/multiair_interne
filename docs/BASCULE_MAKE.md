@@ -384,6 +384,29 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   commandes » (commandes.materiel@) ; notice d'un RLR → AIM commandes ; sans marque reconnaissable → repli commerce
   (Stéphanie Leblanc) ; 12 cas types (facture, avoir, « savoir le prix », panne, notice, réglementation, RH) corrects.
 
+## Documents de pièces et consigne du chatbot (correctif 46 + Claire chat, 04/11)
+
+- précision de Cyril : « si c'est notice pièces, vue éclatée, dans ce cas c'est pour les pièces » ;
+- correctif 46 (lib.php 2026-11-04b, remplace le 45 qui n'avait pas été mis en ligne) :
+  - `ma_demande_doc_pieces()` : vue éclatée, nomenclature, notice / liste / catalogue / plan de pièces (détachées,
+    de rechange) → nature « Devis pièces » (équipe pièces, CTS devis) ;
+  - `ma_nature_documents()` : documents de pièces → `devis_pieces`, autres documents d'une machine →
+    `commande_equipement` ; utilisée pour le chat (quand Claire n'a pas donné de nature précise) et pour les e-mails ;
+  - vérifié : vue éclatée RLR 50, notice pièces MAVD 151, pièces détachées ME30, nomenclature d'un sécheur → CTS
+    devis ; notice d'utilisation, certificat CE → AIM commandes ; « kit 4000 h » et « devis avec fiche technique »
+    gardent leur routage habituel ;
+- question de Cyril : « c'est pas l'agent Make qui détermine ? » — si : c'est l'agent du chatbot (scénario 9295374)
+  qui choisit la catégorie et la nature. Sa consigne disait « `autre` : documentation, question générale », donc il
+  laissait la plateforme deviner, et la plateforme se trompait (correctif 45/46). Consigne corrigée le 04/11 :
+  - documents d'une machine (notice d'utilisation, certificat, déclaration de conformité, documents réglementaires,
+    fiche technique) → catégorie `equipement`, nature `commande_equipement` ;
+  - documents de pièces (vue éclatée, nomenclature, notice ou liste de pièces détachées) → catégorie `pieces`,
+    nature `devis_pieces` ;
+  - « un document n'est jamais `finance` » (règle de priorité 3) ; Claire demande aussi marque et modèle pour un
+    document ;
+  - seule la consigne a changé (blueprint relu après envoi : identique au fichier, scénario toujours actif) ;
+- la plateforme garde son filet de sécurité si l'agent se trompe ou répond « autre ».
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-04a';
+const MA_VERSION = '2026-11-04b';
 
 function ma_config(): array
 {
@@ -2687,13 +2687,30 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
 /**
  * Demande de documents d'une machine (notice, certificat, déclaration de conformité, documents
  * réglementaires…) : c'est l'équipe équipement (commande / livraison) qui les fournit, pas la compta.
+ * Les documents de pièces (vue éclatée, nomenclature, notice ou liste de pièces) en font partie,
+ * mais vont à l'équipe pièces : voir ma_demande_doc_pieces().
  */
 function ma_demande_documents(string $texte): bool
 {
     $t = str_replace(['’', '`'], "'", ma_plat($texte));
-    return (bool) preg_match("/\\b(notices?|mode d'emploi|manuels? d'utilisation|certificats?|declarations? (?:ce |ue )?(?:de )?conformite|conformite ce"
+    return ma_demande_doc_pieces($t)
+        || (bool) preg_match("/\\b(notices?|mode d'emploi|manuels? d'utilisation|certificats?|declarations? (?:ce |ue )?(?:de )?conformite|conformite ce"
         . "|documents? (?:reglementaires?|techniques?|constructeur|de conformite)|documentation|fiches? techniques?|dossier technique"
         . "|proces[- ]verbal d'epreuve|pv d'epreuve)\\b/u", $t);
+}
+
+/** Documents de pièces : vue éclatée, nomenclature, notice / catalogue / liste / plan de pièces → équipe pièces. */
+function ma_demande_doc_pieces(string $texte): bool
+{
+    $t = str_replace(['’', '`'], "'", ma_plat($texte));
+    return (bool) preg_match("/\\b(vues? eclatees?|eclates? (?:des |de |du )?pieces?|nomenclatures?"
+        . "|(?:notices?|catalogues?|listes?|liste|documentation|plans?|schemas?|dessins?)(?: des| de| du)? pieces?(?: detachees| de rechange)?)\\b/u", $t);
+}
+
+/** Nature d'une demande de documents : pièces (vue éclatée, nomenclature…) ou équipement (notice, certificat…). */
+function ma_nature_documents(string $texte): ?string
+{
+    return ma_demande_doc_pieces($texte) ? 'devis_pieces' : (ma_demande_documents($texte) ? 'commande_equipement' : null);
 }
 
 /**
@@ -2768,13 +2785,13 @@ function ma_chat_vers_demande(array $l): array
     $cp = preg_match('/\b(\d{5})\b/', (string) ($l['code_postal'] ?? ''), $m) ? $m[1] : null;
     $nature = ma_plat($l['nature'] ?? null);
     $natures = ['devis_equipement', 'commande_equipement', 'devis_pieces', 'commande_pieces', 'autre'];
-    $nature = in_array($nature, $natures, true) ? $nature : (['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? null);
     $ref = $propre($l['reference'] ?? null);
     $svc = ma_chat_service($l);
-    // Documents d'une machine (notice, certificat…) : équipe équipement, commande / livraison.
-    if ($svc === 'COMMERCIAL' && in_array($nature, [null, 'autre'], true) && ma_demande_documents((string) ($l['besoin_resume'] ?? ''))) {
-        $nature = 'commande_equipement';
-    }
+    // Nature dite par Claire, sinon demande de documents (pièces : vue éclatée… ; équipement : notice,
+    // certificat…), sinon déduite de la catégorie.
+    $docs = $svc === 'COMMERCIAL' ? ma_nature_documents((string) ($l['besoin_resume'] ?? '')) : null;
+    $nature = in_array($nature, $natures, true) && $nature !== 'autre' ? $nature
+        : ($docs ?? (['equipement' => 'devis_equipement', 'pieces' => 'devis_pieces'][$cat] ?? (in_array($nature, $natures, true) ? $nature : null)));
     // Marque : celle de la machine concernée (SAV, pièces), sinon la marque vers laquelle le chat oriente.
     $marque = $propre($l['marque_materiel'] ?? null) ?? $propre($l['marque_orientee'] ?? ($l['marque'] ?? null));
     $besoin = $propre($l['besoin_resume'] ?? null);
@@ -3076,7 +3093,7 @@ function ma_email_vers_demande(PDO $db, array $a): array
         'societe' => $info['societe'], 'contact' => ma_email_nom($a['from_nom']), 'email' => $from, 'telephone' => $info['tel'],
         'marque' => $info['marque'], 'code_postal' => $info['code_postal'],
         'departement' => $info['code_postal'] ? ma_departement($info['code_postal']) : null,
-        'nature' => $svc === 'COMMERCIAL' ? (ma_demande_documents($sujet . ' ' . $corps) ? 'commande_equipement' : (ma_plat($a['famille']) === 'maintenance'
+        'nature' => $svc === 'COMMERCIAL' ? (ma_nature_documents($sujet . ' ' . $corps) ?? (ma_plat($a['famille']) === 'maintenance'
             || preg_match('/\b(pieces?|filtres?|kits?|clapets?|soupapes?|cartouches?|courroies?|separateurs?|huile|entretien|revision|maintenance)\b/u', ma_plat($sujet . ' ' . $corps))
             ? 'devis_pieces' : 'devis_equipement')) : null,
         'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
