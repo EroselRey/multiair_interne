@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-05c';
+const MA_VERSION = '2026-11-05d';
 
 function ma_config(): array
 {
@@ -514,6 +514,21 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         $pdo->exec("DELETE FROM rep_contacts WHERE role = 'commercial' AND nom = 'Commercial (à définir)'");
         ma_rep_grilles_enregistrer($pdo, ma_rep_grilles_lire($pdo));
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_grilles', ?)")->execute([ma_now()]);
+    }
+
+    // Schémas électriques → boîte Devis acquisitions (décision de Cyril, 05/11) : une fois, ensuite le tableau Commerce décide.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_routage_schemas'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('rep_regles', $present, true) && in_array('rep_contacts', $present, true)) {
+        $g = ma_rep_grilles_lire($pdo);
+        if (empty($g['schemas'])) {
+            $q = $pdo->query("SELECT id FROM rep_contacts WHERE actif = 1 AND (lower(email) = 'devis.acquisitions@multiairfrance.fr' OR nom = 'Devis acquisitions') ORDER BY id LIMIT 1");
+            if ($acqId = (int) $q->fetchColumn()) {
+                $g['schemas'] = $acqId;
+                ma_rep_grilles_enregistrer($pdo, $g);
+            }
+        }
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_schemas', ?)")->execute([ma_now()]);
     }
 
     // L'équipe de la plateforme (accès, responsables de service) : posée une seule fois.
@@ -1306,6 +1321,7 @@ function ma_rep_listes(PDO $db): array
                 'mots' => 'commande+compresseur, livraison+compresseur, suivi+compresseur, commande+secheur, commande+equipement, livraison+equipement'],
             ['code' => 'devis_equipement', 'libelle' => 'Devis équipement neuf',
                 'mots' => 'devis+compresseur, devis+secheur, devis+equipement, prix+compresseur, devis+materiel'],
+            ['code' => 'schema_electrique', 'libelle' => 'Schéma électrique', 'mots' => 'schema+electrique, plan+electrique, schema+cablage'],
             ['code' => 'autre', 'libelle' => 'Autre demande commerciale', 'mots' => ''],
         ],
         // Chaque rôle appartient à un seul service : les équipes finance, SAV et commerce sont distinctes.
@@ -1324,6 +1340,11 @@ function ma_rep_listes(PDO $db): array
         $v = json_decode((string) ($params['rep_liste_' . $cle] ?? ''), true);
         $v = is_array($v) ? array_values(array_filter($v, fn($x) => is_array($x) && trim((string) ($x['code'] ?? '')) !== '')) : [];
         $out[$cle] = $v ?: $def;
+    }
+    // Nature ajoutée le 05/11 : présente même dans une liste déjà personnalisée.
+    if (!in_array('schema_electrique', array_map(fn($x) => ma_plat($x['code']), $out['natures']), true)) {
+        $schema = array_values(array_filter($defauts['natures'], fn($x) => $x['code'] === 'schema_electrique'))[0];
+        array_splice($out['natures'], max(0, count($out['natures']) - 1), 0, [$schema]);
     }
     return $out;
 }
@@ -1369,6 +1390,11 @@ function ma_rep_marque(?string $marque, ?string $modele = null, ?array $marques 
 function ma_rep_nature(array $d, array $natures): string
 {
     $codes = array_map(fn($x) => ma_plat($x['code']), $natures);
+    // Un schéma électrique part à sa boîte, même si Claire a classé la demande en pièces ou en équipement.
+    if (in_array('schema_electrique', $codes, true) && ma_demande_schema_electrique(implode(' ', [$d['besoin_commercial'] ?? '',
+        $d['besoin_resume'] ?? '', $d['resume'] ?? '', $d['message_client'] ?? '']))) {
+        return 'schema_electrique';
+    }
     $dit = ma_plat($d['nature'] ?? $d['type_demande'] ?? null);
     if ($dit !== '' && in_array($dit, $codes, true)) {
         return $dit;
@@ -1734,7 +1760,9 @@ function ma_rep_grilles_lire(PDO $db): array
         fn($r) => trim((string) $r['natures']) === '' && trim((string) $r['marques']) !== '');
     $reste = $premiere(['service' => 'commercial', 'marque' => 'autre', 'nature' => 'autre'],
         fn($r) => trim((string) $r['natures']) === '' && trim((string) $r['marques']) === '');
-    return ['sav' => $sav, 'commerce' => $commerce, 'acquisitions' => $idDe($acq), 'reste' => $idDe($reste)];
+    $schemas = $premiere(['service' => 'commercial', 'marque' => 'autre', 'nature' => 'schema_electrique'],
+        fn($r) => ma_csv($r['natures']) === ['schema_electrique'] && trim((string) $r['marques']) === '');
+    return ['sav' => $sav, 'commerce' => $commerce, 'acquisitions' => $idDe($acq), 'schemas' => $idDe($schemas), 'reste' => $idDe($reste)];
 }
 
 /** Reconstruit les règles à partir des tableaux. Une case vide renvoie à l'adresse de repli. */
@@ -1765,6 +1793,9 @@ function ma_rep_grilles_enregistrer(PDO $db, array $g): void
     $boite = fn($id) => ($id && isset($contacts[(int) $id])) ? (int) $id : null;
     if ($id = $boite($g['acquisitions'] ?? null)) {
         $ins->execute([95, 'Acquisitions OVITY / FITEC → ' . $contacts[$id], 'commercial', 'ovity,fitec', null, null, 'contacts', null, (string) $id, null]);
+    }
+    if ($id = $boite($g['schemas'] ?? null)) {
+        $ins->execute([96, 'Schéma électrique (toutes marques) → ' . $contacts[$id], 'commercial', null, null, 'schema_electrique', 'contacts', null, (string) $id, null]);
     }
     $ordre = 100;
     foreach ($axes['com_natures'] as $n) {
@@ -2834,7 +2865,7 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
 function ma_demande_documents(string $texte): bool
 {
     $t = str_replace(['’', '`'], "'", ma_plat($texte));
-    return ma_demande_doc_pieces($t)
+    return ma_demande_doc_pieces($t) || ma_demande_schema_electrique($t)
         || (bool) preg_match("/\\b(notices?|mode d'emploi|manuels? d'utilisation|certificats?|declarations? (?:ce |ue )?(?:de )?conformite|conformite ce"
         . "|documents? (?:reglementaires?|techniques?|constructeur|de conformite)|documentation|fiches? techniques?|dossier technique"
         . "|proces[- ]verbal d'epreuve|pv d'epreuve)\\b/u", $t);
@@ -2848,9 +2879,19 @@ function ma_demande_doc_pieces(string $texte): bool
         . "|(?:notices?|catalogues?|listes?|liste|documentation|plans?|schemas?|dessins?)(?: des| de| du)? pieces?(?: detachees| de rechange)?)\\b/u", $t);
 }
 
-/** Nature d'une demande de documents : pièces (vue éclatée, nomenclature…) ou équipement (notice, certificat…). */
+/** Schéma électrique (ou de câblage, plan électrique) d'une machine → boîte Devis acquisitions (Cyril, 05/11). */
+function ma_demande_schema_electrique(string $texte): bool
+{
+    return (bool) preg_match('/\b(schemas? (electriques?|elec|de cablage|de branchement electrique)|plans? electriques?|cablage electrique)\b/u',
+        str_replace(['’', '`'], "'", ma_plat($texte)));
+}
+
+/** Nature d'une demande de documents : schéma électrique, pièces (vue éclatée, nomenclature…) ou équipement (notice, certificat…). */
 function ma_nature_documents(string $texte): ?string
 {
+    if (ma_demande_schema_electrique($texte)) {
+        return 'schema_electrique';
+    }
     return ma_demande_doc_pieces($texte) ? 'devis_pieces' : (ma_demande_documents($texte) ? 'commande_equipement' : null);
 }
 
@@ -3123,7 +3164,7 @@ function ma_email_service(string $sujet, string $corps, ?string $famille): strin
             return 'FINANCE';
         }
     }
-    if (in_array(ma_plat($famille), ['equipements', 'maintenance'], true)
+    if (in_array(ma_plat($famille), ['equipements', 'maintenance'], true) || ma_demande_documents($t)
         || preg_match('/\b(devis|prix|tarifs?|cotation|commande|pieces?|kit|compresseurs?|secheurs?|filtres?)\b/u', $t)) {
         return 'COMMERCIAL';
     }

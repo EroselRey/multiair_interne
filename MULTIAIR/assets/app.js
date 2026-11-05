@@ -1343,6 +1343,7 @@
           ${NATURES_COM.map(([n, t]) => `<tr style="cursor:default"><td><b>${h(t)}</b></td>${MARQUES_COM.map(([m]) =>
             `<td>${choixBoite(`com.${n}.${m}`, grilles.commerce[n]?.[m])}</td>`).join('')}</tr>`).join('')}
           <tr style="cursor:default"><td><b>OVITY / FITEC (acquisitions)</b></td><td colspan="${MARQUES_COM.length}">${choixBoite('acquisitions', grilles.acquisitions)}</td></tr>
+          <tr style="cursor:default"><td><b>Schéma électrique</b><br><small class="hint">toutes marques</small></td><td colspan="${MARQUES_COM.length}">${choixBoite('schemas', grilles.schemas)}</td></tr>
           <tr style="cursor:default"><td><b>Toute autre demande commerciale</b></td><td colspan="${MARQUES_COM.length}">${choixBoite('reste', grilles.reste)}</td></tr>
           </tbody></table></div>
           <div style="margin-top:10px"><button class="btn primary" id="saveCom">Enregistrer le tableau Commerce</button></div>`)}`,
@@ -1355,7 +1356,7 @@
             <label data-pour="sav">Client ${sel('type_client', [['direct', 'Client direct'], ['distributeur', 'Distributeur']], 'direct')}</label>
             <label data-pour="sav">Urgence ${sel('urgence', [['false', 'Non urgent'], ['true', 'URGENT — production arrêtée']], 'false')}</label>
             <label data-pour="sav">Code postal du site <input name="code_postal" placeholder="ex. 69003" inputmode="numeric"></label>
-            <label data-pour="commercial">Demande ${sel('nature', NATURES_COM, 'commande_pieces')}</label>
+            <label data-pour="commercial">Demande ${sel('nature', [...NATURES_COM, ['schema_electrique', 'Schéma électrique']], 'commande_pieces')}</label>
           </div>
           <div style="margin-top:10px"><button class="btn primary" id="simGo">Qui reçoit ?</button></div>
           <div class="route-res" id="simRes"></div>`)}
@@ -1403,7 +1404,7 @@
       const out = JSON.parse(JSON.stringify(grilles));
       MARQUES_SAV.forEach(([m]) => ['direct', 'distributeur'].forEach((cl) => { const v = val(`sav.${m}.${cl}`); if (v !== null) (out.sav[m] = out.sav[m] || {})[cl] = v; }));
       NATURES_COM.forEach(([n]) => MARQUES_COM.forEach(([m]) => { const v = val(`com.${n}.${m}`); if (v !== null) (out.commerce[n] = out.commerce[n] || {})[m] = v ? Number(v) : null; }));
-      ['acquisitions', 'reste'].forEach((k) => { const v = val(k); if (v !== null) out[k] = v ? Number(v) : null; });
+      ['acquisitions', 'schemas', 'reste'].forEach((k) => { const v = val(k); if (v !== null) out[k] = v ? Number(v) : null; });
       return out;
     };
     const saveGrilles = async (msg) => { await api('rep/grilles', {method: 'POST', body: lireGrilles()}); toast(msg); recharger(); };

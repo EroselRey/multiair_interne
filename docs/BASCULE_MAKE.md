@@ -480,6 +480,25 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   compresseurs avec « unsubscribe ») sont reconnus ; aucun vrai client ;
 - demande 113 transférée à Cyril le 05/11 (transfert de la plateforme, historique tenu, plus de SMS).
 
+## Schémas électriques → Devis acquisitions (correctif 50, 05/11)
+
+- décision de Cyril : « le schéma électrique : devis acquisition » (exemple : demande 111, BTB industrie, schéma
+  électrique d'un PXR55A, partie à CTS devis) ;
+- nouvelle nature « Schéma électrique » (`schema_electrique`) : schéma électrique, schéma de câblage, plan
+  électrique, câblage électrique (`ma_demande_schema_electrique()`) ; elle passe avant la nature donnée par Claire
+  (le chatbot avait classé la 111 en « pièces ») ; « schéma des pièces » reste aux pièces ; une panne reste au SAV ;
+  ajoutée même si la liste des natures a été personnalisée ;
+- tableau Commerce (« Qui reçoit quoi ») : ligne « Schéma électrique — toutes marques », comme la ligne OVITY / FITEC ;
+  règle n° 96 ; le testeur propose aussi cette nature ;
+- mise en place unique au premier chargement après dépôt (paramètre `rep_routage_schemas`) : la ligne est réglée
+  sur la boîte Devis acquisitions ; vérifié sur les 26 règles de production : aucune ne change, une seule ajoutée ;
+  ensuite, c'est le tableau qui décide (modifiable par Cyril) ;
+- e-mails : une demande de document (notice, certificat, schéma…) est une demande commerciale si ce n'est ni une
+  panne ni de la compta ;
+- testé : 111, plan électrique Mauguière, schéma de câblage → Devis acquisitions ; notice → AIM commandes, vue
+  éclatée et schéma des pièces → CTS devis, devis compresseur → Devis matériel neuf, panne + schéma → RSO ;
+- demande 111 transférée à Devis acquisitions le 05/11 (elle était encore « à traiter » chez CTS devis).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
