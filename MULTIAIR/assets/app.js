@@ -562,10 +562,10 @@
     recue: ['Réception', 'inbox'], transmise: ['Transmission', 'envoi'], client_prevenu: ['Message au client', 'envoi'],
     prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
     rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], relance: ['Relance du client', 'retour'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
-    piece: ['Pièce jointe', 'note'], relance_equipe: ['Relance interne', 'retour'],
+    piece: ['Pièce jointe', 'note'], relance_equipe: ['Relance interne', 'retour'], reponse: ['Réponse au client', 'email'],
   };
   const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
-  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte', 'relance_equipe'].includes(t) ? 'envois' : (['message_client', 'reponse_claire'].includes(t) ? 'conversation' : 'equipe'));
+  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte', 'relance_equipe'].includes(t) ? 'envois' : (['message_client', 'reponse_claire', 'reponse'].includes(t) ? 'conversation' : 'equipe'));
   const vueHist = {f: 'tout'};
 
   function historiqueHtml(ev) {
@@ -587,6 +587,29 @@
           <small>${h(jourFr(e.date))}${e.qui ? ' · ' + h(e.qui) : ''}${e.via === 'lien_equipe' ? ' · depuis le lien reçu' : ''}${e.reconstitue ? ' · reconstitué' : ''}</small>
           ${extra}${texte}</span></li>`;
       }).join('') : '<li class="hint">Rien dans cette catégorie.</li>'}</ol>`;
+  }
+
+  // Répondre au client par e-mail : part de l'adresse générique, avec soi-même en copie.
+  function repondre(d) {
+    const copie = moi.email ? h(moi.email) : 'votre adresse';
+    openDrawer('Répondre à ' + (d.contact || d.societe || 'client') + ' — demande n° ' + d.id, `
+      <p class="hint" style="margin:0">Envoyé à <b>${h(d.email)}</b> depuis l'adresse du service clients, avec ${copie} en copie.
+        L'objet garde le n° de la demande : si le client répond, sa réponse revient ici et vous est transmise.</p>
+      <label class="field"><span>Votre réponse</span><textarea name="message" class="inp" rows="10" placeholder="Bonjour${d.contact ? ' ' + h(String(d.contact).split(' ')[0]) : ''},&#10;&#10;…"></textarea></label>
+      <p class="hint" style="margin:0">Votre nom et votre fonction sont ajoutés en signature, avec le standard. Le message du client est cité en dessous.</p>`,
+      '<button class="btn primary" id="repOk">Envoyer la réponse</button>');
+    const zone = $('#drawerBody [name=message]');
+    zone.focus();
+    $('#repOk').onclick = async () => {
+      const message = zone.value.trim();
+      if (!message) return toast('Écrivez votre réponse', true);
+      $('#repOk').disabled = true;
+      try {
+        const r = await api('rep/demandes/' + d.id + '/repondre', {method: 'POST', body: {message}});
+        closeDrawer(); toast('Réponse envoyée' + (r.copie ? ' — copie à ' + r.copie : '')); refreshBadges();
+        show('demande', d.id, false);
+      } catch (e) { toast(e.message, true); $('#repOk').disabled = false; }
+    };
   }
 
   // Transférer une demande à une personne, une boîte partagée ou un responsable de service.
@@ -678,6 +701,7 @@
          <button class="btn big" data-act="rappel">${ic('agenda')}${d.rappel_prevu ? 'Changer le rappel' : 'Planifier un rappel'}</button>
          <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>
          <button class="btn big" data-act="transferer">${ic('envoi')}Transférer</button>`;
+    const boutonRepondre = d.email ? `<button class="btn big" data-act="repondre">${ic('email')}Répondre au client</button>` : '';
     main.innerHTML = `
       <div class="crumb"><a href="#demandes" data-retour>Demandes</a> › n° ${d.id}</div>
       <div class="dtitle"><h1>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</h1>
@@ -685,7 +709,7 @@
           <span class="pill">${ic(canal, 's')}Reçue ${h({telephone: 'par téléphone', whatsapp: 'sur WhatsApp', chat: 'par le chat du site', email: 'par e-mail'}[canal])}${h(via)}</span>
           <span class="hint">${h(jourFr(d.created_at))}</span></div></div>
       ${urgent ? '<div class="msg err" style="margin-bottom:16px"><b>Urgent — production arrêtée.</b> Personne n\'a encore pris cette demande en charge.</div>' : ''}
-      <section class="actions" aria-label="Actions">${actions}
+      <section class="actions" aria-label="Actions">${actions}${boutonRepondre}
         <span class="note">Chaque action prévient le client ${['chat', 'email'].includes(canal) ? 'par e-mail' : 'par WhatsApp et e-mail'}.</span>
         <div class="rappel-form" id="rappelForm" hidden>
           <label for="rappelDate"><b>Rappel prévu le</b></label>
@@ -752,6 +776,7 @@
       if (a === 'rouvrir') return act({statut: 'en_cours'}, 'Demande rouverte');
       if (a === 'rappel') { $('#rappelForm').hidden = false; $('#rappelDate').focus(); }
       if (a === 'transferer') transferer(d);
+      if (a === 'repondre') repondre(d);
     });
     $('#rappelNon') && ($('#rappelNon').onclick = () => { $('#rappelForm').hidden = true; });
     $('#rappelOk') && ($('#rappelOk').onclick = async () => {

@@ -435,6 +435,35 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   - testé sur la copie locale : 17 cas de détection, rebond ignoré, vrai client inchangé, plafond appliqué à partir
     du 4e accusé.
 
+## Répondre au client depuis la plateforme (correctif 48, 05/11)
+
+- demande de Cyril : « pouvoir répondre directement depuis la plateforme pour gagner du temps ; ça répond depuis
+  l'adresse e-mail générique, et l'e-mail de la personne qui répond en copie » ;
+- page d'une demande : bouton « Répondre au client » (si la demande a une adresse e-mail), panneau avec le texte ;
+- `ma_rep_repondre_client()` + route `POST rep/demandes/{id}/repondre` (compte connecté obligatoire, mêmes droits que
+  les autres actions) :
+  - envoi par le scénario Make « Répondeur IA — Suivi client » (9885724), donc depuis l'adresse générique
+    (compte d'envoi service.clients@), la personne connectée en copie ;
+  - objet « Re: <objet de l'e-mail d'origine> — demande n° X » (sinon « Votre demande n° X — Multiair France »),
+    dans le fil de l'e-mail d'origine (In-Reply-To / References) ;
+  - signature : nom, fonction, standard — jamais de numéro personnel ; message du client cité en dessous ;
+  - historique : événement « Réponse au client » (texte, destinataires, copie) ; une demande « à traiter » passe
+    « prise en charge » par la personne, sans second e-mail au client ; compte comme action pour les relances
+    internes 24 h / 48 h ;
+  - refus : pas d'adresse, adresse système / « ne pas répondre », envoi Make en échec (message à l'écran) ;
+- réponse du client : l'objet garde « demande n° X », l'e-mail revient sur la même demande :
+  - nouveau mode « reponse » de `ma_rep_relancer()` dès que l'équipe a déjà répondu depuis la plateforme :
+    événement « Message du client » avec son texte (sans la citation), e-mail « RÉPONSE DU CLIENT — demande n° X »
+    à la personne qui suit la demande et aux destinataires, pas de SMS, pas de « toujours en cours » au client,
+    pas de réouverture automatique d'une demande traitée (l'e-mail le signale), compteur de relances inchangé ;
+  - Claire ADV ne répond pas et n'escalade pas (`envoyer_au_client` vide, `ignore = conversation`), l'e-mail est
+    rangé « traité » dans l'onglet E-mails ;
+- Make 9885724 : copie (`cc`, liste séparée par des virgules), In-Reply-To et References ajoutés au module
+  « E-mail au client » ; vides pour les autres envois, qui ne changent pas ;
+- testé sur la copie locale avec un faux webhook : e-mail client → réponse de Cyril (objet, copie, fil, prise en
+  charge) → réponse du client (rattachée, Claire muette, aucun e-mail au client, équipe prévenue) ;
+- pas encore sur la page reçue par lien (boîtes partagées sans compte) : à ajouter si besoin.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

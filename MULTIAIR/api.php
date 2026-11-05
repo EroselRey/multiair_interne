@@ -539,6 +539,20 @@ try {
                     if ($portee !== null && $dem['service'] !== $portee) {
                         fail('Cette demande relève d\'un autre service', 403);
                     }
+                    if ($method === 'POST' && ($parts[3] ?? null) === 'repondre') {
+                        // Réponse écrite au client : part de l'adresse générique, la personne en copie.
+                        if (!$user || trim((string) ($user['nom'] ?? '')) === '') {
+                            fail('Connectez-vous avec votre compte pour répondre au client', 403);
+                        }
+                        try {
+                            $r = ma_rep_repondre_client($db, $dem, $user, (string) ($body['message'] ?? ''));
+                        } catch (InvalidArgumentException $e) {
+                            fail($e->getMessage());
+                        } catch (RuntimeException $e) {
+                            fail($e->getMessage(), 502);
+                        }
+                        out(['ok' => true, 'demande' => $r['demande'], 'objet' => $r['objet'], 'copie' => $r['copie']]);
+                    }
                     if ($method === 'POST' && ($parts[3] ?? null) === 'transferer') {
                         $libre = trim((string) ($body['email'] ?? ''));
                         if ($libre !== '') {
@@ -1246,6 +1260,12 @@ try {
                             logEvent($db, 'adv', 'erreur', 'demande_email', 'E-mail ' . $id . ' : demande non créée — ' . $e->getMessage(), null);
                         }
                     }
+                    if (($ticket['relance'] ?? '') === 'reponse') {
+                        // Réponse du client à un e-mail de l'équipe : pas de réponse de Claire, l'e-mail est rangé.
+                        $d['statut_suivi'] = 'traite';
+                        update($db, 'adv_demandes', $id, ['statut_suivi' => 'traite', 'envoye_at' => null,
+                            'commentaire' => 'Réponse du client à l\'équipe : rattachée à la demande n° ' . $ticket['id'] . ' et transmise à la personne qui la suit']);
+                    }
                     $ligneTicket = $ticket ? "Votre demande porte le n° " . $ticket['id'] . ". Suivez-la ici : " . ($ticket['liens']['client'] ?? '') : '';
                     $dem = $ticket['demande'] ?? null;
                     $rtDem = $ticket['rt'] ?? null;
@@ -1256,7 +1276,10 @@ try {
                         'equipe_html' => $rtDem['mail_html'] ?? '', 'equipe_sms' => ($dem['service'] ?? '') === 'SAV' ? ($rtDem['sms'] ?? '') : '',
                         'equipe_sms_texte' => $rtDem['sms_texte'] ?? '',
                         // null pour un rebond : ni réponse au client, ni e-mail d'escalade côté Make.
-                        'envoyer_au_client' => $rebond ? null : $tag === 'AUTO', 'ignore' => $rebond ? 'rebond' : null, 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
+                        // Rebond, ou réponse du client à un e-mail de l'équipe : Claire ne répond pas et n'escalade pas
+                        // (la personne qui suit la demande reçoit la réponse du client).
+                        'envoyer_au_client' => $rebond || ($ticket['relance'] ?? '') === 'reponse' ? null : $tag === 'AUTO',
+                        'ignore' => $rebond ? 'rebond' : (($ticket['relance'] ?? '') === 'reponse' ? 'conversation' : null), 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);

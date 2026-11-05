@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-05a';
+const MA_VERSION = '2026-11-05b';
 
 function ma_config(): array
 {
@@ -2058,6 +2058,98 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
     return $payload + ['envoi' => $statut];
 }
 
+/** Vrai si l'équipe a déjà écrit au client depuis la plateforme pour cette demande. */
+function ma_rep_a_reponse(PDO $db, int $id): bool
+{
+    $q = $db->prepare("SELECT 1 FROM rep_evenements WHERE demande_id = ? AND type = 'reponse' LIMIT 1");
+    $q->execute([$id]);
+    return (bool) $q->fetchColumn();
+}
+
+/**
+ * Réponse écrite au client depuis la plateforme. Elle part de l'adresse générique (compte d'envoi du
+ * scénario Make de suivi), avec la personne qui répond en copie, dans le fil de l'e-mail d'origine.
+ * L'objet garde « demande n° X » : la réponse du client revient sur la même demande.
+ */
+function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $message): array
+{
+    $message = trim(str_replace("\r", '', $message));
+    if ($message === '') {
+        throw new InvalidArgumentException('Écrivez votre réponse');
+    }
+    if (mb_strlen($message) > 10000) {
+        throw new InvalidArgumentException('Réponse trop longue (10 000 caractères au plus)');
+    }
+    $client = trim((string) ($dem['email'] ?? ''));
+    if (!ma_liste_emails($client)) {
+        throw new InvalidArgumentException('Pas d\'adresse e-mail pour ce client : complétez-la ou appelez-le');
+    }
+    if (ma_email_sans_reponse($client)) {
+        throw new InvalidArgumentException('Adresse automatique (' . $client . ') : on ne peut pas lui répondre');
+    }
+    $id = (int) $dem['id'];
+    $now = ma_now();
+    // Qui répond : nom, fonction et adresse pour la copie.
+    $q = $db->prepare('SELECT nom, email, fonction FROM rep_contacts WHERE id = ?');
+    $q->execute([(int) ($user['id'] ?? 0)]);
+    $c = $q->fetch() ?: [];
+    $nom = trim((string) ($c['nom'] ?? $user['nom'] ?? '')) ?: 'L\'équipe Multiair';
+    $copie = array_values(ma_liste_emails((string) ($c['email'] ?? $user['email'] ?? '')))[0] ?? '';
+    // Fil de l'e-mail d'origine, s'il y en a un.
+    $a = $db->prepare('SELECT sujet, message_id, date, message FROM adv_demandes WHERE demande_id = ? ORDER BY id LIMIT 1');
+    $a->execute([$id]);
+    $orig = $a->fetch() ?: [];
+    $sujet = trim(preg_replace('/^\s*((re|tr|fwd?|aw)\s*:\s*)+/iu', '', (string) ($orig['sujet'] ?? '')));
+    $sujet = trim(preg_replace('/\s*[—-]\s*demande\s+n\W{0,2}\s*\d+\s*$/iu', '', $sujet));
+    $objet = $sujet !== '' ? 'Re: ' . $sujet . ' — demande n° ' . $id : 'Votre demande n° ' . $id . ' — Multiair France';
+    [$materiel, $quoi] = ma_rep_objet_client($dem);
+    $citation = trim((string) ($orig ? ma_email_corps($orig['message'] ?? '') : $quoi));
+    if (mb_strlen($citation) > 1500) {
+        $citation = mb_substr($citation, 0, 1497) . '…';
+    }
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $gris = 'color:#5b6675';
+    $standard = ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
+    $html = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#ffffff">'
+        . '<div style="max-width:640px;font-family:\'Segoe UI\',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1c2431">'
+        . '<div>' . nl2br($e($message)) . '</div>'
+        . '<p style="margin:22px 0 0"><b>' . $e($nom) . '</b><br><span style="' . $gris . '">'
+        . $e(trim((string) ($c['fonction'] ?? '')) !== '' ? $c['fonction'] . ' — Multiair France' : 'Multiair France') . '</span><br>'
+        . '<span style="' . $gris . '">Standard : ' . $e($standard) . '</span></p>'
+        . '<p style="margin:18px 0 0;padding-top:10px;border-top:1px solid #e3e7ec;font-size:13px;' . $gris . '">Demande n° ' . $id
+        . ' · Pour nous répondre, répondez simplement à cet e-mail. · <a href="' . $e(ma_rep_liens($db, $dem)['client']) . '" style="color:#0f2f52">Suivre ma demande</a></p>'
+        . ($citation !== '' ? '<div style="margin-top:16px;padding:10px 14px;border-left:3px solid #d5dbe2;font-size:13px;' . $gris . '">'
+            . ($orig ? 'Votre message' . (!empty($orig['date']) ? ' du ' . $e(ma_date_fr($orig['date'])) : '') : 'Votre demande') . ' :<br>' . nl2br($e($citation)) . '</div>' : '')
+        . '</div></body></html>';
+    $payload = [
+        'evenement' => 'reponse', 'demande_id' => $id, 'service' => $dem['service'] ?? '', 'contact' => $dem['contact'] ?? '',
+        'societe' => $dem['societe'] ?? '', 'tel' => '', 'mobile' => false, 'texte' => '',
+        'email' => $client, 'cc' => $copie, 'objet' => $objet, 'html' => $html,
+        'in_reply_to' => trim((string) ($orig['message_id'] ?? '')), 'lien' => ma_rep_liens($db, $dem)['client'],
+    ];
+    $statut = ma_webhook_suivi($db, $payload);
+    if ($statut !== 'envoyé') {
+        throw new RuntimeException('La réponse n\'est pas partie (' . $statut . ') : réessayez dans un instant');
+    }
+    $envois = [['canal' => 'E-mail', 'a' => $client]];
+    if ($copie !== '') {
+        $envois[] = ['canal' => 'E-mail', 'a' => $copie, 'role' => 'copie'];
+    }
+    ma_rep_evenement($db, $id, 'reponse', $nom, 'plateforme', 'Réponse envoyée au client — « ' . $objet . ' »',
+        ['texte' => $message, 'envois' => $envois, 'envoi' => $statut]);
+    // Répondre, c'est prendre la demande en charge (sans second e-mail au client).
+    if (($dem['statut'] ?? '') === 'a_traiter') {
+        $db->prepare("UPDATE rep_demandes SET statut = 'en_cours', pris_at = COALESCE(pris_at, ?), pris_par = COALESCE(NULLIF(pris_par, ''), ?) WHERE id = ?")
+            ->execute([$now, $nom, $id]);
+        ma_rep_evenement($db, $id, 'prise_en_charge', $nom, 'plateforme', 'Prise en charge par ' . $nom . ' (en répondant au client)', []);
+    }
+    $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+        ->execute(['repondeur', $now, 'ok', 'reponse_client', 'Demande ' . $id . ' : réponse de ' . $nom . ' envoyée à ' . $client . ($copie !== '' ? ' (copie ' . $copie . ')' : '')]);
+    $st = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+    $st->execute([$id]);
+    return ['demande' => $st->fetch(), 'objet' => $objet, 'copie' => $copie, 'envoi' => $statut];
+}
+
 /**
  * Fait avancer une demande : prise en charge, rappel prévu, traitée, commentaire. Même logique
  * depuis le tableau de bord et depuis la page interne ; le client est prévenu à chaque étape.
@@ -2632,6 +2724,11 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
         }
         if ($relanceId && ($x = ma_rep_demande_du_client($db, $relanceId, $d))) {
             $jours = (int) (ma_param($db, 'rep_reouverture_jours', '15') ?: 15);
+            // Le client répond par e-mail à un message écrit par l'équipe : c'est la suite de la conversation.
+            // La personne est prévenue ; ni « toujours en cours » au client, ni réouverture automatique.
+            if (ma_canal($d) === 'email' && ma_rep_a_reponse($db, (int) $x['id'])) {
+                return ma_rep_relancer($db, $x, $d, 'reponse');
+            }
             if ($x['statut'] !== 'traite') {
                 return ma_rep_relancer($db, $x, $d, 'relance');
             }
@@ -3147,6 +3244,8 @@ function ma_email_vers_demande(PDO $db, array $a): array
         'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
         'type_panne' => $svc === 'SAV' ? $extrait : null,
         'resume' => $resume,
+        // Texte du client (sans la citation) : sert quand il répond à un e-mail de l'équipe.
+        'message_client' => $extrait,
         'urgence' => $svc === 'SAV' && $info['urgent'],
         'justification_urgence' => $svc === 'SAV' && $info['urgent'] ? 'Signalé urgent dans l\'e-mail : « ' . ($sujet ?: mb_substr($corps, 0, 80)) . ' »' : null,
     ];
@@ -3405,7 +3504,7 @@ function ma_rep_derniere_action(PDO $db, array $dem): string
         $dates[] = (string) $dem['pris_at'];
     }
     $st = $db->prepare("SELECT MAX(date) FROM rep_evenements WHERE demande_id = ? AND (type = 'rouverte'
-        OR (type IN ('prise_en_charge', 'modifiee', 'rappel', 'note', 'transferee', 'piece', 'traitee')
+        OR (type IN ('prise_en_charge', 'modifiee', 'rappel', 'note', 'transferee', 'piece', 'traitee', 'reponse')
             AND via IN ('plateforme', 'lien_equipe') AND COALESCE(qui, '') NOT IN ('', 'Claire', 'Plateforme', 'Make')))");
     $st->execute([(int) $dem['id']]);
     if ($d = $st->fetchColumn()) {
@@ -4102,7 +4201,8 @@ function ma_rep_relancer(PDO $db, array $x, array $d, string $mode): array
     $id = (int) $x['id'];
     $canal = ma_canal($d);
     $dit = trim(preg_replace('/relance\s+(?:de\s+)?(?:la\s+)?demande\s+n\W{0,2}\s*\d+\.?/iu', '', (string) ($d['resume'] ?? ($d['type_panne'] ?? ''))));
-    $maj = ['nb_relances' => (int) $x['nb_relances'] + 1, 'derniere_relance' => $now];
+    $conversation = $mode === 'reponse';
+    $maj = $conversation ? ['derniere_relance' => $now] : ['nb_relances' => (int) $x['nb_relances'] + 1, 'derniere_relance' => $now];
     $urgentMaintenant = $x['service'] === 'SAV' && ma_rep_urgent($d);
     if ($urgentMaintenant && $x['priorite'] !== 'URGENT') {
         $maj['priorite'] = 'URGENT';
@@ -4146,9 +4246,19 @@ function ma_rep_relancer(PDO $db, array $x, array $d, string $mode): array
             $sms[$m] = $m;
         }
     }
+    if ($conversation) {
+        $sms = [];
+    }
     $nomsListe = implode(', ', array_unique(array_filter(array_merge(array_column($personnes, 'nom'), [$apres['destinataires']]))));
     $quand = ma_date_fr($now);
-    $intro = ($mode === 'reouverture'
+    if ($conversation) {
+        $dit = trim((string) ($d['message_client'] ?? '')) ?: $dit;
+    }
+    $intro = $conversation
+        ? 'Réponse du client par e-mail ' . $quand . ($apres['pris_par'] ? ' (demande suivie par ' . $apres['pris_par'] . ')' : '') . '.'
+            . ($apres['statut'] === 'traite' ? ' La demande est marquée traitée : rouvrez-la si une suite est nécessaire.' : '')
+            . ($dit !== '' ? ' Ce qu\'il écrit : « ' . $dit . ' »' : '')
+        : ($mode === 'reouverture'
             ? 'Demande rouverte : le client a rappelé ' . $quand . ' (' . (MA_CANAUX[$canal][1] ?? '') . '), le problème n\'est pas réglé.'
             : 'Relance du client : il a rappelé ' . $quand . ' (' . (MA_CANAUX[$canal][1] ?? '') . '), sa demande est toujours ouverte'
                 . ($apres['pris_par'] ? ' (prise par ' . $apres['pris_par'] . ')' : ' et personne ne l\'a encore prise') . '.')
@@ -4162,7 +4272,7 @@ function ma_rep_relancer(PDO $db, array $x, array $d, string $mode): array
         'departement' => $apres['departement'], 'personnes' => array_values($personnes) ?: [['nom' => $apres['destinataires'] ?: '']],
         'url' => ma_url_base($db), 'lien_interne' => ma_rep_liens($db, $apres)['interne'], 'transfert' => $intro,
     ]);
-    $objet = ($mode === 'reouverture' ? 'ROUVERTE' : 'RELANCE CLIENT') . ' — demande n° ' . $id . ' — ' . $contenu['objet'];
+    $objet = ($conversation ? 'RÉPONSE DU CLIENT' : ($mode === 'reouverture' ? 'ROUVERTE' : 'RELANCE CLIENT')) . ' — demande n° ' . $id . ' — ' . $contenu['objet'];
     $smsTexte = ($mode === 'reouverture' ? 'Demande ROUVERTE' : 'RELANCE client') . ' n° ' . $id . ' - ' . $contenu['sms_texte'];
     if (mb_strlen($smsTexte) > 320) {
         $smsTexte = mb_substr($smsTexte, 0, 317) . '...';
@@ -4171,16 +4281,18 @@ function ma_rep_relancer(PDO $db, array $x, array $d, string $mode): array
     foreach ($sms as $m) {
         $envois[] = ['canal' => 'SMS', 'a' => ma_tel_lisible($m)];
     }
-    ma_rep_evenement($db, $id, $mode === 'reouverture' ? 'rouverte' : 'relance', $d['contact'] ?? 'Client', $canal,
-        ($mode === 'reouverture' ? 'Rouverte : le client a rappelé, le problème n\'est pas réglé' : 'Le client a rappelé : relance de l\'équipe')
+    ma_rep_evenement($db, $id, $conversation ? 'message_client' : ($mode === 'reouverture' ? 'rouverte' : 'relance'), $d['contact'] ?? 'Client', $canal,
+        ($conversation ? 'Réponse du client par e-mail' : ($mode === 'reouverture' ? 'Rouverte : le client a rappelé, le problème n\'est pas réglé' : 'Le client a rappelé : relance de l\'équipe'))
         . ($urgentMaintenant && $x['priorite'] !== 'URGENT' ? ' — passée en URGENT' : ''),
         ['texte' => $dit, 'envois' => $envois]);
     $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
         ->execute([$canal === 'chat' ? 'chatbot' : 'repondeur', $now, 'ok', $mode === 'reouverture' ? 'demande_rouverte' : 'demande_relancee',
-            'Demande ' . $id . ' ' . ($mode === 'reouverture' ? 'rouverte' : 'relancée') . ' par le client → ' . ($nomsListe ?: implode(', ', $to))]);
-    ma_rep_notifier_client($db, $apres, $mode === 'reouverture' ? 'rouverte' : 'relance_client');
+            'Demande ' . $id . ' ' . ($conversation ? ': réponse du client transmise' : ($mode === 'reouverture' ? 'rouverte' : 'relancée') . ' par le client') . ' → ' . ($nomsListe ?: implode(', ', $to))]);
+    if (!$conversation) {
+        ma_rep_notifier_client($db, $apres, $mode === 'reouverture' ? 'rouverte' : 'relance_client');
+    }
     $rt = ['to' => implode(';', array_values($to)), 'cc' => '', 'sms' => implode(';', array_values($sms)), 'urgent' => $apres['priorite'] === 'URGENT',
-        'regle_libelle' => $mode === 'reouverture' ? 'Demande rouverte' : 'Relance du client', 'notes' => [], 'personnes' => array_values($personnes),
+        'regle_libelle' => $conversation ? 'Réponse du client' : ($mode === 'reouverture' ? 'Demande rouverte' : 'Relance du client'), 'notes' => [], 'personnes' => array_values($personnes),
         'objet' => $objet, 'mail_html' => $contenu['mail_html'], 'sms_texte' => $smsTexte, 'marque' => $apres['marque_norm'], 'nature' => $apres['nature'],
         'type_client' => $apres['type_client'], 'type_equipement' => $apres['type_equipement'], 'departement' => $apres['departement'], 'regle_id' => null];
     $st->execute([$id]);
