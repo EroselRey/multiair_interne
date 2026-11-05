@@ -1195,6 +1195,13 @@ try {
                         'commentaire' => ma_str($body['commentaire'] ?? null),
                         'pieces_jointes' => ma_str($body['pieces_jointes'] ?? null),
                     ];
+                    // Avis de non-remise ou réponse automatique : on le garde pour trace, sans demande ni réponse.
+                    $rebond = ma_email_rebond($d['from_email'], $d['sujet'], $d['from_nom']);
+                    if ($rebond) {
+                        $d['statut_suivi'] = 'traite';
+                        $d['envoye_at'] = null;
+                        $d['commentaire'] = 'Avis de non-remise ou réponse automatique : ignoré (pas de demande, pas de réponse)';
+                    }
                     // Le scénario écrit deux fois : à la réception du mail (tag RECU) puis après
                     // la réponse de Claire. Même Message-ID = même demande, on complète la ligne.
                     $existant = null;
@@ -1248,7 +1255,8 @@ try {
                         'ticket' => $ligneTicket, 'equipe_to' => $rtDem['to'] ?? '', 'equipe_cc' => $rtDem['cc'] ?? '', 'equipe_objet' => $rtDem['objet'] ?? '',
                         'equipe_html' => $rtDem['mail_html'] ?? '', 'equipe_sms' => ($dem['service'] ?? '') === 'SAV' ? ($rtDem['sms'] ?? '') : '',
                         'equipe_sms_texte' => $rtDem['sms_texte'] ?? '',
-                        'envoyer_au_client' => $tag === 'AUTO', 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
+                        // null pour un rebond : ni réponse au client, ni e-mail d'escalade côté Make.
+                        'envoyer_au_client' => $rebond ? null : $tag === 'AUTO', 'ignore' => $rebond ? 'rebond' : null, 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);

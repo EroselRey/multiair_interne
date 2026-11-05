@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-04b';
+const MA_VERSION = '2026-11-05a';
 
 function ma_config(): array
 {
@@ -961,6 +961,32 @@ function ma_est_interne(?string $email, array $internes): bool
         }
     }
     return false;
+}
+
+/**
+ * Avis de non-remise et réponses automatiques (absence, accusé) : jamais une demande, jamais de réponse.
+ * Sinon un accusé de réception qui rebondit crée une demande dont l'accusé rebondit à son tour
+ * (boucle du 05/11 : postmaster@acs-nantes.com, demandes 115 à 119).
+ */
+function ma_email_rebond(?string $email, ?string $sujet = null, ?string $nom = null): bool
+{
+    $local = strtolower(trim((string) strstr(trim((string) $email), '@', true)));
+    if (preg_match('/^(postmaster|mailer-daemon|mail-daemon|maildaemon|double-bounce)(\+.*)?$|^bounces?([+._-].*)?$/', $local)) {
+        return true;
+    }
+    if (preg_match('/^mail delivery (system|subsystem)|^microsoft outlook$/', ma_plat($nom))) {
+        return true;
+    }
+    return (bool) preg_match('/^\s*(undeliverable|undelivered|non remis|non distribu|delivery status notification|delivery failure|delivery has failed'
+        . '|mail delivery failed|returned mail|failure notice|echec de (la )?(remise|distribution)|message non (remis|distribu)'
+        . '|reponse automatique|automatic reply|auto[- ]?reply|absent du bureau|out of office)/u', ma_plat($sujet));
+}
+
+/** Adresse à laquelle on n'écrit jamais : avis de non-remise ou « ne pas répondre ». */
+function ma_email_sans_reponse(?string $email): bool
+{
+    $local = strtolower(trim((string) strstr(trim((string) $email), '@', true)));
+    return ma_email_rebond($email) || (bool) preg_match('/^(no-?reply|do-?not-?reply|ne-?pas-?repondre|nepasrepondre)([+._-].*)?$/', $local);
 }
 
 /** Ne garde que les adresses extérieures à la maison. */
@@ -1981,6 +2007,23 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
 {
     $tel = (string) ($dem['tel'] ?? '');
     [$titre] = ma_rep_message_client($db, $dem, $evenement);
+    // Pas d'e-mail à une adresse système, ni plus de 3 accusés en une heure à la même adresse :
+    // un accusé qui rebondit ne doit jamais relancer une boucle.
+    $email = str_contains((string) ($dem['email'] ?? ''), '@') ? trim((string) $dem['email']) : '';
+    $bloque = '';
+    if ($email !== '' && ma_email_sans_reponse($email)) {
+        $bloque = 'adresse système';
+    } elseif ($email !== '' && in_array($evenement, ['recue', 'relance_client', 'rouverte'], true)) {
+        $q = $db->prepare("SELECT COUNT(*) FROM rep_evenements e JOIN rep_demandes d ON d.id = e.demande_id
+            WHERE e.type = 'client_prevenu' AND lower(d.email) = lower(?) AND e.date >= ? AND e.detail LIKE ?");
+        $q->execute([$email, date('Y-m-d H:i:s', time() - 3600), '%"canal":"E-mail"%']);
+        if ((int) $q->fetchColumn() >= 3) {
+            $bloque = 'déjà 3 e-mails à cette adresse en une heure';
+        }
+    }
+    if ($bloque !== '') {
+        $email = '';
+    }
     $payload = [
         'evenement' => $evenement,
         'demande_id' => (int) $dem['id'],
@@ -1990,7 +2033,7 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
         'tel' => $tel,
         // WhatsApp n'autorise pas d'écrire en premier à quelqu'un venu par le chat du site ou par e-mail.
         'mobile' => (bool) preg_match('/^33[67]\d{8}$/', $tel) && in_array(ma_canal($dem), ['telephone', 'whatsapp'], true),
-        'email' => str_contains((string) ($dem['email'] ?? ''), '@') ? $dem['email'] : '',
+        'email' => $email,
         'lien' => ma_rep_liens($db, $dem)['client'],
         // Sans guillemets doubles ni antislash : le texte est inséré tel quel dans le JSON WhatsApp de Make.
         'texte' => str_replace(['"', '\\'], ["'", '/'], ma_rep_texte_client($db, $dem, $evenement)),
@@ -2009,8 +2052,9 @@ function ma_rep_notifier_client(PDO $db, array $dem, string $evenement): array
         $canaux[] = ['canal' => 'E-mail', 'a' => $payload['email']];
     }
     ma_rep_evenement($db, (int) $dem['id'], 'client_prevenu', 'Plateforme', 'make',
-        'Client prévenu — ' . $titre . ($canaux ? ' (' . implode(' + ', array_column($canaux, 'canal')) . ')' : ' — aucun WhatsApp ni e-mail connu'),
-        ['etape' => $evenement, 'canaux' => $canaux, 'texte' => $payload['texte'], 'envoi' => $statut]);
+        'Client prévenu — ' . $titre . ($canaux ? ' (' . implode(' + ', array_column($canaux, 'canal')) . ')' : ($bloque !== '' ? '' : ' — aucun WhatsApp ni e-mail connu'))
+            . ($bloque !== '' ? ' — e-mail non envoyé : ' . $bloque : ''),
+        ['etape' => $evenement, 'canaux' => $canaux, 'texte' => $payload['texte'], 'envoi' => $statut] + ($bloque !== '' ? ['email_bloque' => $bloque] : []));
     return $payload + ['envoi' => $statut];
 }
 
@@ -3049,6 +3093,10 @@ function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
     $from = trim((string) $a['from_email']);
     // E-mails écartés par les filtres du scénario (RECU), sans expéditeur, ou venant de chez nous : pas de demande.
     if (($a['tag'] === 'RECU' && empty($opt['forcer'])) || !str_contains($from, '@') || ma_est_interne($from, ma_domaines_internes($db))) {
+        return null;
+    }
+    // Avis de non-remise ou réponse automatique : pas de demande, même à la main.
+    if (ma_email_rebond($from, $a['sujet'] ?? null, $a['from_nom'] ?? null)) {
         return null;
     }
     $d = ma_email_vers_demande($db, $a);

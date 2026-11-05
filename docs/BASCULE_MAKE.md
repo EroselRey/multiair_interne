@@ -407,6 +407,34 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   - seule la consigne a changé (blueprint relu après envoi : identique au fichier, scénario toujours actif) ;
 - la plateforme garde son filet de sécurité si l'agent se trompe ou répond « autre ».
 
+## Boucle d'e-mails du 05/11 (avis de non-remise) — Claire ADV v12 + correctif 47
+
+- constat de Cyril : dizaines d'e-mails « [ESCALADE Claire ADV] Undeliverable: Multiair — Demande n° … enregistrée »
+  et « Demande toujours en cours » entre 16:30 et 16:33 ;
+- cause : l'accusé de réception de la demande 114 (appel, adresse e-mail chaelin@compresseur-air.com) a rebondi.
+  L'avis de non-remise de postmaster@acs-nantes.com est arrivé dans service.clients@ ; le filtre de Claire ADV
+  n'écartait que le **nom** « Postmaster » (et en respectant la casse), pas l'**adresse** postmaster@. L'avis est donc
+  devenu une demande, dont l'accusé a rebondi à son tour : demandes 115 à 119 (une toutes les 12 secondes) ;
+  le même cas s'était déjà produit le 13/10 (demande 95, postmaster@onevirtualworkspace.com) ;
+- arrêt : scénario Claire ADV désactivé à 16:33, file d'attente du mailhook vide (aucun e-mail client perdu) ;
+- Claire ADV v12 (seul le filtre après le mailhook change, relu après envoi, réactivé à 16:39) — sont écartés :
+  - expéditeur postmaster@… ou mailer-daemon, nom « Mail Delivery … » (sans tenir compte de la casse) ;
+  - en-tête Auto-Submitted « auto-… » (avant : seulement auto-generated ; maintenant aussi les réponses d'absence) ;
+  - message de type multipart/report (avis de non-remise normalisé) ;
+  - objet qui commence par Undeliverable, Undelivered, Non remis, Non distribué, Delivery Status Notification,
+    Mail delivery failed, Returned mail, Failure notice, Échec de la remise… (« Re: Multiair — Demande n° 37 »,
+    « Colis non remis, commande 4512 » restent traités) ;
+- correctif 47 (lib.php 2026-11-05a + api.php ; contient le 46) : filet de sécurité côté plateforme, même si Make
+  laisse passer :
+  - `ma_email_rebond()` : avis de non-remise et réponses automatiques (adresse système, nom, objet) → l'e-mail est
+    gardé pour trace (statut « traité », commentaire), mais pas de demande, pas de réponse au client, pas d'e-mail
+    d'escalade (`envoyer_au_client` vide, `ignore = rebond`) ;
+  - `ma_email_sans_reponse()` : jamais d'accusé à postmaster@, mailer-daemon, noreply@, ne-pas-repondre@… ;
+  - au plus 3 e-mails d'accusé par heure à une même adresse ; au-delà, l'historique de la demande indique
+    « e-mail non envoyé : déjà 3 e-mails à cette adresse en une heure » ;
+  - testé sur la copie locale : 17 cas de détection, rebond ignoré, vrai client inchangé, plafond appliqué à partir
+    du 4e accusé.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
