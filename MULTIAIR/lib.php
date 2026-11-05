@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-05b';
+const MA_VERSION = '2026-11-05c';
 
 function ma_config(): array
 {
@@ -3078,11 +3078,34 @@ function ma_email_corps(?string $txt): string
     return trim(preg_replace("/\n{3,}/", "\n\n", $t));
 }
 
+/**
+ * Démarchage d'un fournisseur (consultant, agence, logiciel, prestataire) : ce n'est pas une demande client.
+ * Il part seulement au responsable des sujets indéterminés (Cyril), sans SMS, sans accusé ni réponse de Claire.
+ * Une formule de fin de démarchage suffit ; sinon il faut au moins deux tournures de prestataire différentes.
+ */
+function ma_demarchage(string $sujet, string $corps): bool
+{
+    $t = str_replace(['’', '`'], "'", ma_plat($sujet . ' ' . $corps));
+    if (preg_match("/je n'insisterai pas|si (ce|le) sujet n'est pas (pertinent|prioritaire)|si (je ne suis pas|vous n'etes pas) (le bon|la bonne) interlocut"
+        . "|(rediriger|orienter) vers la (bonne )?personne (en charge|concernee)|(pour|vous) (vous )?desinscrire|se desinscrire|desabonnement|unsubscribe"
+        . "|ne plus recevoir (nos|mes|ces) (e-?mails|messages)/u", $t)) {
+        return true;
+    }
+    preg_match_all("/\b(je (realise|vous propose|propose mes services|developpe des|accompagne les)|nous (proposons|accompagnons|aidons) (les|des) (entreprises|pme|societes|industriels|distributeurs)"
+        . "|notre (agence|cabinet|solution|plateforme|offre de services)|mission (courte|de \d)|(cadree? )?au forfait|cas d'usage|tableaux? de bord (excel|power)|power (query|bi)"
+        . "|generation de (leads|prospects)|seo|visibilite (en ligne|sur internet)|(echange|appel|rendez-vous|visio) de (10|15|20|30) ?min|demonstration gratuite|audit gratuit"
+        . "|partenariat commercial|(augmenter|booster) (votre|vos) (chiffre|ventes|visibilite))\b/u", $t, $m);
+    return count(array_unique($m[0])) >= 2;
+}
+
 /** Service d'un e-mail : recrutement, panne, compta, sinon commerce si c'est une demande de prix ou de matériel. */
 function ma_email_service(string $sujet, string $corps, ?string $famille): string
 {
     if (ma_est_rh(['resume' => $sujet . ' ' . $corps])) {
         return 'RH';
+    }
+    if (ma_demarchage($sujet, $corps)) {
+        return 'AUTRE';
     }
     $sav = '/\b(pannes?|en panne|depann\w*|fuites?|alarmes?|interventions?|repar\w*|ne (?:demarre|fonctionne|marche) (?:plus|pas)|code (?:d.)?erreur'
         . '|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|bruit anormal|surchauffe|disjonct\w*|sav)\b/u';
@@ -3198,7 +3221,7 @@ function ma_email_demande(PDO $db, int $advId, array $opt = []): ?array
     }
     $d = ma_email_vers_demande($db, $a);
     $svc = $d['service'];
-    $notifier = $opt['notifier_client'] ?? !($a['tag'] === 'AUTO' && !empty($opt['ticket_dans_reponse']));
+    $notifier = $opt['notifier_client'] ?? (!($a['tag'] === 'AUTO' && !empty($opt['ticket_dans_reponse'])) && empty($d['demarchage']));
     $r = ma_rep_creer_demande($db, $d, ['notifier' => (bool) $notifier]);
     $db->prepare('UPDATE adv_demandes SET demande_id = ? WHERE id = ?')->execute([$r['id'], $advId]);
     if (empty($opt['equipe_par_make'])) {
@@ -3226,7 +3249,9 @@ function ma_email_vers_demande(PDO $db, array $a): array
     $claire = array_filter([$a['techno'] ? 'Techno : ' . $a['techno'] : null, $a['critere'] ? 'Critère : ' . $a['critere'] : null,
         $a['pression'] ? 'Pression : ' . $a['pression'] : null, $a['configuration'] ? 'Configuration : ' . $a['configuration'] : null]);
     $pj = trim((string) ($a['pieces_jointes'] ?? ''));
+    $demarchage = ma_demarchage($sujet, $corps);
     $resume = implode(' | ', array_filter([
+        $demarchage ? 'Démarchage commercial d\'un fournisseur : transmis à vous seul, pas de réponse au démarcheur' : null,
         'E-mail « ' . ($sujet ?: 'sans objet') . ' »',
         $svc === 'COMMERCIAL' && $a['tag'] === 'AUTO' ? 'Claire ADV a répondu au client avec une proposition' : null,
         $svc === 'COMMERCIAL' && $a['tag'] === 'ESCALADE' ? 'Réponse de Claire ADV à valider (onglet E-mails)' : null,
@@ -3241,11 +3266,12 @@ function ma_email_vers_demande(PDO $db, array $a): array
         'nature' => $svc === 'COMMERCIAL' ? (ma_nature_documents($sujet . ' ' . $corps) ?? (ma_plat($a['famille']) === 'maintenance'
             || preg_match('/\b(pieces?|filtres?|kits?|clapets?|soupapes?|cartouches?|courroies?|separateurs?|huile|entretien|revision|maintenance)\b/u', ma_plat($sujet . ' ' . $corps))
             ? 'devis_pieces' : 'devis_equipement')) : null,
-        'besoin_commercial' => $svc === 'COMMERCIAL' ? $extrait : null,
+        'besoin_commercial' => $svc === 'COMMERCIAL' || $demarchage ? $extrait : null,
         'type_panne' => $svc === 'SAV' ? $extrait : null,
         'resume' => $resume,
         // Texte du client (sans la citation) : sert quand il répond à un e-mail de l'équipe.
         'message_client' => $extrait,
+        'demarchage' => $demarchage,
         'urgence' => $svc === 'SAV' && $info['urgent'],
         'justification_urgence' => $svc === 'SAV' && $info['urgent'] ? 'Signalé urgent dans l\'e-mail : « ' . ($sujet ?: mb_substr($corps, 0, 80)) . ' »' : null,
     ];

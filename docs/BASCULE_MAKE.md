@@ -464,6 +464,22 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   charge) → réponse du client (rattachée, Claire muette, aucun e-mail au client, équipe prévenue) ;
 - pas encore sur la page reçue par lien (boîtes partagées sans compte) : à ajouter si besoin.
 
+## Démarchages de fournisseurs : à Cyril seul (correctif 49, 05/11)
+
+- constat : demande 113 (Rudy Varenne, prestataire de tableaux de bord Excel / Power Query) partie au SAV, à Julien
+  Jardin avec un SMS, parce que le texte contient « maintenance » et « interventions » ; décision de Cyril : « que à moi » ;
+- `ma_demarchage()` : une formule de fin de démarchage (« je n'insisterai pas », « si ce sujet n'est pas pertinent »,
+  « pas le bon interlocuteur », désinscription / unsubscribe) suffit ; sinon au moins deux tournures de prestataire
+  différentes (« je réalise », « mission courte », « au forfait », « cas d'usage », « Power BI / Query », « notre
+  agence », « SEO », « échange de 15 min », « audit gratuit »…) ;
+- e-mail reconnu comme démarchage : service « autre » → responsable des sujets indéterminés (paramètre
+  resp_indetermine = Cyril), pas de SMS (réservé au SAV), pas d'accusé au démarcheur, Claire ne répond pas et
+  n'escalade pas (`ignore = demarchage`), l'e-mail est rangé « traité » dans l'onglet E-mails ; le résumé de la
+  demande commence par « Démarchage commercial d'un fournisseur » ;
+- vérifié sur l'historique de production (38 e-mails, 120 demandes) : seuls 113 et 105 (Sunhi-mach, offre de
+  compresseurs avec « unsubscribe ») sont reconnus ; aucun vrai client ;
+- demande 113 transférée à Cyril le 05/11 (transfert de la plateforme, historique tenu, plus de SMS).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

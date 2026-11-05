@@ -1211,6 +1211,13 @@ try {
                     ];
                     // Avis de non-remise ou réponse automatique : on le garde pour trace, sans demande ni réponse.
                     $rebond = ma_email_rebond($d['from_email'], $d['sujet'], $d['from_nom']);
+                    // Démarchage d'un fournisseur : demande pour Cyril seul, Claire ne répond pas.
+                    $demarchage = !$rebond && ma_demarchage((string) $d['sujet'], ma_email_corps($d['message']));
+                    if ($demarchage) {
+                        $d['statut_suivi'] = 'traite';
+                        $d['envoye_at'] = null;
+                        $d['commentaire'] = 'Démarchage commercial d\'un fournisseur : pas de réponse de Claire, transmis au responsable des sujets indéterminés';
+                    }
                     if ($rebond) {
                         $d['statut_suivi'] = 'traite';
                         $d['envoye_at'] = null;
@@ -1278,8 +1285,8 @@ try {
                         // null pour un rebond : ni réponse au client, ni e-mail d'escalade côté Make.
                         // Rebond, ou réponse du client à un e-mail de l'équipe : Claire ne répond pas et n'escalade pas
                         // (la personne qui suit la demande reçoit la réponse du client).
-                        'envoyer_au_client' => $rebond || ($ticket['relance'] ?? '') === 'reponse' ? null : $tag === 'AUTO',
-                        'ignore' => $rebond ? 'rebond' : (($ticket['relance'] ?? '') === 'reponse' ? 'conversation' : null), 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
+                        'envoyer_au_client' => $rebond || $demarchage || ($ticket['relance'] ?? '') === 'reponse' ? null : $tag === 'AUTO',
+                        'ignore' => $rebond ? 'rebond' : ($demarchage ? 'demarchage' : (($ticket['relance'] ?? '') === 'reponse' ? 'conversation' : null)), 'routage_cle' => $cleRoutage, 'dest_to' => $rt['dest_to'], 'dest_cc' => $rt['dest_cc'], 'dest_libelle' => $rt['dest_libelle']]);
                 }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
