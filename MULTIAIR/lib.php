@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-06c';
+const MA_VERSION = '2026-11-06d';
 
 function ma_config(): array
 {
@@ -3675,7 +3675,61 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
         . ($svcCible !== $dem['service'] ? ', passée au ' . ma_rep_service_libelle($svcCible) : '')
         . (!empty($cible['cloturer']) ? ' — close ici, la suite se fait hors plateforme' : ''),
         ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
+    ma_rep_prevenir_anciens($db, $dem, $apres, $cible, $par, $message);
     return $apres;
+}
+
+/**
+ * Après un transfert : ceux qui avaient reçu la demande (et la personne qui l'avait prise) sont prévenus
+ * qu'elle est partie ailleurs et qu'ils n'ont plus rien à faire. Ni le nouveau destinataire, ni celui
+ * qui a transféré (il le sait). Un e-mail par adresse.
+ */
+function ma_rep_prevenir_anciens(PDO $db, array $avant, array $apres, array $cible, string $par, string $message = ''): array
+{
+    $anciens = ma_liste_emails(($avant['dest_to'] ?? '') . ';' . ($avant['dest_cc'] ?? ''));
+    $parNom = function (string $nom) use ($db): ?string {
+        if (trim($nom) === '') {
+            return null;
+        }
+        $q = $db->prepare('SELECT email FROM rep_contacts WHERE lower(nom) = lower(?) AND email LIKE ? LIMIT 1');
+        $q->execute([trim($nom), '%@%']);
+        return ($e = $q->fetchColumn()) ? (string) $e : null;
+    };
+    if ($e = $parNom((string) ($avant['pris_par'] ?? ''))) {
+        $anciens += ma_liste_emails($e);
+    }
+    $exclus = ma_liste_emails(($cible['email'] ?? '') . ';' . ($apres['dest_to'] ?? '') . ';' . ($parNom($par) ?? ''));
+    $anciens = array_diff_key($anciens, $exclus);
+    if (!$anciens) {
+        return [];
+    }
+    [$materiel, $sujet] = ma_rep_objet_client($avant);
+    $client = trim((string) ($avant['societe'] ?: $avant['contact'] ?: 'Client'));
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $qui = $par !== '' ? $par : 'la plateforme';
+    $html = ma_mail_gabarit([
+        'surtitre' => 'Pour information',
+        'titre' => 'Demande n° ' . $avant['id'] . ' transférée à ' . $cible['nom'],
+        'corps' => '<p style="margin:0 0 12px">Bonjour,</p><p style="margin:0">La demande n° ' . (int) $avant['id'] . ' qui vous avait été envoyée a été transférée à <b>'
+            . $e($cible['nom']) . '</b> par ' . $e($qui) . ', ' . $e(ma_date_fr(ma_now())) . '. Vous n\'avez rien à faire : '
+            . (!empty($cible['cloturer']) ? 'la suite se fait chez ce destinataire.' : 'c\'est ' . $e($cible['nom']) . ' qui s\'en occupe désormais.') . '</p>'
+            . ($message !== '' ? '<p style="margin:12px 0 0">Message joint au transfert : « ' . $e($message) . ' »</p>' : ''),
+        'fiche' => ma_mail_fiche([['Demande', 'n° ' . $avant['id'], false], ['Client', $client, false], ['Matériel', $materiel, false], ['Objet', $sujet, false]]),
+        'pied' => 'Multiair — message automatique de la plateforme des demandes.',
+    ]);
+    $objet = 'Pour information — demande n° ' . $avant['id'] . ' transférée à ' . $cible['nom'];
+    $envois = [];
+    $statuts = [];
+    foreach ($anciens as $adresse) {
+        $statuts[] = ma_webhook_suivi($db, ['evenement' => 'transfert_info', 'demande_id' => (int) $avant['id'], 'mobile' => false, 'tel' => '',
+            'email' => $adresse, 'objet' => $objet, 'html' => $html, 'texte' => '', 'lien' => '']);
+        $envois[] = ['canal' => 'E-mail', 'a' => $adresse];
+    }
+    $echecs = array_filter($statuts, fn($s) => $s !== 'envoyé');
+    ma_rep_evenement($db, (int) $avant['id'], 'info_transfert', 'Plateforme', 'plateforme',
+        'Anciens destinataires prévenus du transfert : ' . implode(', ', array_values($anciens)),
+        ['envois' => $envois, 'envoi' => $echecs ? implode(', ', array_unique($echecs)) : 'envoyé']);
+    return array_values($anciens);
 }
 
 // ------------------------------------------------------------------ Relances internes des demandes

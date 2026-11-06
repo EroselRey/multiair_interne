@@ -542,6 +542,18 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   - testé : deux connexions à Devis acquisitions (Cécile sur Windows, Bruno sur iPhone) → « 2 appareils » ;
     Bruno déconnecté par l'administrateur → refusé (401), Cécile continue ; déconnexion de Cécile → 0 appareil.
 
+## Transfert : les anciens destinataires sont prévenus (correctif 54, 06/11)
+
+- demande de Cyril : quand une demande envoyée à un service est transférée (par la plateforme ou par quelqu'un),
+  prévenir par e-mail le service qui l'avait reçue qu'elle est prise par quelqu'un d'autre ;
+- `ma_rep_prevenir_anciens()`, appelée à chaque transfert : e-mail « Pour information — demande n° X transférée à Y »
+  aux anciens destinataires (À et copie) et à la personne qui l'avait prise ; ni au nouveau destinataire, ni à celui
+  qui a transféré ; un e-mail par adresse ; contenu : à qui, par qui, quand, « vous n'avez rien à faire », message du
+  transfert, client / matériel / objet ; pas de bouton vers la demande (elle n'est plus chez eux) ;
+- historique : « Anciens destinataires prévenus du transfert : … » (famille Envois) ;
+- testé : transfert de Devis acquisitions vers CTS devis par l'administrateur → Devis acquisitions prévenue ;
+  transfert fait par CTS devis elle-même → rien à elle-même.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
