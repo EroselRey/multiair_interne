@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-06b';
+const MA_VERSION = '2026-11-06c';
 
 function ma_config(): array
 {
@@ -386,7 +386,7 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     $tables = ['parametres', 'executions_log', 'rep_fiches', 'rep_demandes', 'rep_messages', 'distributeurs',
         'rep_contacts', 'rep_regles', 'rep_evenements', 'rep_clients', 'rep_equipements',
         'chat_messages', 'chat_leads', 'routage', 'adv_demandes', 'cso_devis', 'cso_lignes',
-        'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions', 'rep_pieces'];
+        'cso_relances', 'cee_leads', 'cee_conversations', 'cee_actions', 'rep_pieces', 'rep_connexions'];
     $colonnes = [
         'chat_leads' => ['updated_at' => 'TEXT', 'nb_mises_a_jour' => 'INTEGER NOT NULL DEFAULT 0', 'demande_id' => 'INTEGER',
             // Ce que le chatbot recueille comme Claire au téléphone (SAV, commande, facture, relance).
@@ -2421,6 +2421,21 @@ function ma_user_actualiser(PDO $db): ?array
         session_destroy();
         return null;
     }
+    $cnx = (int) ($_SESSION['ma_cnx'] ?? 0);
+    if ($cnx > 0) {
+        $q = $db->prepare('SELECT fin_at, vu_at FROM rep_connexions WHERE id = ?');
+        $q->execute([$cnx]);
+        $x = $q->fetch();
+        if ($x && $x['fin_at']) {
+            // Appareil déconnecté depuis « Équipe et accès ».
+            $_SESSION = [];
+            session_destroy();
+            return null;
+        }
+        if ($x && (string) $x['vu_at'] < date('Y-m-d H:i:s', time() - 300)) {
+            $db->prepare('UPDATE rep_connexions SET vu_at = ? WHERE id = ?')->execute([ma_now(), $cnx]);
+        }
+    }
     $frais = ['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces']];
     if ($frais !== $u) {
         $_SESSION['ma_user'] = $frais;
@@ -2452,13 +2467,48 @@ function ma_verifier_connexion(PDO $db, string $login, string $pass): ?array
     return ['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces']];
 }
 
-function ma_ouvrir_session(array $u): void
+/** « Windows · Edge », « iPhone · Safari » : de quoi reconnaître un appareil, sans adresse IP. */
+function ma_appareil(string $ua): string
+{
+    $os = match (true) {
+        str_contains($ua, 'iPhone') => 'iPhone', str_contains($ua, 'iPad') => 'iPad', str_contains($ua, 'Android') => 'Android',
+        str_contains($ua, 'Windows') => 'Windows', str_contains($ua, 'Mac OS') => 'Mac', str_contains($ua, 'Linux') => 'Linux', default => 'Appareil',
+    };
+    $nav = match (true) {
+        str_contains($ua, 'Edg/') => 'Edge', str_contains($ua, 'OPR/') => 'Opera', str_contains($ua, 'Firefox/') => 'Firefox',
+        str_contains($ua, 'Chrome/') || str_contains($ua, 'CriOS/') => 'Chrome', str_contains($ua, 'Safari/') => 'Safari', default => 'navigateur',
+    };
+    return $os . ' · ' . $nav;
+}
+
+/** Appareils encore connectés à un compte (activité dans la durée de session, pas déconnectés). */
+function ma_connexions_actives(PDO $db, ?int $contactId = null): array
+{
+    $jours = (int) (ma_config()['session_days'] ?? 30);
+    $st = $db->prepare('SELECT * FROM rep_connexions WHERE fin_at IS NULL AND vu_at >= ?' . ($contactId ? ' AND contact_id = ?' : '') . ' ORDER BY vu_at DESC');
+    $st->execute($contactId ? [date('Y-m-d H:i:s', time() - $jours * 86400), $contactId] : [date('Y-m-d H:i:s', time() - $jours * 86400)]);
+    return $st->fetchAll();
+}
+
+function ma_ouvrir_session(array $u, string $via = 'mot_de_passe', ?string $prenom = null): void
 {
     ma_session_start();
     session_regenerate_id(true);
     $_SESSION['ma_auth'] = true;
     $_SESSION['ma_login'] = $u['email'] ?: 'admin';
     $_SESSION['ma_user'] = $u;
+    // Un appareil de plus pour ce compte (pas pour l'accès de secours de config.php).
+    if ((int) ($u['id'] ?? 0) > 0) {
+        try {
+            $db = ma_db();
+            $prenom = trim((string) $prenom);
+            $db->prepare('INSERT INTO rep_connexions(contact_id, prenom, appareil, via, created_at, vu_at) VALUES (?,?,?,?,?,?)')
+                ->execute([(int) $u['id'], $prenom !== '' ? mb_substr($prenom, 0, 40) : null, ma_appareil((string) ($_SERVER['HTTP_USER_AGENT'] ?? '')), $via, ma_now(), ma_now()]);
+            $_SESSION['ma_cnx'] = (int) $db->lastInsertId();
+        } catch (Throwable $e) {
+            // le suivi des appareils ne doit jamais empêcher de se connecter
+        }
+    }
 }
 
 /** Envoi par le scénario Make « Suivi client » (e-mail ; WhatsApp seulement si mobile = true). */

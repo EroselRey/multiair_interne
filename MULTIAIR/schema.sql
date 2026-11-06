@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS rep_pieces (
 );
 CREATE INDEX IF NOT EXISTS idx_rep_pieces_demande ON rep_pieces(demande_id);
 
+-- Appareils connectés : une ligne par connexion (ordinateur, téléphone). Sert à voir combien de
+-- personnes utilisent un compte, surtout une boîte partagée, et à en déconnecter une. Pas d'adresse IP.
+CREATE TABLE IF NOT EXISTS rep_connexions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  contact_id INTEGER NOT NULL,
+  prenom TEXT,                    -- qui (boîte partagée), s'il l'a indiqué en se connectant
+  appareil TEXT,                  -- « Windows · Edge »
+  via TEXT,                       -- lien | mot_de_passe
+  created_at TEXT NOT NULL,
+  vu_at TEXT,
+  fin_at TEXT,                    -- déconnexion (bouton, ou par un administrateur)
+  fin_par TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rep_connexions_contact ON rep_connexions(contact_id, fin_at);
+
 -- Historique d'une demande, pour la traçabilité : réception, transmission (à qui, par quel
 -- canal), messages envoyés au client, prise en charge, rappels, notes, clôture.
 CREATE TABLE IF NOT EXISTS rep_evenements (

@@ -21,7 +21,14 @@ if (isset($_GET['c']) || isset($_POST['c'])) {
         $db->prepare('UPDATE rep_contacts SET lien_jeton = NULL, lien_jeton_exp = NULL, derniere_connexion = ? WHERE id = ?')->execute([ma_now(), $cc['id']]);
         $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
             ->execute(['plateforme', ma_now(), 'ok', 'connexion_lien_utilise', $cc['nom'] . ' s\'est connecté par lien']);
-        ma_ouvrir_session(['id' => (int) $cc['id'], 'nom' => (string) $cc['nom'], 'email' => (string) $cc['email'], 'acces' => (string) $cc['acces']]);
+        // Boîte partagée : le prénom (facultatif) dit qui est derrière cet appareil ; gardé pour la prochaine fois.
+        $prenomC = trim(strip_tags((string) ($_POST['prenom'] ?? '')));
+        if ($prenomC !== '') {
+            setcookie('ma_prenom', mb_substr($prenomC, 0, 40), ['expires' => time() + 365 * 86400, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax',
+                'secure' => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')]);
+        }
+        ma_ouvrir_session(['id' => (int) $cc['id'], 'nom' => (string) $cc['nom'], 'email' => (string) $cc['email'], 'acces' => (string) $cc['acces']],
+            'lien', $prenomC);
         header('Location: index.php', true, 303);
         exit;
     }
@@ -47,6 +54,10 @@ if (isset($_GET['c']) || isset($_POST['c'])) {
   <p class="auth-sous">Connexion avec <b><?= $e($cc['email']) ?></b>. Vous resterez connecté <?= (int) (ma_config()['session_days'] ?? 30) ?> jours sur cet appareil.</p>
   <form method="post" class="auth-form">
     <input type="hidden" name="c" value="<?= $e($jc) ?>">
+    <?php if (($cc['role'] ?? '') === 'boite'): ?>
+    <label class="field"><span>Votre prénom (facultatif)</span><input name="prenom" maxlength="40" autocomplete="given-name" value="<?= $e($_COOKIE['ma_prenom'] ?? '') ?>"></label>
+    <p class="hint">Plusieurs personnes utilisent cette boîte : votre prénom permet de savoir qui est connecté.</p>
+    <?php endif; ?>
     <button class="btn primary block big" type="submit" autofocus>Me connecter</button>
   </form>
 <?php endif; ?>
@@ -77,7 +88,7 @@ if ($c && $_SERVER['REQUEST_METHOD'] === 'POST') {
             ->execute([password_hash($p1, PASSWORD_DEFAULT), ma_now(), $c['id']]);
         $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
             ->execute(['plateforme', ma_now(), 'ok', 'compte_mot_de_passe', $c['nom'] . ' a choisi son mot de passe']);
-        ma_ouvrir_session(['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces']]);
+        ma_ouvrir_session(['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces']], 'mot_de_passe');
         header('Location: index.php', true, 303);
         exit;
     }

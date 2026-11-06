@@ -62,6 +62,12 @@ if ($parts === ['auth', 'login'] && $method === 'POST') {
 }
 if ($parts === ['auth', 'logout']) {
     ma_session_start();
+    if ($cnx = (int) ($_SESSION['ma_cnx'] ?? 0)) {
+        try {
+            ma_db()->prepare("UPDATE rep_connexions SET fin_at = ?, fin_par = 'déconnexion' WHERE id = ? AND fin_at IS NULL")->execute([ma_now(), $cnx]);
+        } catch (Throwable $e) {
+        }
+    }
     $_SESSION = [];
     session_destroy();
     out(['ok' => true]);
@@ -904,6 +910,13 @@ try {
             } elseif ($sub !== null && $sub !== 'responsables') {
                 $id = idFrom($parts, 1);
                 $c = getOne($db, 'rep_contacts', $id) ?? fail('Personne introuvable', 404);
+                if ($sub2 === 'deconnecter' && $method === 'POST') {
+                    $cid = (int) ($body['connexion_id'] ?? 0);
+                    $st = $db->prepare('UPDATE rep_connexions SET fin_at = ?, fin_par = ? WHERE contact_id = ? AND fin_at IS NULL' . ($cid ? ' AND id = ?' : ''));
+                    $st->execute($cid ? [$now, $user['nom'] ?? 'Administrateur', $id, $cid] : [$now, $user['nom'] ?? 'Administrateur', $id]);
+                    logEvent($db, 'plateforme', 'ok', 'appareil_deconnecte', $c['nom'] . ' : ' . $st->rowCount() . ' appareil(s) déconnecté(s)' . ($user ? ' par ' . $user['nom'] : ''));
+                    out(['ok' => true, 'deconnectes' => $st->rowCount()]);
+                }
                 if ($sub2 === 'invitation' && $method === 'POST') {
                     if (!isset(MA_ACCES[$c['acces'] ?? '']) || !str_contains((string) $c['email'], '@')) {
                         fail('Donnez d\'abord un accès et une adresse e-mail à cette personne');
@@ -939,7 +952,20 @@ try {
             }
             $rows = $db->query('SELECT * FROM rep_contacts ORDER BY nom')->fetchAll();
             $resp = ma_responsables($db);
-            out(['ok' => true, 'rows' => array_map('ma_contact_public', $rows),
+            $rows = array_map('ma_contact_public', $rows);
+            if ($estAdmin) {
+                // Appareils connectés par compte : plusieurs sur une boîte partagée = plusieurs personnes.
+                $parCompte = [];
+                foreach (ma_connexions_actives($db) as $x) {
+                    $parCompte[(int) $x['contact_id']][] = ['id' => (int) $x['id'], 'prenom' => $x['prenom'], 'appareil' => $x['appareil'],
+                        'via' => $x['via'], 'depuis' => $x['created_at'], 'vu' => $x['vu_at']];
+                }
+                foreach ($rows as &$r) {
+                    $r['connexions'] = $parCompte[(int) $r['id']] ?? [];
+                }
+                unset($r);
+            }
+            out(['ok' => true, 'rows' => $rows,
                 'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, $resp),
                 'acces' => MA_ACCES, 'services' => MA_SERVICES,
                 'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel')")

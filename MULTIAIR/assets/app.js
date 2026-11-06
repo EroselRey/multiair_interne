@@ -1095,7 +1095,15 @@
     const tel = (t) => { const x = String(t || '').replace(/\D/g, '').replace(/^33/, '0'); return /^0\d{9}$/.test(x) ? x.replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
     const parId = (id) => r.rows.find((c) => Number(c.id) === Number(id));
     const acces = (c) => c.acces === 'admin' ? '<span class="pill admin">Admin</span>' : (c.acces ? `<span class="pill info">${h(MA.acces[c.acces] || c.acces)}</span>` : '<span class="pill muted">Aucun</span>');
-    const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : (c.derniere_connexion ? `<span class="hint">Vu ${h(rel(c.derniere_connexion))}</span>`
+    // Plusieurs appareils sur un compte (surtout une boîte partagée) : plusieurs personnes.
+    const appareils = (c) => {
+      const l = c.connexions || [];
+      if (l.length < 2) return '';
+      const noms = [...new Set(l.map((x) => x.prenom).filter(Boolean))];
+      return `<span class="pill info" title="${h(l.map((x) => (x.prenom ? x.prenom + ' — ' : '') + x.appareil).join(' / '))}">${l.length} appareils${noms.length ? ' : ' + h(noms.join(', ')) : ''}</span> `;
+    };
+    const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : appareils(c) + (c.derniere_connexion
+      ? `<span class="hint">Vu ${h(rel((c.connexions || [])[0]?.vu || c.derniere_connexion))}</span>`
       : (c.lien_envoye_at ? `<span class="pill warn">Lien envoyé ${h(rel(c.lien_envoye_at))}</span>` : '<span class="hint">Jamais connecté</span>'));
     const RESP = [['sav', 'SAV'], ['finance', 'Compta / finance'], ['commercial', 'Commerce'], ['autre', 'Sujet indéterminé'], ['rh', 'RH (candidatures)']];
     const render = () => {
@@ -1157,7 +1165,23 @@
         role === 'boite' ? ligne('Lue par', `<textarea name="membres">${h(c.membres)}</textarea>`) : '',
       ].join('');
       const inviter = c.id && c.acces ? `<button class="btn" id="inviter">${ic('envoi', 's')}Envoyer un lien de connexion</button>` : '';
-      openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', champs + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
+      const cnx = c.connexions || [];
+      const blocAppareils = c.id && c.acces ? `<section class="box2" style="margin-top:6px"><h2>Appareils connectés (${cnx.length})</h2>
+        ${cnx.length ? cnx.map((x) => `<div class="frow" style="justify-content:space-between;border-top:1px solid #eef1f4;padding-top:8px">
+            <span><b>${h(x.prenom || (c.role === 'boite' ? 'Prénom non indiqué' : c.nom))}</b> — ${h(x.appareil || '')}<br>
+              <small class="hint">Connecté ${h(rel(x.depuis))} par ${x.via === 'lien' ? 'lien e-mail' : 'mot de passe'} · vu ${h(rel(x.vu))}</small></span>
+            <button class="btn small" data-deco="${x.id}">Déconnecter</button></div>`).join('')
+          + (cnx.length > 1 ? '<button class="btn small" data-deco="tous" style="align-self:flex-start;margin-top:8px">Déconnecter tous les appareils</button>' : '')
+          : '<p class="hint" style="margin:0">Aucun appareil connecté en ce moment.</p>'}
+        <p class="hint" style="margin:6px 0 0">Un appareil déconnecté devra redemander un lien. Utile quand quelqu'un quitte l'équipe d'une boîte.</p></section>` : '';
+      openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', champs + blocAppareils + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
+      document.querySelectorAll('#drawerBody [data-deco]').forEach((b) => b.onclick = async () => {
+        const tous = b.dataset.deco === 'tous';
+        if (!confirm(tous ? 'Déconnecter tous les appareils de ' + c.nom + ' ?' : 'Déconnecter cet appareil ?')) return;
+        await api('equipe/' + c.id + '/deconnecter', {method: 'POST', body: tous ? {} : {connexion_id: Number(b.dataset.deco)}});
+        toast(tous ? 'Tous les appareils sont déconnectés' : 'Appareil déconnecté');
+        closeDrawer(); await tabs.equipe();
+      });
       // Départements : seulement pour ceux qui couvrent un secteur (RSO, CTA).
       const roleSel = $('#drawerBody [name="role"]'), depRow = $('#drawerBody [name="departements"]').closest('.editrow');
       const secteur = () => { depRow.hidden = !['rso', 'cta'].includes(roleSel.value); };

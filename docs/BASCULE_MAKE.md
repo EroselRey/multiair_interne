@@ -530,6 +530,17 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   une simple modification (nom, fonction) n'envoie rien ; si l'e-mail ne part pas, le lien s'affiche pour être
   transmis ; une adresse ne peut servir d'identifiant qu'à un seul compte (boîtes et RH comprises) ; accès retiré →
   lien en cours annulé.
+- correctif 53 (06/11) : « je peux voir combien de personnes sont connectées par e-mail ? quand il y en a
+  plusieurs ça m'intéresse » :
+  - table `rep_connexions` (schema.sql) : une ligne par connexion — compte, prénom (facultatif), appareil
+    (« Windows · Edge », « iPhone · Safari », sans adresse IP), lien ou mot de passe, connecté le, vu le,
+    déconnecté le / par qui ; « vu » mis à jour au plus toutes les 5 minutes ;
+  - boîte partagée : la page du lien demande le prénom (facultatif, retenu sur l'appareil) ;
+  - « Équipe et accès » : « 2 appareils : Cécile, Bruno » dans la liste quand un compte est ouvert sur plusieurs
+    appareils ; dans la fiche, « Appareils connectés » avec qui, quel appareil, depuis quand, dernière activité, et
+    « Déconnecter » (un appareil ou tous) — l'appareil est déconnecté à sa prochaine action ;
+  - testé : deux connexions à Devis acquisitions (Cécile sur Windows, Bruno sur iPhone) → « 2 appareils » ;
+    Bruno déconnecté par l'administrateur → refusé (401), Cécile continue ; déconnexion de Cécile → 0 appareil.
 
 ## Reste à faire
 
