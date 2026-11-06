@@ -1,6 +1,6 @@
 <?php
-// MULTIAIR — choisir son mot de passe, depuis le lien d'invitation ou de mot de passe oublié.
-// Le lien vaut 7 jours et ne sert qu'une fois ; seule son empreinte est gardée en base.
+// MULTIAIR — se connecter avec le lien reçu par e-mail (?c=), ou choisir son mot de passe (?j=).
+// Chaque lien ne sert qu'une fois ; seule son empreinte est gardée en base.
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
 
@@ -9,6 +9,53 @@ header('Cache-Control: no-store');
 header('Referrer-Policy: no-referrer');
 
 $db = ma_db();
+$e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+
+// ------------------------------------------------------------------ Connexion par lien (sans mot de passe)
+// La page demande un clic : les antivirus de messagerie ouvrent les liens tout seuls, ils ne doivent pas
+// consommer le lien à la place de la personne.
+if (isset($_GET['c']) || isset($_POST['c'])) {
+    $jc = (string) ($_POST['c'] ?? $_GET['c'] ?? '');
+    $cc = ma_connexion_lien_compte($db, $jc);
+    if ($cc && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $db->prepare('UPDATE rep_contacts SET lien_jeton = NULL, lien_jeton_exp = NULL, derniere_connexion = ? WHERE id = ?')->execute([ma_now(), $cc['id']]);
+        $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+            ->execute(['plateforme', ma_now(), 'ok', 'connexion_lien_utilise', $cc['nom'] . ' s\'est connecté par lien']);
+        ma_ouvrir_session(['id' => (int) $cc['id'], 'nom' => (string) $cc['nom'], 'email' => (string) $cc['email'], 'acces' => (string) $cc['acces']]);
+        header('Location: index.php', true, 303);
+        exit;
+    }
+    $quiC = $cc ? (($cc['role'] ?? '') === 'boite' ? $cc['nom'] : (explode(' ', trim((string) $cc['nom']))[0] ?? '')) : '';
+    ?><!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Connexion — Multiair</title>
+<link rel="stylesheet" href="assets/style.css?v=<?= MA_VERSION ?>">
+</head>
+<body class="page-simple">
+<main class="auth">
+  <div class="auth-marque">MULTIAIR</div>
+<?php if (!$cc): ?>
+  <h1>Lien expiré</h1>
+  <p class="auth-sous">Ce lien n'est plus valable : il sert une seule fois, pendant 30 minutes. Demandez-en un nouveau sur la page de connexion, avec la même adresse.</p>
+  <a class="btn primary block" href="index.php">Recevoir un nouveau lien</a>
+<?php else: ?>
+  <h1>Bonjour<?= $quiC !== '' ? ' ' . $e($quiC) : '' ?></h1>
+  <p class="auth-sous">Connexion avec <b><?= $e($cc['email']) ?></b>. Vous resterez connecté <?= (int) (ma_config()['session_days'] ?? 30) ?> jours sur cet appareil.</p>
+  <form method="post" class="auth-form">
+    <input type="hidden" name="c" value="<?= $e($jc) ?>">
+    <button class="btn primary block big" type="submit" autofocus>Me connecter</button>
+  </form>
+<?php endif; ?>
+</main>
+</body>
+</html><?php
+    exit;
+}
+
 $jeton = (string) ($_POST['j'] ?? $_GET['j'] ?? '');
 $c = null;
 if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
@@ -17,7 +64,6 @@ if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
     $st->execute([hash('sha256', $jeton), ma_now()]);
     $c = $st->fetch() ?: null;
 }
-$e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $erreur = '';
 if ($c && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $p1 = (string) ($_POST['mdp'] ?? '');

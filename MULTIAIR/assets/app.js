@@ -229,6 +229,8 @@
   const moi = MA.user || {nom: '', acces: ''};
   const ADMIN = !!MA.admin;
   const SERVICE_MOI = {sav: 'SAV', commerce: 'COMMERCIAL', finance: 'FINANCE', rh: 'RH'}[moi.acces] || null;
+  // « Ses demandes seulement » (boîte partagée) : la plateforme ne lui envoie que ses demandes.
+  const PERSO = moi.acces === 'boite';
   const PAGES_SERVICE = ['a-traiter', 'demandes', 'demande', 'appel', 'stats', 'clients', 'client'];
   const main = $('#main');
   const app = $('#app');
@@ -399,12 +401,12 @@
         </article>`;
       };
       main.innerHTML = `
-        <div class="page-head"><div class="t"><h1>Bonjour ${h(prenom(moi.nom))}</h1>
+        <div class="page-head"><div class="t"><h1>Bonjour ${h(PERSO ? moi.nom : prenom(moi.nom))}</h1>
           <p>${aPrendre.length ? `${aPrendre.length} demande${aPrendre.length > 1 ? 's' : ''}${nomSvc ? ' ' + h(nomSvc) : ''} attend${aPrendre.length > 1 ? 'ent' : ''} un rappel${urgentes ? `, dont ${urgentes} urgente${urgentes > 1 ? 's' : ''}` : ''}.` : 'Aucune demande n\'attend de rappel.'}</p></div>
           ${SERVICE_MOI ? `<div class="seg" role="group" aria-label="Périmètre">
               <button class="${vueATraiter.portee === 'tout' ? 'on' : ''}" data-portee="tout">Tout le ${h(SERVICES[SERVICE_MOI])}</button>
               <button class="${vueATraiter.portee === 'moi' ? 'on' : ''}" data-portee="moi">Mes demandes</button></div>`
-            : `<div class="frow">${[['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']].map(([v, t]) =>
+            : PERSO ? '' : `<div class="frow">${[['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']].map(([v, t]) =>
               `<button class="chip ${vueATraiter.service === v ? 'on' : ''}" data-svc="${v}">${t}</button>`).join('')}</div>`}
         </div>
         <div class="tiles">
@@ -491,14 +493,14 @@
       const tranche = rows.slice(vueDemandes.page * PAGE_D, (vueDemandes.page + 1) * PAGE_D);
       const nbFiltres = Object.values(vueDemandes.f).filter(Boolean).length + (vueDemandes.q ? 1 : 0);
       main.innerHTML = `
-        <div class="page-head"><div class="t"><h1>Demandes</h1><p>${SERVICE_MOI ? 'Toutes les demandes du service ' + h(SERVICES[SERVICE_MOI]) + '.' : 'Toutes les demandes, tous canaux confondus.'}</p></div>
+        <div class="page-head"><div class="t"><h1>Demandes</h1><p>${SERVICE_MOI ? 'Toutes les demandes du service ' + h(SERVICES[SERVICE_MOI]) + '.' : (PERSO ? 'Les demandes envoyées ou transférées à ' + h(moi.nom) + '.' : 'Toutes les demandes, tous canaux confondus.')}</p></div>
           <label class="search">${ic('search', 's')}<input type="search" id="dq" placeholder="Nom, société, téléphone, n° de demande…" aria-label="Rechercher" value="${h(vueDemandes.q)}"></label>
           ${ADMIN ? `<button class="btn" id="selMode">${vueDemandes.sel ? 'Fin de la sélection' : 'Sélectionner'}</button><a class="btn" href="api.php?r=export/rep_demandes" download>Exporter (CSV)</a>` : ''}</div>
         <div class="panel filtres">
           <div class="frow"><span class="lab">Suivi</span>${chips('etat', [['', 'Toutes'], ['qualification', 'Avec Claire', 'st-qualification'], ['a_traiter', 'À traiter', 'st-a_traiter'],
             ['en_cours', 'En cours', 'st-en_cours'], ['traite', 'Traitées', 'st-traite']])}</div>
           <div class="frow"><span class="lab">Canal</span>${chips('canal', [['', 'Tous'], ...Object.entries(CANAUX).map(([k, t]) => [k, ic(k, 's') + h(t)])])}</div>
-          ${SERVICE_MOI ? '' : `<div class="frow"><span class="lab">Service</span>${chips('service', [['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']])}</div>`}
+          ${SERVICE_MOI || PERSO ? '' : `<div class="frow"><span class="lab">Service</span>${chips('service', [['', 'Tous'], ['SAV', 'SAV'], ['COMMERCIAL', 'Commerce'], ['FINANCE', 'Finance'], ['RH', 'RH'], ['AUTRE', 'À orienter']])}</div>`}
           <div class="frow"><span class="lab">Affiner</span>
             ${select('periode', 'Période', [['1', 'Dernières 24 h'], ['7', '7 derniers jours'], ['30', '30 derniers jours'], ['90', '3 derniers mois']]).replace(': tous', ': tout')}
             ${select('priorite', 'Priorité', [['URGENT', 'Urgent'], ['NORMAL', 'Normal']]).replace(': tous', ': toutes')}
@@ -1093,8 +1095,8 @@
     const tel = (t) => { const x = String(t || '').replace(/\D/g, '').replace(/^33/, '0'); return /^0\d{9}$/.test(x) ? x.replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
     const parId = (id) => r.rows.find((c) => Number(c.id) === Number(id));
     const acces = (c) => c.acces === 'admin' ? '<span class="pill admin">Admin</span>' : (c.acces ? `<span class="pill info">${h(MA.acces[c.acces] || c.acces)}</span>` : '<span class="pill muted">Aucun</span>');
-    const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : (c.a_mot_de_passe ? `<span class="hint">${c.derniere_connexion ? 'Vu ' + h(rel(c.derniere_connexion)) : 'Mot de passe choisi'}</span>`
-      : (c.invitation_en_cours ? '<span class="pill warn">Invitation envoyée</span>' : '<span class="pill warn">À inviter</span>'));
+    const connexion = (c) => !c.acces ? '<span class="hint">—</span>' : (c.derniere_connexion ? `<span class="hint">Vu ${h(rel(c.derniere_connexion))}</span>`
+      : (c.lien_envoye_at ? `<span class="pill warn">Lien envoyé ${h(rel(c.lien_envoye_at))}</span>` : '<span class="hint">Jamais connecté</span>'));
     const RESP = [['sav', 'SAV'], ['finance', 'Compta / finance'], ['commercial', 'Commerce'], ['autre', 'Sujet indéterminé'], ['rh', 'RH (candidatures)']];
     const render = () => {
       const liste = gens.filter((c) => (!vueEquipe.service || c.service_equipe === vueEquipe.service)
@@ -1122,12 +1124,14 @@
               <span class="m1"><b>${h(c.nom)}</b><span>${h(c.fonction || '')}</span><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span>
             </div>`).join('') || '<div class="vide" style="border:0">Personne ne correspond.</div>'}
           </div>
-          <p class="hint">Admin : voit tout et modifie les réglages. Service : voit toutes les demandes de son service et fait avancer leur suivi. Les portables ne sont jamais montrés aux clients.</p></section>
-        <section class="section"><h2>Boîtes partagées</h2><p class="hint">Adresses de service qui reçoivent les demandes commerce (qui reçoit quoi : menu « Qui reçoit quoi »). Elles n'ont pas d'accès.</p>
-          <div class="panel dl eq"><div class="row head"><span>BOÎTE</span><span>ACTIVITÉ</span><span>E-MAIL</span><span></span><span>LUE PAR</span><span></span><span></span></div>
+          <p class="hint">Admin : voit tout et modifie les réglages. Service : voit toutes les demandes de son service et fait avancer leur suivi. Ses demandes seulement : les demandes envoyées ou transférées à son adresse.
+            Connexion sans mot de passe : chacun saisit son adresse sur la page de connexion et reçoit un lien. Les portables ne sont jamais montrés aux clients.</p></section>
+        <section class="section"><h2>Boîtes partagées</h2><p class="hint">Adresses de service qui reçoivent les demandes commerce (menu « Qui reçoit quoi »).
+            Ceux qui lisent la boîte se connectent avec son adresse : le lien de connexion arrive dans la boîte. Une boîte ne voit que ses demandes.</p>
+          <div class="panel dl eq"><div class="row head"><span>BOÎTE</span><span>ACTIVITÉ</span><span>E-MAIL</span><span></span><span>LUE PAR</span><span>ACCÈS</span><span>CONNEXION</span></div>
           ${boites.map((c) => `<div class="row" data-c="${c.id}" role="link" tabindex="0"><span class="two"><b>${h(c.nom)}</b></span><span class="txt">${h(c.competences || '')}</span>
-            <span class="txt">${h(c.email || '')}</span><span></span><span class="txt">${h(c.membres || '')}</span><span></span><span></span>
-            <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2"></span></div>`).join('')}</div></section>`;
+            <span class="txt">${h(c.email || '')}</span><span></span><span class="txt">${h(c.membres || '')}</span><span>${acces(c)}</span><span>${connexion(c)}</span>
+            <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span></div>`).join('')}</div></section>`;
       $('#ajout', main).onclick = () => fiche({actif: 1, role: 'membre', service: 'sav'});
       const q = $('#eq_q', main);
       q.oninput = () => { vueEquipe.q = q.value; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#eq_q', main); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200); };
@@ -1148,11 +1152,11 @@
         ligne('Portable', `<input name="mobile" value="${h(c.mobile)}" placeholder="06 12 34 56 78">`, 'Reçoit le SMS des demandes SAV qui lui sont transmises. Jamais communiqué aux clients.'),
         ligne('Rôle dans l\'envoi des demandes', sel('role', ROLES_ROUTAGE, role), 'Détermine quelles demandes lui sont envoyées (menu « Qui reçoit quoi »).'),
         ligne('Départements couverts', `<input name="departements" value="${h(c.departements)}" placeholder="69, 01, 38">`, 'Pour un RSO ou un CTA : les demandes de ces départements lui arrivent.'),
-        ligne('Accès à la plateforme', sel('acces', [['', 'Aucun'], ...Object.entries(MA.acces)], c.acces || ''), 'Admin : tout, réglages compris. Service : les demandes de son service.'),
+        ligne('Accès à la plateforme', sel('acces', [['', 'Aucun'], ...Object.entries(MA.acces)], c.acces || ''), 'Admin : tout, réglages compris. Service : les demandes de son service. Ses demandes seulement : celles envoyées à son adresse (boîtes partagées).'),
         ligne('Actif', sel('actif', [['1', 'Oui'], ['0', 'Non (absent, parti…)']], String(c.actif ?? 1))),
         role === 'boite' ? ligne('Lue par', `<textarea name="membres">${h(c.membres)}</textarea>`) : '',
       ].join('');
-      const inviter = c.id && c.acces ? `<button class="btn" id="inviter">${ic('envoi', 's')}${c.a_mot_de_passe ? 'Envoyer un lien de mot de passe' : (c.invitation_en_cours ? 'Renvoyer l\'invitation' : 'Envoyer l\'invitation')}</button>` : '';
+      const inviter = c.id && c.acces ? `<button class="btn" id="inviter">${ic('envoi', 's')}Envoyer un lien de connexion</button>` : '';
       openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', champs + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
       // Départements : seulement pour ceux qui couvrent un secteur (RSO, CTA).
       const roleSel = $('#drawerBody [name="role"]'), depRow = $('#drawerBody [name="departements"]').closest('.editrow');
@@ -1176,9 +1180,9 @@
         inv.disabled = true;
         try {
           const x = await api('equipe/' + c.id + '/invitation', {method: 'POST'});
-          $('#invRes').innerHTML = `<div class="msg ${x.envoi === 'envoyé' ? 'ok' : 'warn'}">${x.envoi === 'envoyé' ? 'Lien envoyé par e-mail à ' + h(c.email) + '.' : 'L\'e-mail n\'a pas pu partir (' + h(x.envoi) + '). Transmettez ce lien vous-même :'}
-            <div class="lienbox" style="margin-top:8px"><input readonly value="${h(x.lien)}" aria-label="Lien pour choisir le mot de passe"><button class="btn small" id="copieInv">Copier</button></div>
-            <span class="hint">Valable 7 jours, une seule fois.</span></div>`;
+          $('#invRes').innerHTML = `<div class="msg ${x.envoi === 'envoyé' ? 'ok' : 'warn'}">${x.envoi === 'envoyé' ? 'Lien de connexion envoyé par e-mail à ' + h(c.email) + '.' : 'L\'e-mail n\'a pas pu partir (' + h(x.envoi) + '). Transmettez ce lien vous-même :'}
+            <div class="lienbox" style="margin-top:8px"><input readonly value="${h(x.lien)}" aria-label="Lien de connexion"><button class="btn small" id="copieInv">Copier</button></div>
+            <span class="hint">Valable 7 jours, une seule fois. Ensuite, la personne demande elle-même un lien sur la page de connexion.</span></div>`;
           $('#copieInv').onclick = async () => { const i = $('#invRes input'); i.select(); try { await navigator.clipboard.writeText(i.value); } catch (e) { document.execCommand('copy'); } toast('Lien copié'); };
         } catch (e) { toast(e.message, true); inv.disabled = false; }
       };

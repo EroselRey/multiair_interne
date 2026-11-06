@@ -79,6 +79,23 @@ if ($parts === ['auth', 'recover'] && $method === 'POST') {
     }
     out(['ok' => true, 'message' => 'Si un compte existe pour cette adresse, un lien pour choisir un nouveau mot de passe vient d\'y être envoyé.']);
 }
+if ($parts === ['auth', 'lien'] && $method === 'POST') {
+    // Connexion sans mot de passe : un lien part à l'adresse du compte (personne ou boîte partagée), s'il existe.
+    // Même réponse dans tous les cas ; au plus un lien par minute et par compte.
+    $email = trim((string) ($body['email'] ?? ''));
+    if (str_contains($email, '@')) {
+        $dbl = ma_db();
+        $acces = implode(',', array_map(fn($a) => $dbl->quote($a), array_keys(MA_ACCES)));
+        $st = $dbl->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ($acces) LIMIT 1");
+        $st->execute([$email]);
+        $c = $st->fetch();
+        if ($c && (empty($c['lien_envoye_at']) || strtotime((string) $c['lien_envoye_at']) < time() - 60)) {
+            ma_connexion_lien($dbl, $c);
+        }
+    }
+    out(['ok' => true, 'message' => 'Si cette adresse a un accès à la plateforme, un lien de connexion vient d\'y être envoyé. '
+        . 'Ouvrez l\'e-mail « Multiair — Votre lien de connexion » (pensez aux courriers indésirables). Le lien est valable 30 minutes.']);
+}
 if ($parts === ['auth', 'me']) {
     out(['ok' => true, 'connecte' => $viaSession, 'utilisateur' => ma_user()]);
 }
@@ -132,11 +149,13 @@ if (!$viaApiKey && !$user) {
 }
 $estAdmin = $viaApiKey || (($user['acces'] ?? '') === 'admin');
 $portee = $estAdmin ? null : ma_acces_service_demande((string) ($user['acces'] ?? ''));
+// « Ses demandes seulement » (boîtes partagées) : les demandes envoyées ou transférées à son adresse.
+$perso = $estAdmin ? null : ma_portee_perso($user);
 if (!$estAdmin) {
     $r0 = $parts[0] ?? '';
     $r1 = $parts[1] ?? null;
     $lecture = $method === 'GET';
-    $permis = $portee !== null && (
+    $permis = ($portee !== null || $perso !== null) && (
         ($r0 === 'rep' && $r1 === 'demandes' && ($lecture || (($method === 'PATCH' || $method === 'POST') && isset($parts[2]))))
         || ($r0 === 'rep' && in_array($r1, ['fiches', 'messages', 'listes'], true) && $lecture)
         || ($r0 === 'equipe' && $lecture && !isset($parts[1]))
@@ -207,7 +226,7 @@ function getOne(PDO $db, string $table, int $id): ?array
  *   ?q=texte (recherche sur les colonnes texte), ?statut=a,b, ?from=YYYY-MM-DD, ?to=YYYY-MM-DD,
  *   ?limit=, ?offset=, ?order=col, ?dir=asc|desc, plus ?<colonne>=valeur pour une égalité.
  */
-function listRows(PDO $db, string $table, string $dateCol, array $q, array $textCols = []): array
+function listRows(PDO $db, string $table, string $dateCol, array $q, array $textCols = [], ?array $condition = null): array
 {
     // Garde-fou : une écriture qui arrive jusqu'ici n'a été traitée par aucune route.
     // Sans cela, un POST recevrait la liste des lignes avec « ok », et le scénario Make
@@ -223,6 +242,10 @@ function listRows(PDO $db, string $table, string $dateCol, array $q, array $text
     }
     $where = [];
     $args = [];
+    if ($condition) {
+        $where[] = $condition[0];
+        array_push($args, ...$condition[1]);
+    }
     $allCols = cols($db, $table);
     if (!empty($q['statut'])) {
         $vals = array_map('trim', explode(',', (string) $q['statut']));
@@ -410,6 +433,10 @@ try {
                     ma_rep_programmer_relances($db, $d['statut'] === 'En attente' ? $id : null);
                     out(['ok' => true, 'id' => $id, 'tel_norm' => $d['tel_norm'], 'statut' => $d['statut']]);
                 }
+                if ($perso !== null) {
+                    // Les fiches d'appel ne sont pas rattachées à une boîte : elle voit ses demandes, pas les appels.
+                    $sub2 === null ? out(['ok' => true, 'rows' => []]) : fail('Réservé aux services', 403);
+                }
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
                     if ($method === 'GET') {
@@ -479,6 +506,9 @@ try {
                     out(['ok' => true, 'id' => $id, 'fiche_id' => $ficheId]);
                 }
                 // GET : la conversation d'une fiche (?fiche_id=) ou d'un numéro (?tel=)
+                if ($perso !== null) {
+                    out(['ok' => true, 'rows' => []]);
+                }
                 if ($portee !== null) {
                     $f = getOne($db, 'rep_fiches', (int) ($_GET['fiche_id'] ?? 0));
                     if (!$f || ma_plat($f['service'] ?? '') !== $SVC_FICHE[$portee]) {
@@ -539,6 +569,9 @@ try {
                     if ($portee !== null && $dem['service'] !== $portee) {
                         fail('Cette demande relève d\'un autre service', 403);
                     }
+                    if ($perso !== null && !ma_demande_pour($dem, $perso)) {
+                        fail('Cette demande n\'est pas envoyée à ' . $perso['nom'], 403);
+                    }
                     if ($method === 'POST' && ($parts[3] ?? null) === 'repondre') {
                         // Réponse écrite au client : part de l'adresse générique, la personne en copie.
                         if (!$user || trim((string) ($user['nom'] ?? '')) === '') {
@@ -586,7 +619,8 @@ try {
                         }
                         $apres = ma_rep_transferer($db, $dem, $cible, (string) ($user['nom'] ?? ''), trim((string) ($body['message'] ?? '')));
                         logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
-                        out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin || $apres['service'] === $portee]);
+                        out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin
+                            || ($perso !== null ? ma_demande_pour($apres, $perso) : $apres['service'] === $portee)]);
                     }
                     if (($parts[3] ?? null) === 'pieces') {
                         // Pièces jointes : envoi (Make depuis l'e-mail du client, ou l'équipe depuis la page),
@@ -689,7 +723,8 @@ try {
                 if ($portee !== null) {
                     $q['service'] = $portee;
                 }
-                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $q, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'])]);
+                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $q, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'],
+                    $perso !== null ? ma_sql_demandes_pour($perso) : null)]);
             }
             if ($sub === 'routage') {
                 routageRoutes($db, 'repondeur', $sub2, $method, $body);
@@ -864,7 +899,8 @@ try {
                     if (!isset(MA_ACCES[$c['acces'] ?? '']) || !str_contains((string) $c['email'], '@')) {
                         fail('Donnez d\'abord un accès et une adresse e-mail à cette personne');
                     }
-                    $r = ma_compte_lien($db, $c, trim((string) $c['mdp_hash']) !== '' ? 'reinit' : 'invitation');
+                    // Connexion sans mot de passe : l'invitation est un lien de connexion (7 jours).
+                    $r = ma_connexion_lien($db, $c, 'invitation');
                     out(['ok' => true] + $r);
                 }
                 if ($method === 'PATCH' || $method === 'POST') {
@@ -1004,7 +1040,7 @@ try {
                 $q = 'SELECT * FROM rep_demandes WHERE client_id = ?' . ($portee !== null ? ' AND service = ?' : '') . ' ORDER BY created_at DESC';
                 $st = $db->prepare($q);
                 $st->execute($portee !== null ? [$id, $portee] : [$id]);
-                $c['demandes'] = $st->fetchAll();
+                $c['demandes'] = $perso !== null ? array_values(array_filter($st->fetchAll(), fn($x) => ma_demande_pour($x, $perso))) : $st->fetchAll();
                 $c['fidelite'] = ma_client_fidelite($c);
                 $st = $db->prepare('SELECT * FROM rep_equipements WHERE client_id = ? ORDER BY actif DESC, COALESCE(derniere_demande, created_at) DESC');
                 $st->execute([$id]);

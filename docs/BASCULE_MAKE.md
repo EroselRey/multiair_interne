@@ -499,6 +499,32 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   éclatée et schéma des pièces → CTS devis, devis compresseur → Devis matériel neuf, panne + schéma → RSO ;
 - demande 111 transférée à Devis acquisitions le 05/11 (elle était encore « à traiter » chez CTS devis).
 
+## Connexion par lien e-mail pour tous, accès des boîtes partagées (correctif 51, 06/11)
+
+- demande de Cyril : ouvrir l'accès à chaque personne interne, y compris les boîtes partagées lues par plusieurs
+  personnes (ex. Devis acquisitions) ; connexion simple ; chacun ne voit que les demandes de son service ou de sa
+  boîte, seuls les responsables (direction) voient tout ; « on peut faire pareil pour tout le monde, pour éviter
+  d'utiliser des mots de passe ? » — « même les adresses perso » ;
+- choix validés : lien reçu par e-mail ; une boîte ne voit que ses demandes ; toutes les boîtes ;
+- connexion (index.php) : on saisit son adresse (personnelle ou de la boîte) → `POST auth/lien` → e-mail
+  « Multiair — Votre lien de connexion » envoyé par le scénario de suivi (même réponse si l'adresse est inconnue,
+  un lien par minute au plus) ; le lien ouvre `compte.php?c=…` qui demande un clic « Me connecter » (les antivirus
+  de messagerie qui ouvrent les liens ne le consomment pas) ; lien valable 30 min, une fois ; le mot de passe reste
+  possible (« Se connecter avec un mot de passe ») pour ceux qui en ont un et pour l'accès de secours de config.php ;
+- invitation depuis « Équipe et accès » : bouton « Envoyer un lien de connexion » (lien valable 7 jours) ;
+- sessions : rangées dans data/sessions (fermé au web comme la base), durée de vie = session_days (30 jours) ;
+  au premier chargement après dépôt, tout le monde est déconnecté une fois (les anciennes sessions étaient ailleurs) ;
+- nouvel accès « Ses demandes seulement » (`boite`) : demandes dont l'adresse est destinataire (dest_to / dest_cc),
+  ou dont la boîte est le destinataire ou la personne qui l'a prise ; une demande transférée ailleurs n'est plus
+  visible ; pas de fiches d'appel ni de conversations WhatsApp ; fiche client limitée à ses demandes ; pas de
+  réglages ; donné une fois à toutes les boîtes actives qui ont une adresse (paramètre `acces_boites`) ;
+- les services (SAV, finance, RH, commerce) gardent les demandes de leur service ; administrateurs : tout ;
+- testé sur la copie locale : lien pour une adresse inconnue → rien d'envoyé ; deux demandes en une minute → un seul
+  e-mail ; GET du lien → page « Me connecter », rien de consommé ; clic → connecté ; lien réutilisé → « Lien expiré » ;
+  Devis acquisitions voit sa demande (schéma électrique), pas la notice partie à AIM commandes (403), ni les fiches
+  d'appel, ni les réglages ; prise en charge et réponse au client depuis la boîte (copie à la boîte) ; adresse
+  personnelle de la direction → connectée, voit tout.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-05d';
+const MA_VERSION = '2026-11-06a';
 
 function ma_config(): array
 {
@@ -415,7 +415,8 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         // Champs corrigés à la main sur la fiche client : les demandes suivantes ne les écrasent plus.
         'rep_clients' => ['champs_corriges' => 'TEXT', 'civilite' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT', 'fonction' => 'TEXT', 'service' => 'TEXT', 'acces' => 'TEXT',
-            'mdp_hash' => 'TEXT', 'mdp_jeton' => 'TEXT', 'mdp_jeton_exp' => 'TEXT', 'derniere_connexion' => 'TEXT'],
+            'mdp_hash' => 'TEXT', 'mdp_jeton' => 'TEXT', 'mdp_jeton_exp' => 'TEXT', 'derniere_connexion' => 'TEXT',
+            'lien_jeton' => 'TEXT', 'lien_jeton_exp' => 'TEXT', 'lien_envoye_at' => 'TEXT'],
         'rep_regles' => ['natures' => 'TEXT'],
     ];
 
@@ -531,6 +532,14 @@ function ma_migrate(PDO $pdo, bool $fresh): void
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_schemas', ?)")->execute([ma_now()]);
     }
 
+    // Boîtes partagées : accès « ses demandes seulement » (décision de Cyril, 06/11), une fois ; ensuite « Équipe et accès » décide.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'acces_boites'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('rep_contacts', $present, true)) {
+        $n = $pdo->exec("UPDATE rep_contacts SET acces = 'boite' WHERE role = 'boite' AND actif = 1 AND email LIKE '%@%' AND (acces IS NULL OR acces = '')");
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('acces_boites', ?)")->execute([ma_now() . ' : ' . (int) $n . ' boîte(s)']);
+    }
+
     // L'équipe de la plateforme (accès, responsables de service) : posée une seule fois.
     $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'equipe_initiale'");
     $st->execute();
@@ -588,6 +597,16 @@ function ma_session_start(): void
     }
     $cfg = ma_config();
     $days = (int) ($cfg['session_days'] ?? 30);
+    // Connexion par lien : la session doit tenir aussi longtemps que le cookie. Rangée à part, dans data/
+    // (fermé au web), pour que le ménage des autres sites de l'hébergement ne la supprime pas avant.
+    $dossier = dirname((string) ($cfg['db_path'] ?? (__DIR__ . '/data/multiair.sqlite'))) . '/sessions';
+    if (!is_dir($dossier)) {
+        @mkdir($dossier, 0700, true);
+    }
+    if (is_dir($dossier) && is_writable($dossier)) {
+        session_save_path($dossier);
+    }
+    ini_set('session.gc_maxlifetime', (string) ($days * 86400));
     session_set_cookie_params([
         'lifetime' => $days * 86400,
         'path' => '/',
@@ -2283,7 +2302,9 @@ function ma_est_rh(array $d): bool
         . "|stage (de fin d'etudes|en entreprise|d'observation)|alternance|alternant|apprentie?s?|apprentissage|ressources humaines|rh|job)\\b"
         . "|(offre|demande|recherche) d'emploi/u", $t);
 }
-const MA_ACCES = ['admin' => 'Administrateur', 'sav' => 'Service SAV', 'commerce' => 'Service Commerce', 'finance' => 'Service Finance', 'rh' => 'Service RH'];
+const MA_ACCES = ['admin' => 'Administrateur', 'sav' => 'Service SAV', 'commerce' => 'Service Commerce', 'finance' => 'Service Finance', 'rh' => 'Service RH',
+    // Boîte partagée (ou personne) qui ne voit que les demandes qui lui sont envoyées ou transférées.
+    'boite' => 'Ses demandes seulement'];
 
 /** Service d'une personne : celui qui est renseigné, sinon celui de son rôle de routage. */
 function ma_contact_service(array $c): string
@@ -2521,13 +2542,87 @@ function ma_compte_lien(PDO $db, array $c, string $motif = 'invitation'): array
     return ['lien' => $lien, 'envoi' => $envoi];
 }
 
+/** Accès « ses demandes seulement » : l'adresse et le nom qui désignent ses demandes, sinon null. */
+function ma_portee_perso(?array $user): ?array
+{
+    if (($user['acces'] ?? '') !== 'boite') {
+        return null;
+    }
+    return ['email' => strtolower(trim((string) ($user['email'] ?? ''))), 'nom' => trim((string) ($user['nom'] ?? ''))];
+}
+
+/** La demande est-elle envoyée (ou transférée) à cette boîte / personne, ou prise par elle ? */
+function ma_demande_pour(array $dem, array $p): bool
+{
+    $adresses = ';' . strtolower(str_replace([',', ' '], [';', ''], ($dem['dest_to'] ?? '') . ';' . ($dem['dest_cc'] ?? ''))) . ';';
+    return ($p['email'] !== '' && str_contains($adresses, ';' . $p['email'] . ';'))
+        || ($p['nom'] !== '' && in_array($p['nom'], [(string) ($dem['destinataires'] ?? ''), (string) ($dem['pris_par'] ?? '')], true));
+}
+
+/** Même règle en SQL, pour les listes : [condition, paramètres]. */
+function ma_sql_demandes_pour(array $p): array
+{
+    return ["(instr(';' || lower(replace(replace(ifnull(dest_to, '') || ';' || ifnull(dest_cc, ''), ',', ';'), ' ', '')) || ';', ?) > 0"
+        . ' OR destinataires = ? OR pris_par = ?)', [';' . $p['email'] . ';', $p['nom'], $p['nom']]];
+}
+
+/**
+ * Lien de connexion sans mot de passe, envoyé à l'adresse du compte (personne ou boîte partagée).
+ * Une seule fois ; 30 minutes quand on le demande soi-même, 7 jours pour une invitation.
+ */
+function ma_connexion_lien(PDO $db, array $c, string $motif = 'demande'): array
+{
+    $jeton = ma_jeton();
+    $invitation = $motif === 'invitation';
+    $duree = $invitation ? 7 * 86400 : 1800;
+    $db->prepare('UPDATE rep_contacts SET lien_jeton = ?, lien_jeton_exp = ?, lien_envoye_at = ? WHERE id = ?')
+        ->execute([hash('sha256', $jeton), date('Y-m-d H:i:s', time() + $duree), ma_now(), $c['id']]);
+    $lien = ma_url_base($db) . 'compte.php?c=' . $jeton;
+    $boite = ($c['role'] ?? '') === 'boite';
+    $prenom = $boite ? '' : (explode(' ', trim((string) $c['nom']))[0] ?? '');
+    $jours = (int) (ma_config()['session_days'] ?? 30);
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $phrase = ($invitation
+            ? 'Un accès à la plateforme des demandes clients Multiair est ouvert pour ' . ($boite ? 'la boîte ' . $c['nom'] : 'vous')
+                . ' (' . (MA_ACCES[$c['acces']] ?? '') . ').'
+            : 'Voici le lien pour vous connecter à la plateforme des demandes clients Multiair' . ($boite ? ' avec la boîte ' . $c['nom'] : '') . '.')
+        . ' Pas de mot de passe : un clic sur le bouton suffit, et vous restez connecté ' . $jours . ' jours sur cet appareil.';
+    $html = ma_mail_gabarit([
+        'titre' => $invitation ? 'Votre accès à la plateforme Multiair' : 'Votre lien de connexion',
+        'corps' => '<p style="margin:0 0 14px">Bonjour' . ($prenom !== '' ? ' ' . $e($prenom) : '') . ',</p><p style="margin:0">' . $e($phrase) . '</p>'
+            . ($boite ? '<p style="margin:14px 0 0">Toute personne qui lit cette boîte peut utiliser ce lien.</p>' : ''),
+        'bouton' => ['Me connecter', $lien],
+        'pied' => 'Lien valable ' . ($invitation ? '7 jours' : '30 minutes') . ', une seule fois. Pour un nouveau lien : page de connexion, adresse '
+            . $c['email'] . '. Si vous n\'avez rien demandé, ignorez ce message.',
+    ]);
+    $envoi = ma_webhook_suivi($db, ['evenement' => 'compte', 'demande_id' => 0, 'mobile' => false, 'tel' => '',
+        'email' => (string) $c['email'], 'objet' => 'Multiair — ' . ($invitation ? 'Votre accès à la plateforme' : 'Votre lien de connexion'),
+        'html' => $html, 'texte' => 'Lien de connexion : ' . $lien, 'lien' => $lien]);
+    $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
+        ->execute(['plateforme', ma_now(), str_starts_with($envoi, 'échec') ? 'erreur' : 'info', 'connexion_lien',
+            $c['nom'] . ' — lien de connexion' . ($invitation ? ' (invitation)' : '') . ' : ' . $envoi]);
+    return ['lien' => $lien, 'envoi' => $envoi];
+}
+
+/** Compte d'un lien de connexion encore valable (jeton en clair), sinon null. */
+function ma_connexion_lien_compte(PDO $db, string $jeton): ?array
+{
+    if (!preg_match('/^[a-f0-9]{32}$/', $jeton)) {
+        return null;
+    }
+    $acces = implode(',', array_map(fn($a) => $db->quote($a), array_keys(MA_ACCES)));
+    $st = $db->prepare("SELECT * FROM rep_contacts WHERE lien_jeton = ? AND lien_jeton_exp > ? AND actif = 1 AND acces IN ($acces) LIMIT 1");
+    $st->execute([hash('sha256', $jeton), ma_now()]);
+    return $st->fetch() ?: null;
+}
+
 /** Retire les champs secrets d'une personne avant de l'envoyer à la page. */
 function ma_contact_public(array $c): array
 {
     $c['a_mot_de_passe'] = trim((string) ($c['mdp_hash'] ?? '')) !== '';
     $c['invitation_en_cours'] = !$c['a_mot_de_passe'] && trim((string) ($c['mdp_jeton'] ?? '')) !== ''
         && (string) ($c['mdp_jeton_exp'] ?? '') > ma_now();
-    unset($c['mdp_hash'], $c['mdp_jeton'], $c['mdp_jeton_exp']);
+    unset($c['mdp_hash'], $c['mdp_jeton'], $c['mdp_jeton_exp'], $c['lien_jeton'], $c['lien_jeton_exp']);
     $c['service_equipe'] = ma_contact_service($c);
     return $c;
 }

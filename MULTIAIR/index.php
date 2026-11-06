@@ -49,47 +49,50 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
 <?php if (!$user): ?>
 <main class="auth" id="auth">
   <div class="auth-marque">MULTIAIR</div>
-  <div id="vueConnexion">
+  <div id="vueLien">
     <h1>Connexion</h1>
-    <p class="auth-sous">Plateforme des demandes clients.</p>
+    <p class="auth-sous">Plateforme des demandes clients. Pas de mot de passe : vous recevez un lien de connexion par e-mail.</p>
+    <form id="lienForm" class="auth-form" autocomplete="on">
+      <label class="field"><span>Votre adresse e-mail (ou celle de votre boîte partagée)</span><input name="email" type="email" required autocomplete="username" autofocus></label>
+      <div id="lienMsg" aria-live="polite"></div>
+      <button class="btn primary block big" type="submit">Recevoir mon lien de connexion</button>
+    </form>
+    <button class="link lien" id="mdpBtn" type="button">Se connecter avec un mot de passe</button>
+  </div>
+  <div id="vueConnexion" hidden>
+    <h1>Connexion par mot de passe</h1>
+    <p class="auth-sous">Pour les comptes qui ont choisi un mot de passe.</p>
     <form id="loginForm" class="auth-form" autocomplete="on">
-      <label class="field"><span>Adresse e-mail</span><input name="login" type="text" inputmode="email" required autocomplete="username" autofocus></label>
+      <label class="field"><span>Adresse e-mail</span><input name="login" type="text" inputmode="email" required autocomplete="username"></label>
       <label class="field"><span>Mot de passe</span><input name="password" type="password" required autocomplete="current-password"></label>
       <div id="loginMsg" aria-live="polite"></div>
       <button class="btn primary block big" type="submit">Se connecter</button>
     </form>
-    <button class="link lien" id="oubliBtn" type="button">Mot de passe oublié ?</button>
-  </div>
-  <div id="vueOubli" hidden>
-    <h1>Mot de passe oublié</h1>
-    <p class="auth-sous">Indiquez votre adresse e-mail : vous recevrez un lien pour choisir un nouveau mot de passe.</p>
-    <form id="oubliForm" class="auth-form">
-      <label class="field"><span>Adresse e-mail</span><input name="email" type="email" required autocomplete="username"></label>
-      <div id="oubliMsg" aria-live="polite"></div>
-      <button class="btn primary block big" type="submit">Recevoir le lien</button>
-    </form>
-    <button class="link lien" id="retourBtn" type="button">Retour à la connexion</button>
+    <button class="link lien" id="retourLien" type="button">Recevoir plutôt un lien par e-mail</button>
   </div>
 </main>
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
-  const f = $('#loginForm'), m = $('#loginMsg');
   const post = (r, body) => fetch('api.php?r=' + r, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
     .then((x) => x.json()).catch(() => ({}));
+  const vue = (mdp) => { $('#vueLien').hidden = mdp; $('#vueConnexion').hidden = !mdp; };
+  $('#mdpBtn').addEventListener('click', () => { vue(true); $('#loginForm').login.value = $('#lienForm').email.value; $('#loginForm').password.focus(); });
+  $('#retourLien').addEventListener('click', () => vue(false));
+  $('#lienForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const b = e.target.querySelector('button');
+    b.disabled = true;
+    const j = await post('auth/lien', {email: e.target.email.value.trim()});
+    $('#lienMsg').innerHTML = '<div class="msg ' + (j.ok ? 'ok' : 'err') + '">' + (j.message || j.erreur || 'Envoi impossible, réessayez dans un instant') + '</div>';
+    setTimeout(() => { b.disabled = false; }, 60000);
+  });
+  const f = $('#loginForm'), m = $('#loginMsg');
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     m.innerHTML = '';
     const j = await post('auth/login', {login: f.login.value.trim(), password: f.password.value});
     if (j.ok) location.reload(); else m.innerHTML = '<div class="msg err">' + (j.erreur || 'Connexion impossible') + '</div>';
-  });
-  const vue = (oubli) => { $('#vueConnexion').hidden = oubli; $('#vueOubli').hidden = !oubli; };
-  $('#oubliBtn').addEventListener('click', () => { vue(true); $('#oubliForm').email.value = f.login.value.includes('@') ? f.login.value : ''; });
-  $('#retourBtn').addEventListener('click', () => vue(false));
-  $('#oubliForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const j = await post('auth/recover', {email: e.target.email.value.trim()});
-    $('#oubliMsg').innerHTML = '<div class="msg ' + (j.ok ? 'ok' : 'err') + '">' + (j.message || j.erreur || 'Erreur') + '</div>';
   });
 })();
 </script>
