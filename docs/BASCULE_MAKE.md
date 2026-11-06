@@ -553,6 +553,11 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - historique : « Anciens destinataires prévenus du transfert : … » (famille Envois) ;
 - testé : transfert de Devis acquisitions vers CTS devis par l'administrateur → Devis acquisitions prévenue ;
   transfert fait par CTS devis elle-même → rien à elle-même.
+- correctif 55 (06/11) : « préviens aussi les autres à la prise en charge » — `ma_rep_prevenir_prise()` : quand une
+  demande « à traiter » est prise en charge (plateforme, page reçue par lien, ou réponse au client), e-mail
+  « Pour information — demande n° X prise en charge par Y » aux autres destinataires (À et copie), pas à celui qui la
+  prend ; rouvrir une demande traitée n'envoie rien ; historique « Autres destinataires prévenus de la prise en
+  charge » ; testé : urgence SAV envoyée au RSO avec Julien en copie, prise par Julien → le RSO est prévenu.
 
 ## Reste à faire
 

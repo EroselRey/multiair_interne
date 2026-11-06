@@ -565,10 +565,10 @@
     prise_en_charge: ['Prise en charge', 'prendre'], rappel: ['Rappel', 'agenda'], note: ['Note interne', 'note'], traitee: ['Traitée', 'check'],
     rouverte: ['Rouverte', 'retour'], modifiee: ['Modification', 'note'], transferee: ['Transfert', 'envoi'], relance: ['Relance du client', 'retour'], message_client: ['Message du client', 'whatsapp'], reponse_claire: ['Réponse de Claire', 'chat'],
     piece: ['Pièce jointe', 'note'], relance_equipe: ['Relance interne', 'retour'], reponse: ['Réponse au client', 'email'],
-    info_transfert: ['Anciens destinataires prévenus', 'envoi'],
+    info_transfert: ['Anciens destinataires prévenus', 'envoi'], info_prise: ['Autres destinataires prévenus', 'envoi'],
   };
   const FAMILLES_HIST = {tout: 'Tout', envois: 'Envois', equipe: 'Équipe', conversation: 'Conversation'};
-  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte', 'relance_equipe', 'info_transfert'].includes(t) ? 'envois' : (['message_client', 'reponse_claire', 'reponse'].includes(t) ? 'conversation' : 'equipe'));
+  const familleHist = (t) => (['transmise', 'client_prevenu', 'recue', 'transferee', 'relance', 'rouverte', 'relance_equipe', 'info_transfert', 'info_prise'].includes(t) ? 'envois' : (['message_client', 'reponse_claire', 'reponse'].includes(t) ? 'conversation' : 'equipe'));
   const vueHist = {f: 'tout'};
 
   function historiqueHtml(ev) {

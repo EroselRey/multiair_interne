@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-06d';
+const MA_VERSION = '2026-11-06e';
 
 function ma_config(): array
 {
@@ -2192,6 +2192,9 @@ function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $messag
         $db->prepare("UPDATE rep_demandes SET statut = 'en_cours', pris_at = COALESCE(pris_at, ?), pris_par = COALESCE(NULLIF(pris_par, ''), ?) WHERE id = ?")
             ->execute([$now, $nom, $id]);
         ma_rep_evenement($db, $id, 'prise_en_charge', $nom, 'plateforme', 'Prise en charge par ' . $nom . ' (en répondant au client)', []);
+        $q2 = $db->prepare('SELECT * FROM rep_demandes WHERE id = ?');
+        $q2->execute([$id]);
+        ma_rep_prevenir_prise($db, $q2->fetch() ?: $dem, $nom);
     }
     $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
         ->execute(['repondeur', $now, 'ok', 'reponse_client', 'Demande ' . $id . ' : réponse de ' . $nom . ' envoyée à ' . $client . ($copie !== '' ? ' (copie ' . $copie . ')' : '')]);
@@ -2274,6 +2277,10 @@ function ma_rep_avancer(PDO $db, int $id, array $chg, string $par = '', string $
     }
     foreach ($evenements as $e) {
         ma_rep_notifier_client($db, $apres, $e);
+    }
+    // Prise en charge d'une demande « à traiter » : les autres destinataires sont prévenus.
+    if (($maj['statut'] ?? '') === 'en_cours' && $avant['statut'] === 'a_traiter') {
+        ma_rep_prevenir_prise($db, $apres, (string) ($apres['pris_par'] ?: $par));
     }
     if ($maj) {
         $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
@@ -3677,6 +3684,49 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
         ['envois' => $envois, 'texte' => $message, 'envoi' => $envoi, 'avant' => $dem['destinataires']]);
     ma_rep_prevenir_anciens($db, $dem, $apres, $cible, $par, $message);
     return $apres;
+}
+
+/**
+ * Prise en charge d'une demande envoyée à plusieurs adresses : les autres destinataires (À et copie) sont
+ * prévenus que quelqu'un s'en occupe et qu'ils n'ont rien à faire. Pas celui qui la prend. Un e-mail par adresse.
+ */
+function ma_rep_prevenir_prise(PDO $db, array $dem, string $qui): array
+{
+    $qui = trim($qui);
+    if ($qui === '') {
+        return [];
+    }
+    $adresses = ma_liste_emails(($dem['dest_to'] ?? '') . ';' . ($dem['dest_cc'] ?? ''));
+    $q = $db->prepare('SELECT email FROM rep_contacts WHERE lower(nom) = lower(?) AND email LIKE ? LIMIT 1');
+    $q->execute([$qui, '%@%']);
+    $adresses = array_diff_key($adresses, ma_liste_emails((string) ($q->fetchColumn() ?: '')));
+    if (!$adresses) {
+        return [];
+    }
+    [$materiel, $sujet] = ma_rep_objet_client($dem);
+    $client = trim((string) ($dem['societe'] ?: $dem['contact'] ?: 'Client'));
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $html = ma_mail_gabarit([
+        'surtitre' => 'Pour information',
+        'titre' => 'Demande n° ' . $dem['id'] . ' prise en charge par ' . $qui,
+        'corps' => '<p style="margin:0 0 12px">Bonjour,</p><p style="margin:0">La demande n° ' . (int) $dem['id'] . ' qui vous a été envoyée est prise en charge par <b>'
+            . $e($qui) . '</b> depuis ' . $e(ma_date_fr(ma_now())) . ". Vous n'avez rien à faire de votre côté.</p>",
+        'fiche' => ma_mail_fiche([['Demande', 'n° ' . $dem['id'], false], ['Client', $client, false], ['Matériel', $materiel, false], ['Objet', $sujet, false]]),
+        'pied' => 'Multiair — message automatique de la plateforme des demandes.',
+    ]);
+    $objet = 'Pour information — demande n° ' . $dem['id'] . ' prise en charge par ' . $qui;
+    $envois = [];
+    $statuts = [];
+    foreach ($adresses as $adresse) {
+        $statuts[] = ma_webhook_suivi($db, ['evenement' => 'prise_info', 'demande_id' => (int) $dem['id'], 'mobile' => false, 'tel' => '',
+            'email' => $adresse, 'objet' => $objet, 'html' => $html, 'texte' => '', 'lien' => '']);
+        $envois[] = ['canal' => 'E-mail', 'a' => $adresse];
+    }
+    $echecs = array_filter($statuts, fn($s) => $s !== 'envoyé');
+    ma_rep_evenement($db, (int) $dem['id'], 'info_prise', 'Plateforme', 'plateforme',
+        'Autres destinataires prévenus de la prise en charge : ' . implode(', ', array_values($adresses)),
+        ['envois' => $envois, 'envoi' => $echecs ? implode(', ', array_unique($echecs)) : 'envoyé']);
+    return array_values($adresses);
 }
 
 /**
