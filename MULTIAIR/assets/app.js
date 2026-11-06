@@ -1169,8 +1169,15 @@
         if (!body.nom) return toast('Le nom est requis', true);
         try {
           const x = c.id ? await patch('equipe/' + c.id, body) : await api('equipe', {method: 'POST', body});
-          toast('Enregistré');
-          if (!c.id && body.acces) { closeDrawer(); await tabs.equipe(); fiche(x.personne); return; }
+          const l = x.lien_connexion;
+          if (l && l.envoi !== 'envoyé') {
+            // L'e-mail n'est pas parti : on montre le lien à transmettre.
+            closeDrawer(); await tabs.equipe(); fiche(x.personne);
+            $('#invRes').innerHTML = `<div class="msg warn">Enregistré, mais l'e-mail de connexion n'a pas pu partir (${h(l.envoi)}). Transmettez ce lien :
+              <div class="lienbox" style="margin-top:8px"><input readonly value="${h(l.lien)}" aria-label="Lien de connexion"></div><span class="hint">Valable 7 jours, une seule fois.</span></div>`;
+            return;
+          }
+          toast(l ? 'Enregistré — lien de connexion envoyé à ' + x.personne.email : 'Enregistré');
           closeDrawer(); tabs.equipe();
         } catch (e) { toast(e.message, true); }
       };

@@ -524,6 +524,12 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   Devis acquisitions voit sa demande (schéma électrique), pas la notice partie à AIM commandes (403), ni les fiches
   d'appel, ni les réglages ; prise en charge et réponse au client depuis la boîte (copie à la boîte) ; adresse
   personnelle de la direction → connectée, voit tout.
+- correctif 52 (06/11) : « si j'ajoute une nouvelle adresse, je valide, il reçoit un e-mail pour se connecter ? » —
+  oui désormais : dans « Équipe et accès », enregistrer une personne ou une boîte avec un accès (ou changer l'adresse
+  d'un compte qui en a un) envoie tout seul l'e-mail « Votre accès à la plateforme » avec un lien valable 7 jours ;
+  une simple modification (nom, fonction) n'envoie rien ; si l'e-mail ne part pas, le lien s'affiche pour être
+  transmis ; une adresse ne peut servir d'identifiant qu'à un seul compte (boîtes et RH comprises) ; accès retiré →
+  lien en cours annulé.
 
 ## Reste à faire
 

@@ -865,11 +865,18 @@ try {
                 }
                 return $d;
             };
+            // Accès ouvert, ou adresse changée sur un compte qui a un accès : le lien de connexion part tout seul (7 jours).
+            $lienAuto = function (array $avant, array $apres) use ($db): ?array {
+                $ok = isset(MA_ACCES[$apres['acces'] ?? '']) && (int) ($apres['actif'] ?? 1) === 1 && str_contains((string) ($apres['email'] ?? ''), '@');
+                $nouveau = !isset(MA_ACCES[$avant['acces'] ?? '']) || strtolower(trim((string) ($avant['email'] ?? ''))) !== strtolower(trim((string) $apres['email']));
+                return $ok && $nouveau ? ma_connexion_lien($db, $apres, 'invitation') : null;
+            };
             $unique = function (array $d, int $id = 0) use ($db): void {
                 if (trim((string) ($d['email'] ?? '')) === '' || empty($d['acces'])) {
                     return;
                 }
-                $st = $db->prepare("SELECT nom FROM rep_contacts WHERE lower(email) = lower(?) AND id != ? AND acces IN ('admin','sav','commerce','finance')");
+                $acces = implode(',', array_map(fn($a) => $db->quote($a), array_keys(MA_ACCES)));
+                $st = $db->prepare("SELECT nom FROM rep_contacts WHERE lower(email) = lower(?) AND id != ? AND acces IN ($acces)");
                 $st->execute([$d['email'], $id]);
                 if ($autre = $st->fetchColumn()) {
                     fail("Cette adresse sert déjà d'identifiant à $autre");
@@ -891,7 +898,9 @@ try {
                 $unique($d);
                 $id = insert($db, 'rep_contacts', $d);
                 logEvent($db, 'plateforme', 'ok', 'equipe_ajout', $d['nom'] . ' ajouté(e) à l\'équipe' . ($user ? ' par ' . $user['nom'] : ''));
-                out(['ok' => true, 'id' => $id, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id))]);
+                $nouveau = getOne($db, 'rep_contacts', $id);
+                $lien = $lienAuto([], $nouveau);
+                out(['ok' => true, 'id' => $id, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id)), 'lien_connexion' => $lien]);
             } elseif ($sub !== null && $sub !== 'responsables') {
                 $id = idFrom($parts, 1);
                 $c = getOne($db, 'rep_contacts', $id) ?? fail('Personne introuvable', 404);
@@ -910,12 +919,16 @@ try {
                         // Accès retiré : le mot de passe ne sert plus.
                         $d['mdp_hash'] = null;
                     }
+                    if (array_key_exists('acces', $d) && !$d['acces']) {
+                        $d['lien_jeton'] = null;
+                    }
                     $cols = array_keys($d);
                     if ($cols) {
                         $db->prepare('UPDATE rep_contacts SET ' . implode(', ', array_map(fn($k) => "$k = ?", $cols)) . ' WHERE id = ?')
                             ->execute([...array_values($d), $id]);
                     }
-                    out(['ok' => true, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id))]);
+                    $lien = $lienAuto($c, getOne($db, 'rep_contacts', $id));
+                    out(['ok' => true, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id)), 'lien_connexion' => $lien]);
                 }
                 if ($method === 'DELETE') {
                     $db->prepare('DELETE FROM rep_contacts WHERE id = ?')->execute([$id]);
