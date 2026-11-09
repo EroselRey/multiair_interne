@@ -731,7 +731,8 @@
       </section>
       <div class="dgrid">
         <div class="dcol">
-          <section class="box2"><h2>Client à rappeler</h2><div class="kvg">
+          <section class="box2"><div class="frow" style="justify-content:space-between"><h2 style="margin:0">Client à rappeler</h2>
+            ${ADMIN ? '<button class="btn small" id="demCorr">Corriger</button>' : ''}</div><div class="kvg">
             ${champ('Contact', h(d.contact || '—'))}
             ${champ('Société', h([d.societe, d.type_client ? L(d.type_client).toLowerCase() : ''].filter(Boolean).join(' · ') || '—'))}
             ${champ('Téléphone', d.tel ? `<a href="tel:+${h(d.tel)}" style="font-weight:800">${h(telFr(d.tel))}</a>` : '—')}
@@ -789,6 +790,31 @@
       if (a === 'transferer') transferer(d);
       if (a === 'repondre') repondre(d);
     });
+    // Corriger ce que Claire a compris (société mal entendue, e-mail manquant…), sur la demande et sur la fiche client.
+    const demCorr = $('#demCorr', main);
+    if (demCorr) demCorr.onclick = () => {
+      const champs = [['societe', 'Société', d.societe], ['contact', 'Contact (prénom et nom)', d.contact], ['tel', 'Téléphone', telFr(d.tel)],
+        ['email', 'E-mail', d.email], ['code_postal', 'Code postal du site', d.code_postal], ['marque', 'Marque', d.marque], ['modele', 'Modèle', d.modele],
+        ['numero_serie', 'N° de série', d.numero_serie]];
+      openDrawer('Corriger la demande n° ' + d.id, champs.map(([k, t, v]) => ligne(t, `<input name="${k}" value="${h(v || '')}"${k === 'email' ? ' type="email"' : ''}>`)).join('')
+        + (d.client ? `<label style="display:flex;gap:6px;align-items:flex-start;font-size:13px;margin-top:8px"><input type="checkbox" name="fiche" checked>Corriger aussi la fiche client (société, contact, téléphone, e-mail, code postal) : les prochaines demandes de ce client la reprendront</label>` : '')
+        + '<p class="hint" style="margin:6px 0 0">Le client n\'est pas prévenu. La correction est notée dans l\'historique.</p>', saveBtn());
+      $('#drawerSave').onclick = async () => {
+        const body = {};
+        champs.forEach(([k, , v]) => { const x = $(`#drawerBody [name="${k}"]`).value.trim(); if (x !== String(k === 'tel' ? telFr(d.tel) : (v || ''))) body[k] = x; });
+        if (!Object.keys(body).length) { closeDrawer(); return; }
+        try {
+          await patch('rep/demandes/' + d.id, body);
+          const fiche = $('#drawerBody [name="fiche"]');
+          if (fiche && fiche.checked && d.client) {
+            const pourFiche = {};
+            ['societe', 'contact', 'tel', 'email', 'code_postal'].forEach((k) => { if (k in body) pourFiche[k] = body[k]; });
+            if (Object.keys(pourFiche).length) await patch('clients/' + d.client.id, pourFiche);
+          }
+          toast('Demande corrigée'); closeDrawer(); recharger();
+        } catch (e) { toast(e.message, true); }
+      };
+    };
     $('#rappelNon') && ($('#rappelNon').onclick = () => { $('#rappelForm').hidden = true; });
     $('#rappelOk') && ($('#rappelOk').onclick = async () => {
       const v = $('#rappelDate').value;

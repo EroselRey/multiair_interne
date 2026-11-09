@@ -689,6 +689,13 @@ try {
                             $autres = array_intersect_key($autres, ['commentaire' => 1]);
                         }
                         $parQui = (string) ($d['pris_par'] ?? $d['traite_par'] ?? '') ?: (string) ($user['nom'] ?? '');
+                        // Correction depuis la page : téléphone au format 33…, département déduit du code postal.
+                        if (array_key_exists('tel', $autres)) {
+                            $autres['tel'] = ma_tel((string) $autres['tel']) ?? (trim((string) $autres['tel']) ?: null);
+                        }
+                        if (!empty($autres['code_postal'])) {
+                            $autres['departement'] = ma_departement((string) $autres['code_postal']) ?? ($dem['departement'] ?? null);
+                        }
                         if ($autres) {
                             update($db, 'rep_demandes', $id, $autres);
                             $chg = array_keys(array_filter($autres, fn($v, $k) => (string) $v !== (string) ($dem[$k] ?? ''), ARRAY_FILTER_USE_BOTH));

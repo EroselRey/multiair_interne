@@ -582,6 +582,19 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - demande 122 : à remettre « à traiter » (refus de modifier la production sans accord explicite) — Cyril peut la
   retransférer à Cédric en décochant la case, ou Cédric cliquer « Rouvrir la demande » sur sa page.
 
+## Corriger une demande depuis sa page (correctif 57, 09/11)
+
+- constat de Cyril : demande 124, « Alkia Air Solutions » au lieu de « Dalkia » (mal entendu au téléphone) ; aucun
+  moyen de corriger la société sur la demande (seule la fiche client avait « Corriger », sans effet sur la demande) ;
+- bouton « Corriger » (administrateurs) dans « Client à rappeler » : société, contact, téléphone, e-mail, code postal
+  du site, marque, modèle, n° de série ; case « Corriger aussi la fiche client » (cochée) : société, contact,
+  téléphone, e-mail et code postal passent sur la fiche, protégés contre les demandes suivantes ;
+- serveur : téléphone remis au format 33…, département déduit du code postal ; historique « Informations
+  modifiées : … » ; le client n'est pas prévenu ;
+- vérifié sur la 124 : Ludivine Boquet n'a envoyé aucun message WhatsApp (ni dans les 10 minutes, ni après) ; elle
+  a reçu la confirmation « Demande n° 124 enregistrée » sur WhatsApp ;
+- testé sur la copie locale : société et téléphone corrigés sur la demande et sur la fiche client, historique tenu.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
