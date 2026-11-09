@@ -600,7 +600,7 @@ try {
                             if (!$mails || count($mails) !== count(array_filter(preg_split('/[;,\s]+/', $libre)))) {
                                 fail('Adresse e-mail invalide : ' . $libre);
                             }
-                            $cible = ['id' => 0, 'nom' => implode(', ', $mails), 'email' => implode(';', $mails), 'mobile' => null,
+                            $cible = ['id' => 0, 'nom' => implode(', ', $mails), 'email' => implode(';', $mails), 'mobile' => ma_str($body['mobile'] ?? null),
                                 'service' => '', 'role' => '', 'cloturer' => ma_bool($body['cloturer'] ?? false)];
                         } else {
                             $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
@@ -975,7 +975,7 @@ try {
             out(['ok' => true, 'rows' => $rows,
                 'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, $resp),
                 'acces' => MA_ACCES, 'services' => MA_SERVICES,
-                'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel','domaines_internes')")
+                'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel','domaines_internes','rep_whatsapp_equipe')")
                     ->fetchAll(PDO::FETCH_KEY_PAIR)]);
 
         // ============================================================ Clients (base et reconnaissance)

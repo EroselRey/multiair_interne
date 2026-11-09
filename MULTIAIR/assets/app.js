@@ -636,6 +636,7 @@
       <label class="field"><span>Transférer à</span>${choix}</label>
       <label class="field"><span>… ou à une autre adresse e-mail</span><input type="email" name="email_libre" class="inp" placeholder="ex. rh@multiairfrance.fr" autocomplete="off"></label>
       <label id="transfClore" style="display:none;gap:6px;align-items:flex-start;font-size:13px"><input type="checkbox" name="cloturer">Marquer la demande traitée ici : la suite se fait hors plateforme (le client n'est pas prévenu)</label>
+      <label class="field" id="transfPortable" style="display:none"><span>Son portable (facultatif) — la demande part aussi sur son WhatsApp</span><input name="mobile_libre" class="inp" placeholder="ex. 06 12 34 56 78" inputmode="tel" autocomplete="off"></label>
       <p class="hint" id="transfSuivi" style="display:none;margin:0">Il reçoit un lien pour suivre la demande sans compte : prise en charge, rappel, traitée. Le client est prévenu à chaque étape, et vous êtes prévenu quand il la prend et quand il la traite.</p>
       <label class="field"><span>Message (facultatif)</span><textarea name="message" class="inp" rows="3" placeholder="ex. Double règlement de facture, peux-tu regarder ?"></textarea></label>`,
       '<button class="btn primary" id="transfOk">Transférer</button>');
@@ -648,6 +649,7 @@
       const v = champLibre.value.trim();
       $('#transfClore').style.display = v ? 'flex' : 'none';
       $('#transfSuivi').style.display = v ? 'block' : 'none';
+      $('#transfPortable').style.display = v && eq.parametres?.rep_whatsapp_equipe === '1' ? 'block' : 'none';
       $('#drawerBody [name=cloturer]').checked = v !== '' && v.includes('@') && !interne(v);
       if (v) $('#drawerBody [name=cible]').value = '';
     };
@@ -659,7 +661,7 @@
       $('#transfOk').disabled = true;
       try {
         const message = $('#drawerBody [name=message]').value.trim();
-        const body = libre ? {email: libre, cloturer: $('#drawerBody [name=cloturer]').checked ? 1 : 0, message} : {contact_id: Number(cible), message};
+        const body = libre ? {email: libre, mobile: $('#drawerBody [name=mobile_libre]').value.trim(), cloturer: $('#drawerBody [name=cloturer]').checked ? 1 : 0, message} : {contact_id: Number(cible), message};
         let r;
         try {
           r = await api('rep/demandes/' + d.id + '/transferer', {method: 'POST', body});
@@ -1167,6 +1169,8 @@
               <span class="m1"><b>${h(c.nom)}</b><span>${h(c.fonction || '')}</span><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span>
             </div>`).join('') || '<div class="vide" style="border:0">Personne ne correspond.</div>'}
           </div>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:14px"><input type="checkbox" id="waEquipe" ${(r.parametres || {}).rep_whatsapp_equipe === '1' ? 'checked' : ''}>
+            <span><b>WhatsApp aux vendeurs</b> : une demande transférée à quelqu'un qui a un portable part aussi sur son WhatsApp, avec le bouton « Ouvrir la demande » (modèle Meta « multiair_demande_equipe »). Le SAV garde son SMS.</span></label>
           <p class="hint">Admin : voit tout et modifie les réglages. Service : voit toutes les demandes de son service et fait avancer leur suivi. Ses demandes seulement : les demandes envoyées ou transférées à son adresse.
             Connexion sans mot de passe : chacun saisit son adresse sur la page de connexion et reçoit un lien. Les portables ne sont jamais montrés aux clients.</p></section>
         <section class="section"><h2>Boîtes partagées</h2><p class="hint">Adresses de service qui reçoivent les demandes commerce (menu « Qui reçoit quoi »).
@@ -1176,6 +1180,11 @@
             <span class="txt">${h(c.email || '')}</span><span></span><span class="txt">${h(c.membres || '')}</span><span>${acces(c)}</span><span>${connexion(c)}</span>
             <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span></div>`).join('')}</div></section>`;
       $('#ajout', main).onclick = () => fiche({actif: 1, role: 'membre', service: 'sav'});
+      $('#waEquipe', main).onchange = async (ev) => {
+        await api('parametres', {method: 'POST', body: {valeurs: {rep_whatsapp_equipe: ev.target.checked ? '1' : '0'}}});
+        (r.parametres = r.parametres || {}).rep_whatsapp_equipe = ev.target.checked ? '1' : '0';
+        toast(ev.target.checked ? 'WhatsApp aux vendeurs activé' : 'WhatsApp aux vendeurs désactivé');
+      };
       const q = $('#eq_q', main);
       q.oninput = () => { vueEquipe.q = q.value; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#eq_q', main); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200); };
       $$('[data-eqs]', main).forEach((b) => b.onclick = () => { vueEquipe.service = b.dataset.eqs; render(); });

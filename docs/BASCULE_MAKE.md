@@ -595,6 +595,28 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   a reçu la confirmation « Demande n° 124 enregistrée » sur WhatsApp ;
 - testé sur la copie locale : société et téléphone corrigés sur la demande et sur la fiche client, historique tenu.
 
+## WhatsApp aux vendeurs lors d'un transfert (correctif 58, 09/11)
+
+- demande de Cyril : un vendeur sur la route (ex. Cédric Béranger) reçoit la demande sur WhatsApp et la valide ;
+- règle Meta : écrire en premier à quelqu'un hors du créneau de 24 h exige un modèle approuvé ; modèle créé par
+  Cyril le 09/11 dans WhatsApp Manager : `multiair_demande_equipe` (Utilité, français) — « Nouvelle demande Multiair
+  n° {{1}} : {{2}} — {{3}}. Ouvrez-la pour la prendre en charge ou la marquer traitée. », pied « Multiair —
+  plateforme des demandes », bouton URL dynamique « Ouvrir la demande » → demande.php?t={{1}} ; statut au 09/11 :
+  en cours d'examen ;
+- plateforme : `ma_rep_whatsapp_equipe()` ; au transfert vers une personne qui a un portable (fiche « Équipe et
+  accès », ou champ « Son portable » pour une adresse saisie à la main), webhook de suivi `equipe_whatsapp` avec
+  wa_to, wa_modele, wa_p1 (n°), wa_p2 (client), wa_p3 (matériel — objet), wa_url (jeton de la page) ; pas pour une
+  demande close au transfert ; pas si un SMS SAV part déjà ; historique « WhatsApp → 06 … » ;
+- interrupteur « WhatsApp aux vendeurs » dans « Équipe et accès » (paramètre rep_whatsapp_equipe, coupé par défaut) ;
+- Make 9885724 : 3e route « WhatsApp à l'équipe (modèle) » (filtre evenement = equipe_whatsapp), envoi du modèle par
+  l'API WhatsApp Cloud, erreur ignorée (l'e-mail part de toute façon) ; les deux routes existantes inchangées ;
+- validation : bouton « Ouvrir la demande » → page mobile sans mot de passe (prise en charge, rappel, traitée) ;
+  valider directement dans WhatsApp (boutons de réponse) non fait : il faudrait toucher au scénario qui reçoit les
+  messages WhatsApp des clients ;
+- testé sur la copie locale : transfert à une fiche avec portable → WhatsApp + e-mail ; adresse saisie + portable →
+  WhatsApp ; SAV → SMS seul ; interrupteur coupé → rien ;
+- à faire après approbation du modèle : déposer le correctif, cocher l'interrupteur, test sur le portable de Cyril.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

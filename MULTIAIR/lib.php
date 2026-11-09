@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-09b';
+const MA_VERSION = '2026-11-09c';
 
 function ma_config(): array
 {
@@ -3673,6 +3673,10 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
             'texte' => '', 'lien' => $lien, 'sms' => $sms, 'sms_texte' => $contenu['sms_texte']]);
     }
     $envois = array_values(array_map(fn($a) => ['canal' => 'E-mail', 'a' => $a], ma_liste_emails($cible['email'] ?? null)));
+    // Portable connu (vendeur sur la route…) et pas déjà de SMS : la demande part aussi sur son WhatsApp.
+    if ($sms === '' && empty($cible['cloturer']) && ($wa = ma_rep_whatsapp_equipe($db, $apres, $cible['mobile'] ?? null))) {
+        $envois[] = ['canal' => 'WhatsApp', 'a' => $wa];
+    }
     // Adresse hors équipe (RH, partenaire…) : la suite se fait chez elle, la demande peut être close ici.
     if (!empty($cible['cloturer']) && $apres['statut'] !== 'traite') {
         $db->prepare("UPDATE rep_demandes SET statut = 'traite', traite_at = ?, traite_par = ? WHERE id = ?")
@@ -3788,6 +3792,35 @@ function ma_rep_prevenir_transfereur(PDO $db, array $dem, string $etape, string 
     ma_rep_evenement($db, (int) $dem['id'], 'info_transfert', 'Plateforme', 'plateforme', $auteur . ' prévenu : demande ' . $verbe . ' par ' . $quiAff,
         ['envois' => [['canal' => 'E-mail', 'a' => $adresse]], 'envoi' => $envoi]);
     return $adresse;
+}
+
+/**
+ * WhatsApp à une personne de l'équipe (vendeur sur la route…) : modèle Meta approuvé « multiair_demande_equipe »,
+ * avec le bouton « Ouvrir la demande » vers la page sans mot de passe. Envoyé par le scénario Make de suivi.
+ * Interrupteur : paramètre rep_whatsapp_equipe (« Équipe et accès »). Rend le numéro lisible si envoyé, sinon null.
+ */
+function ma_rep_whatsapp_equipe(PDO $db, array $dem, ?string $mobile): ?string
+{
+    if (ma_param($db, 'rep_whatsapp_equipe', '0') !== '1') {
+        return null;
+    }
+    $m = ma_mobile_sms($mobile);
+    if (!$m) {
+        return null;
+    }
+    // Paramètres d'un modèle WhatsApp : une ligne, sans guillemets (ils sont insérés tels quels dans le JSON de Make).
+    $propre = function (string $t, int $max): string {
+        $t = trim(preg_replace('/\s+/u', ' ', str_replace(['"', '\\', "\t"], ["'", '/', ' '], $t)));
+        return mb_strlen($t) > $max ? mb_substr($t, 0, $max - 1) . '…' : ($t !== '' ? $t : '—');
+    };
+    [$materiel, $sujet] = ma_rep_objet_client($dem);
+    $client = (string) ($dem['societe'] ?: $dem['contact'] ?: 'Client');
+    $statut = ma_webhook_suivi($db, ['evenement' => 'equipe_whatsapp', 'demande_id' => (int) $dem['id'], 'mobile' => false, 'tel' => '', 'email' => '',
+        'texte' => '', 'objet' => '', 'html' => '', 'lien' => '',
+        'wa_to' => ltrim($m, '+'), 'wa_modele' => ma_param($db, 'wa_modele_equipe', 'multiair_demande_equipe'),
+        'wa_p1' => (string) (int) $dem['id'], 'wa_p2' => $propre($client, 60), 'wa_p3' => $propre(trim($materiel . ' — ' . $sujet, ' —') ?: 'Demande', 90),
+        'wa_url' => (string) $dem['jeton_interne']]);
+    return str_starts_with($statut, 'échec') ? null : ma_tel_lisible($m);
 }
 
 /**
