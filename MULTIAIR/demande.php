@@ -100,6 +100,10 @@ $quiDefaut = (string) ($connecte['nom'] ?? ($_COOKIE['ma_qui'] ?? ''));
 if ($quiDefaut === 'Administrateur') {
     $quiDefaut = (string) ($_COOKIE['ma_qui'] ?? '');
 }
+// Transférée à une adresse saisie à la main (cedric.beranger@…) : on propose « Cedric Beranger ».
+if ($quiDefaut === '' && $dem && preg_match('/^([a-z]+)[._-]([a-z]+)@/i', trim((string) $dem['destinataires']), $mm)) {
+    $quiDefaut = ucfirst(strtolower($mm[1])) . ' ' . ucfirst(strtolower($mm[2]));
+}
 $rappelVal = !empty($dem['rappel_prevu']) ? date('Y-m-d\TH:i', strtotime($dem['rappel_prevu'])) : '';
 $lienClient = $dem ? ma_rep_liens($db, $dem)['client'] : '';
 $urgent = $dem && $dem['priorite'] === 'URGENT' && $dem['statut'] === 'a_traiter';

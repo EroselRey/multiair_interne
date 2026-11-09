@@ -968,7 +968,7 @@ try {
             out(['ok' => true, 'rows' => $rows,
                 'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, $resp),
                 'acces' => MA_ACCES, 'services' => MA_SERVICES,
-                'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel')")
+                'parametres' => $db->query("SELECT cle, valeur FROM parametres WHERE cle IN ('rep_repli_email','rep_cc_urgence','rep_standard_tel','domaines_internes')")
                     ->fetchAll(PDO::FETCH_KEY_PAIR)]);
 
         // ============================================================ Clients (base et reconnaissance)

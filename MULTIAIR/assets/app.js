@@ -635,15 +635,23 @@
         La demande repasse « à traiter » chez elle. Le client n'est pas prévenu.</p>
       <label class="field"><span>Transférer à</span>${choix}</label>
       <label class="field"><span>… ou à une autre adresse e-mail</span><input type="email" name="email_libre" class="inp" placeholder="ex. rh@multiairfrance.fr" autocomplete="off"></label>
-      <label id="transfClore" style="display:none;gap:6px;align-items:flex-start;font-size:13px"><input type="checkbox" name="cloturer" checked>Marquer la demande traitée ici : la suite se fait chez ce destinataire (le client n'est pas prévenu)</label>
+      <label id="transfClore" style="display:none;gap:6px;align-items:flex-start;font-size:13px"><input type="checkbox" name="cloturer">Marquer la demande traitée ici : la suite se fait hors plateforme (le client n'est pas prévenu)</label>
+      <p class="hint" id="transfSuivi" style="display:none;margin:0">Il reçoit un lien pour suivre la demande sans compte : prise en charge, rappel, traitée. Le client est prévenu à chaque étape, et vous êtes prévenu quand il la prend et quand il la traite.</p>
       <label class="field"><span>Message (facultatif)</span><textarea name="message" class="inp" rows="3" placeholder="ex. Double règlement de facture, peux-tu regarder ?"></textarea></label>`,
       '<button class="btn primary" id="transfOk">Transférer</button>');
     const champLibre = $('#drawerBody [name=email_libre]');
+    // Adresse de la maison : la personne suit la demande par le lien (case décochée) ; adresse extérieure : close ici.
+    const domaines = String((eq.parametres || {}).domaines_internes || 'airwco.com,multiairfrance.fr,multiairfrance.store,abacfrance.fr')
+      .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    const interne = (adr) => domaines.some((d) => adr.toLowerCase().endsWith('@' + d));
     champLibre.oninput = () => {
-      $('#transfClore').style.display = champLibre.value.trim() ? 'flex' : 'none';
-      if (champLibre.value.trim()) $('#drawerBody [name=cible]').value = '';
+      const v = champLibre.value.trim();
+      $('#transfClore').style.display = v ? 'flex' : 'none';
+      $('#transfSuivi').style.display = v ? 'block' : 'none';
+      $('#drawerBody [name=cloturer]').checked = v !== '' && v.includes('@') && !interne(v);
+      if (v) $('#drawerBody [name=cible]').value = '';
     };
-    $('#drawerBody [name=cible]').onchange = () => { if ($('#drawerBody [name=cible]').value) { champLibre.value = ''; $('#transfClore').style.display = 'none'; } };
+    $('#drawerBody [name=cible]').onchange = () => { if ($('#drawerBody [name=cible]').value) { champLibre.value = ''; $('#transfClore').style.display = 'none'; $('#transfSuivi').style.display = 'none'; } };
     $('#transfOk').onclick = async () => {
       const cible = $('#drawerBody [name=cible]').value;
       const libre = champLibre.value.trim();

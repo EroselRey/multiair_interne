@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-06e';
+const MA_VERSION = '2026-11-09a';
 
 function ma_config(): array
 {
@@ -2281,6 +2281,11 @@ function ma_rep_avancer(PDO $db, int $id, array $chg, string $par = '', string $
     // Prise en charge d'une demande « à traiter » : les autres destinataires sont prévenus.
     if (($maj['statut'] ?? '') === 'en_cours' && $avant['statut'] === 'a_traiter') {
         ma_rep_prevenir_prise($db, $apres, (string) ($apres['pris_par'] ?: $par));
+        ma_rep_prevenir_transfereur($db, $apres, 'prise_en_charge', (string) ($apres['pris_par'] ?: $par));
+    }
+    // Demande transférée puis traitée : celui qui l'a transférée le sait.
+    if (($maj['statut'] ?? '') === 'traite') {
+        ma_rep_prevenir_transfereur($db, $apres, 'traitee', (string) ($apres['traite_par'] ?: $par));
     }
     if ($maj) {
         $db->prepare('INSERT INTO executions_log(scenario, date, statut, type_evenement, resume) VALUES (?,?,?,?,?)')
@@ -3686,6 +3691,20 @@ function ma_rep_transferer(PDO $db, array $dem, array $cible, string $par, strin
     return $apres;
 }
 
+/** L'adresse est-elle celle de cette personne ? (cedric.beranger@… pour « Cédric Béranger ») */
+function ma_email_de(string $adresse, string $nom): bool
+{
+    $mots = fn(string $t) => array_values(array_filter(preg_split('/[^a-z0-9]+/', ma_plat($t)) ?: [], fn($x) => $x !== ''));
+    $local = $mots((string) strstr($adresse, '@', true));
+    $n = $mots($nom);
+    if (count($n) < 2 || !$local) {
+        return false;
+    }
+    sort($local);
+    sort($n);
+    return $local === $n;
+}
+
 /**
  * Prise en charge d'une demande envoyée à plusieurs adresses : les autres destinataires (À et copie) sont
  * prévenus que quelqu'un s'en occupe et qu'ils n'ont rien à faire. Pas celui qui la prend. Un e-mail par adresse.
@@ -3700,6 +3719,8 @@ function ma_rep_prevenir_prise(PDO $db, array $dem, string $qui): array
     $q = $db->prepare('SELECT email FROM rep_contacts WHERE lower(nom) = lower(?) AND email LIKE ? LIMIT 1');
     $q->execute([$qui, '%@%']);
     $adresses = array_diff_key($adresses, ma_liste_emails((string) ($q->fetchColumn() ?: '')));
+    // Personne hors équipe (demande transférée à une adresse saisie à la main) : prenom.nom@ est la sienne.
+    $adresses = array_filter($adresses, fn($a) => !ma_email_de($a, $qui));
     if (!$adresses) {
         return [];
     }
@@ -3727,6 +3748,46 @@ function ma_rep_prevenir_prise(PDO $db, array $dem, string $qui): array
         'Autres destinataires prévenus de la prise en charge : ' . implode(', ', array_values($adresses)),
         ['envois' => $envois, 'envoi' => $echecs ? implode(', ', array_unique($echecs)) : 'envoyé']);
     return array_values($adresses);
+}
+
+/**
+ * Demande transférée : celui qui l'a transférée est prévenu quand le destinataire la prend en charge et quand
+ * il la marque traitée (« dis-moi quand c'est ok »), même si ce destinataire n'a pas de compte.
+ */
+function ma_rep_prevenir_transfereur(PDO $db, array $dem, string $etape, string $qui): ?string
+{
+    $q = $db->prepare("SELECT qui FROM rep_evenements WHERE demande_id = ? AND type = 'transferee' AND qui IS NOT NULL AND qui != '' ORDER BY id DESC LIMIT 1");
+    $q->execute([(int) $dem['id']]);
+    $auteur = trim((string) $q->fetchColumn());
+    if ($auteur === '' || ma_plat($auteur) === ma_plat($qui)) {
+        return null;
+    }
+    $c = $db->prepare('SELECT email FROM rep_contacts WHERE lower(nom) = lower(?) AND email LIKE ? LIMIT 1');
+    $c->execute([$auteur, '%@%']);
+    $adresse = array_values(ma_liste_emails((string) ($c->fetchColumn() ?: '')))[0] ?? '';
+    if ($adresse === '' || isset(ma_liste_emails(($dem['dest_to'] ?? '') . ';' . ($dem['dest_cc'] ?? ''))[strtolower($adresse)])) {
+        return null;
+    }
+    $quiAff = trim($qui) !== '' ? trim($qui) : (string) ($dem['destinataires'] ?? 'le destinataire');
+    $verbe = $etape === 'traitee' ? 'traitée' : 'prise en charge';
+    [$materiel, $sujet] = ma_rep_objet_client($dem);
+    $client = trim((string) ($dem['societe'] ?: $dem['contact'] ?: 'Client'));
+    $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $html = ma_mail_gabarit([
+        'surtitre' => 'Suivi de votre transfert',
+        'titre' => 'Demande n° ' . $dem['id'] . ' ' . $verbe . ' par ' . $quiAff,
+        'corps' => '<p style="margin:0 0 12px">Bonjour,</p><p style="margin:0">La demande n° ' . (int) $dem['id'] . ' que vous avez transférée est <b>'
+            . $e($verbe) . '</b> par ' . $e($quiAff) . ', ' . $e(ma_date_fr(ma_now())) . '.'
+            . ($etape === 'traitee' ? ' Le client a été prévenu.' : ' Vous serez prévenu quand elle sera traitée.') . '</p>',
+        'fiche' => ma_mail_fiche([['Demande', 'n° ' . $dem['id'], false], ['Client', $client, false], ['Matériel', $materiel, false], ['Objet', $sujet, false]]),
+        'bouton' => ['Voir la demande', ma_url_base($db) . 'index.php#demande/' . (int) $dem['id']],
+        'pied' => 'Multiair — message automatique de la plateforme des demandes.',
+    ]);
+    $envoi = ma_webhook_suivi($db, ['evenement' => 'transfert_suivi', 'demande_id' => (int) $dem['id'], 'mobile' => false, 'tel' => '',
+        'email' => $adresse, 'objet' => 'Demande n° ' . $dem['id'] . ' ' . $verbe . ' par ' . $quiAff, 'html' => $html, 'texte' => '', 'lien' => '']);
+    ma_rep_evenement($db, (int) $dem['id'], 'info_transfert', 'Plateforme', 'plateforme', $auteur . ' prévenu : demande ' . $verbe . ' par ' . $quiAff,
+        ['envois' => [['canal' => 'E-mail', 'a' => $adresse]], 'envoi' => $envoi]);
+    return $adresse;
 }
 
 /**

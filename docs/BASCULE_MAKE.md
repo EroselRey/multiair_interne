@@ -559,6 +559,29 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   prend ; rouvrir une demande traitée n'envoie rien ; historique « Autres destinataires prévenus de la prise en
   charge » ; testé : urgence SAV envoyée au RSO avec Julien en copie, prise par Julien → le RSO est prévenu.
 
+## Transfert à quelqu'un sans compte : même suivi (correctif 56, 09/11)
+
+- constat de Cyril : demande 122 (MTM I, BK 75) transférée à un vendeur, cedric.beranger@airwco.com, « je l'ai juste
+  transférée, pas traitée » — elle était close : la case « Marquer la demande traitée ici » était cochée d'office pour
+  toute adresse saisie à la main ; souhait : que la personne, sans aller sur la plateforme, puisse valider la demande
+  avec le même suivi ;
+- c'était déjà possible par le lien de l'e-mail de transfert (page sans mot de passe : prise en charge, rappel,
+  traitée, note, pièces ; client prévenu à chaque étape ; relances internes 24 h / 48 h à son adresse), sauf quand la
+  demande est close au transfert ;
+- correctif 56 :
+  - case « traitée ici » décochée par défaut pour une adresse de la maison (domaines internes), cochée seulement pour
+    une adresse extérieure ; texte d'aide : il reçoit un lien pour suivre la demande sans compte ;
+  - `ma_rep_prevenir_transfereur()` : celui qui a transféré reçoit « Demande n° X prise en charge par … » puis
+    « … traitée par … » (avec un bouton vers la demande) ;
+  - page reçue par lien : nom proposé d'après l'adresse (cedric.beranger@ → « Cedric Beranger ») ;
+  - `ma_email_de()` : la personne hors équipe qui prend la demande ne reçoit pas l'information sur sa propre prise
+    en charge ;
+- testé : transfert à cedric.beranger@ (case décochée) → reste « à traiter », Cédric reçoit le lien ; anciens
+  destinataires (Julien Jardin, Marien Guirauton) prévenus ; prise en charge puis « traitée » par Cédric depuis son
+  lien → client prévenu, Cyril prévenu les deux fois ; adresse extérieure → case cochée ;
+- demande 122 : à remettre « à traiter » (refus de modifier la production sans accord explicite) — Cyril peut la
+  retransférer à Cédric en décochant la case, ou Cédric cliquer « Rouvrir la demande » sur sa page.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
