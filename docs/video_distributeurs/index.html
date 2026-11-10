@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Multiair — vos demandes</title>
+<style>
+:root{--n0:#081a40;--n1:#0d2458;--n2:#163a7a;--sky:#6ec6f9;--sky2:#a9dcfb;--blue:#0b76d0;--mut:#b7c7e6;--wa:#25d366;--red:#ff5d5d;--ok:#34d399;--ink:#0d2458}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--n0)}
+body{font-family:'Inter',sans-serif;color:#fff;-webkit-font-smoothing:antialiased}
+#stage{position:relative;width:1920px;height:1080px;overflow:hidden;
+  background:radial-gradient(1100px 760px at 80% 16%,rgba(44,104,200,.55),transparent 62%),
+             radial-gradient(900px 700px at 6% 96%,rgba(22,58,122,.75),transparent 60%),
+             linear-gradient(165deg,#12306b 0%,#0c2457 50%,#081a40 100%)}
+#air{position:absolute;inset:0}
+.scene{position:absolute;inset:0;visibility:hidden}
+.kick{position:absolute;left:120px;top:150px;display:flex;align-items:center;gap:22px;font:700 21px 'Inter';letter-spacing:.24em;text-transform:uppercase;color:#fff}
+#num{position:absolute;left:120px;top:330px;width:780px;height:190px;border-radius:30px;background:linear-gradient(135deg,rgba(11,118,208,.6),rgba(22,58,122,.35));border:1px solid rgba(110,198,249,.35);display:flex;align-items:center;gap:30px;padding:0 36px}
+#num .ico{width:120px;height:120px;background:var(--blue);box-shadow:0 0 0 10px rgba(11,118,208,.25)}
+#num small{font:700 18px 'Inter';letter-spacing:.2em;color:var(--sky)}
+#num .nb{font:900 74px 'Inter Display';letter-spacing:-.01em;white-space:nowrap;margin-top:6px}
+#num .nb span{display:inline-block}
+#h24{position:absolute;left:700px;top:306px;z-index:2;padding:10px 20px;border-radius:24px;background:#fff;color:var(--blue);font:800 20px 'Inter';box-shadow:0 10px 30px rgba(0,0,0,.3)}
+#wave2b{position:absolute;left:120px;top:556px;width:780px;height:70px;display:flex;align-items:center;gap:7px}
+#wave2b i{display:block;flex:1;height:100%;border-radius:5px;background:var(--sky);transform:scaleY(.08);opacity:.85}
+.bub.c2{background:var(--blue);border-bottom-right-radius:6px;transform-origin:right bottom}
+#caller{position:absolute;left:1020px;top:330px;width:780px;height:580px;border-radius:30px;background:#fff;color:var(--ink);box-shadow:0 30px 80px rgba(0,0,0,.35);overflow:hidden}
+#caller .k{position:absolute;left:44px;top:36px;font:700 17px 'Inter';letter-spacing:.2em;color:var(--blue)}
+#caller .n{position:absolute;left:44px;top:62px;font:900 44px 'Inter Display';letter-spacing:-.01em}
+#srch,#reco{position:absolute;right:44px;top:52px;padding:9px 18px;border-radius:22px;font:700 18px 'Inter';display:flex;align-items:center;gap:8px}
+#srch{background:#eef2f8;color:#6b7a99}
+#reco{background:#dcfce7;color:#15803d}
+#scan{position:absolute;left:0;right:0;top:0;height:60px;background:linear-gradient(180deg,transparent,rgba(11,118,208,.28),transparent);visibility:hidden}
+#rc3{border-radius:16px}
+#relance{position:absolute;left:628px;top:845px;width:272px;height:56px;border-radius:29px;background:var(--n1);border:1px solid rgba(110,198,249,.5);display:flex;align-items:center;justify-content:center;gap:10px;font:700 20px 'Inter';box-shadow:0 14px 40px rgba(0,0,0,.35)}
+#endnum{position:absolute;left:0;right:0;top:880px;display:flex;justify-content:center}
+#endnum div{display:flex;align-items:center;gap:18px;padding:16px 34px;border-radius:44px;background:var(--blue);font:900 40px 'Inter Display'}
+#endnum small{font:600 20px 'Inter';color:#d7ecfd;letter-spacing:.04em}
+.kick .kl{width:56px;height:2px;background:var(--sky);transform-origin:left}
+.w{display:inline-block;overflow:hidden;vertical-align:top;padding:0 .03em .18em;margin-bottom:-.18em}
+.wi{display:inline-block}
+.cam{position:absolute;inset:0}
+#fx{position:absolute;inset:0;pointer-events:none;z-index:20}
+.pt{position:absolute;border-radius:50%;visibility:hidden}
+.wv{position:absolute;border-radius:50%;visibility:hidden}
+#irisr{position:absolute;left:-208px;top:-585px;width:2336px;height:2336px;border-radius:50%;border:5px solid var(--sky);visibility:hidden;box-shadow:0 0 40px rgba(110,198,249,.6)}
+#wipe{position:absolute;inset:0;z-index:30;pointer-events:none;overflow:hidden}
+.wp{position:absolute;top:-200px;left:0;width:2600px;height:1480px}
+#wp1{background:#6ec6f9}#wp2{background:#0b76d0}
+.sbg{position:absolute;inset:0;background:radial-gradient(760px 520px at 50% 54%,rgba(27,139,230,.38),transparent 70%),linear-gradient(165deg,#12306b 0%,#0c2457 50%,#081a40 100%)}
+.typ{display:flex;gap:8px;padding:22px 24px}.typ i{display:block;width:11px;height:11px;border-radius:50%;background:#cfe0f3}
+.kw{position:absolute;left:0;right:0;top:380px;text-align:center;font:900 230px/1 'Inter Display';letter-spacing:-.04em;visibility:hidden}
+#krow{position:absolute;left:0;right:0;top:350px;text-align:center;font:800 46px 'Inter Display';letter-spacing:.14em;color:var(--sky);text-transform:uppercase;visibility:hidden}
+.shine{position:absolute;top:-40px;left:50%;width:180px;margin-left:-90px;height:120%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-18deg);mix-blend-mode:overlay;pointer-events:none}
+.shbox{position:absolute;overflow:hidden;pointer-events:none}
+.title{position:absolute;left:120px;top:192px;font-family:'Inter Display','Inter';font-size:80px;line-height:1.04;letter-spacing:-.03em;white-space:nowrap}
+.title b,.big b{font-weight:900;color:#fff}
+.title i,.big i{font-style:normal;font-weight:300;color:var(--sky)}
+.cap{position:absolute;left:120px;right:120px;top:950px;text-align:center;font:400 30px 'Inter';color:var(--mut)}
+.cap b{color:#fff;font-weight:600}
+.big{position:absolute;left:0;right:0;text-align:center;font-family:'Inter Display','Inter';letter-spacing:-.03em;line-height:1.05}
+.ico{display:flex;align-items:center;justify-content:center;border-radius:50%;flex:none}
+/* en-tête */
+#brand{position:absolute;left:112px;top:34px;width:140px;visibility:hidden;z-index:10}
+#steps{position:absolute;right:120px;top:54px;display:flex;gap:32px;visibility:hidden;z-index:10}
+.st{position:relative;font:600 19px 'Inter';color:rgba(255,255,255,.4);letter-spacing:.02em;padding-bottom:12px}
+.st em{font-style:normal;color:var(--sky);margin-right:9px;font-weight:700}
+.st .bar{position:absolute;left:0;right:0;bottom:0;height:3px;border-radius:2px;background:var(--sky);transform:scaleX(0);transform-origin:left}
+/* S2 */
+.card{position:absolute;top:420px;width:380px;height:280px;border-radius:28px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center}
+.card .ico{width:104px;height:104px;background:rgba(110,198,249,.14)}
+.card h3{font:800 38px 'Inter Display';letter-spacing:-.01em}
+.card p{font:400 22px 'Inter';color:var(--mut)}
+#badge{position:absolute;left:660px;top:770px;width:600px;height:84px;border-radius:42px;background:#fff;color:var(--ink);display:flex;align-items:center;justify-content:center;gap:18px;font:800 30px 'Inter Display'}
+#badge .ico{width:48px;height:48px;background:var(--blue)}
+/* S3 */
+#panel{position:absolute;left:120px;top:330px;width:820px;height:580px;border-radius:30px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.13)}
+#panel .hd{position:absolute;left:30px;top:24px;right:30px;display:flex;align-items:center;gap:16px}
+#panel .hd .ico{width:52px;height:52px;background:var(--blue)}
+#panel .hd b{font:700 24px 'Inter'}
+#panel .hd small{display:block;font:400 18px 'Inter';color:var(--mut);margin-top:2px}
+.bub{position:absolute;padding:14px 24px;border-radius:24px;font:500 25px 'Inter';white-space:nowrap}
+.bub.a{left:30px;background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.14);border-bottom-left-radius:6px;transform-origin:left bottom}
+.bub.c{right:30px;background:var(--blue);border-bottom-right-radius:6px;transform-origin:right bottom}
+#fiche{position:absolute;left:1020px;top:330px;width:780px;height:580px;border-radius:30px;background:#fff;color:var(--ink);box-shadow:0 30px 80px rgba(0,0,0,.35)}
+#fiche .k{position:absolute;left:44px;top:36px;font:700 17px 'Inter';letter-spacing:.2em;color:var(--blue)}
+#fiche .n{position:absolute;left:44px;top:62px;font:900 46px 'Inter Display';letter-spacing:-.02em}
+#fiche .d{position:absolute;right:44px;top:44px;font:500 20px 'Inter';color:#6b7a99}
+.row{position:absolute;left:44px;right:44px;height:92px;border-top:1px solid #e6ebf3;display:flex;align-items:center;gap:22px}
+.row .chk{position:relative;width:46px;height:46px;border-radius:50%;border:2px solid #d5dce8;flex:none}
+.row .chk .on{position:absolute;inset:-2px;border-radius:50%;background:var(--blue);display:flex;align-items:center;justify-content:center;transform:scale(0)}
+.row .l{font:700 15px 'Inter';letter-spacing:.18em;color:#8190ad;text-transform:uppercase}
+.row .v{position:relative;height:40px;margin-top:4px}
+.row .ph{position:absolute;left:0;top:13px;width:300px;height:14px;border-radius:7px;background:#e8edf5}
+.row .vv{position:absolute;left:0;top:0;font:800 30px 'Inter Display';white-space:nowrap;display:flex;align-items:center;gap:14px;clip-path:inset(0 100% 0 0)}
+.tag{display:inline-block;padding:5px 14px;border-radius:20px;font:700 16px 'Inter';letter-spacing:.06em}
+.tag.b{background:#e3f1fd;color:var(--blue)}
+.tag.r{background:var(--red);color:#fff}
+/* S4 */
+.chip{position:absolute;left:120px;width:520px;height:76px;border-radius:38px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);display:flex;align-items:center;gap:18px;padding:0 26px 0 12px;font:600 26px 'Inter'}
+.chip .ico{width:54px;height:54px;background:rgba(110,198,249,.16)}
+#hub{position:absolute;left:865px;top:485px;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#1b8be6,#0b5fb0 60%,#0a3f86);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 10px rgba(110,198,249,.08),0 20px 60px rgba(0,0,0,.35)}
+#hubring{position:absolute;left:845px;top:465px;width:230px;height:230px;border-radius:50%;border:2px dashed rgba(110,198,249,.55)}
+.dest{position:absolute;left:1290px;width:510px;height:158px;border-radius:26px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:22px 26px}
+.dest .top{display:flex;align-items:center;gap:18px}
+.dest .ico{width:58px;height:58px;background:rgba(110,198,249,.16)}
+.dest h3{font:900 38px 'Inter Display';letter-spacing:-.01em}
+.dest p{font:400 19px 'Inter';color:var(--mut);margin-top:2px}
+.dest .tags{position:absolute;left:26px;bottom:18px;display:flex;gap:10px}
+.dest .tags span{padding:5px 14px;border-radius:16px;background:rgba(110,198,249,.18);color:var(--sky2);font:600 17px 'Inter'}
+/* S5 */
+.bul{position:absolute;left:120px;width:1020px;display:flex;align-items:center;gap:26px;font:500 34px 'Inter'}
+.bul .ico{width:72px;height:72px;background:rgba(110,198,249,.15)}
+#phone{position:absolute;left:1290px;top:118px;width:420px;height:860px;border-radius:64px;background:#050d1f;box-shadow:0 40px 100px rgba(0,0,0,.5),inset 0 0 0 2px rgba(255,255,255,.12)}
+#screen{position:absolute;left:14px;top:14px;right:14px;bottom:14px;border-radius:50px;overflow:hidden;background:#eef3f8}
+#notch{position:absolute;left:50%;top:14px;width:110px;height:30px;margin-left:-55px;border-radius:16px;background:#050d1f;z-index:5}
+.scr{position:absolute;inset:0}
+#wa .hd{height:130px;background:#075e54;display:flex;align-items:flex-end;gap:14px;padding:0 22px 18px}
+#wa .hd .ico{width:52px;height:52px;background:#fff}
+#wa .hd b{font:700 23px 'Inter';color:#fff}
+#wa .hd small{display:block;font:400 16px 'Inter';color:rgba(255,255,255,.75)}
+#wamsg{position:absolute;left:18px;right:40px;top:170px;background:#fff;border-radius:18px;border-top-left-radius:4px;box-shadow:0 2px 6px rgba(0,0,0,.08);color:#1a2333;overflow:hidden}
+#wamsg .t{padding:18px 20px 10px;font:400 21px/1.38 'Inter'}
+#wamsg .t b{font-weight:700}
+#wamsg .h{padding:0 20px 12px;font:400 14px 'Inter';color:#8a94a6;text-align:right}
+#wamsg .btn{border-top:1px solid #e5e9ef;padding:16px;text-align:center;font:600 21px 'Inter';color:#0a7cc2;position:relative;overflow:hidden}
+#pg{background:#fff;color:var(--ink)}
+#pg .hd{height:118px;background:var(--n1);display:flex;align-items:flex-end;padding:0 26px 20px;font:900 22px 'Inter Display';letter-spacing:.06em;color:#fff}
+#pg .ct{position:absolute;left:26px;right:26px;top:150px}
+#pg .n{font:900 36px 'Inter Display';margin:14px 0 22px}
+#pg .r{border-top:1px solid #e6ebf3;padding:14px 0}
+#pg .r small{display:block;font:700 13px 'Inter';letter-spacing:.16em;color:#8190ad}
+#pg .r span{font:700 22px 'Inter'}
+.pbtn{position:absolute;left:26px;right:26px;bottom:110px;height:76px;border-radius:18px;display:flex;align-items:center;justify-content:center;gap:12px;font:700 24px 'Inter';color:#fff;overflow:hidden}
+#pb1{background:var(--n1)}
+#pb2{background:#16a34a}
+#toast{position:absolute;left:22px;right:22px;bottom:24px;height:64px;border-radius:32px;background:#0d2458;color:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font:600 19px 'Inter'}
+.tap{position:absolute;width:80px;height:80px;margin:-40px 0 0 -40px;border-radius:50%;background:rgba(11,118,208,.35);border:3px solid rgba(255,255,255,.9);pointer-events:none}
+/* S6 */
+#tline{position:absolute;left:181px;top:362px;width:3px;height:450px;background:rgba(255,255,255,.12)}
+#tfill{position:absolute;left:181px;top:362px;width:3px;height:450px;background:var(--sky);transform-origin:top;transform:scaleY(0)}
+.ts{position:absolute;left:160px;width:860px;height:120px}
+.ts .dot{position:absolute;left:0;top:14px;width:46px;height:46px;border-radius:50%;background:var(--n1);border:3px solid var(--sky);display:flex;align-items:center;justify-content:center}
+.ts .tm{position:absolute;left:80px;top:2px;font:600 20px 'JetBrains Mono';color:var(--sky)}
+.ts h4{position:absolute;left:80px;top:28px;font:800 34px 'Inter Display';white-space:nowrap}
+.ts .pills{position:absolute;left:80px;top:78px;display:flex;gap:10px}
+.pill{display:flex;align-items:center;gap:8px;padding:4px 14px 4px 10px;border-radius:16px;background:rgba(255,255,255,.1);font:600 17px 'Inter';color:#dfe9f7}
+.ncw{position:absolute;left:1080px;top:330px;width:720px;height:120px}
+.nc{position:absolute;inset:0;border-radius:24px;background:rgba(255,255,255,.95);color:#1a2333;display:flex;align-items:center;gap:20px;padding:0 26px;box-shadow:0 18px 50px rgba(0,0,0,.3)}
+.nc .ico{width:64px;height:64px}
+.nc small{display:block;font:600 16px 'Inter';color:#7b879c;margin-bottom:4px}
+.nc span{font:500 22px/1.3 'Inter'}
+/* S7 */
+.ben{position:absolute;top:450px;width:500px;height:380px;border-radius:30px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);padding:48px 44px;text-align:left}
+.ben .ico{width:96px;height:96px;background:rgba(110,198,249,.15);margin-bottom:34px}
+.ben h3{font:900 40px 'Inter Display';letter-spacing:-.01em;margin-bottom:14px}
+.ben p{font:400 25px/1.4 'Inter';color:var(--mut)}
+/* S8 */
+#chan{position:absolute;left:0;right:0;top:790px;display:flex;justify-content:center;gap:46px;font:500 26px 'Inter';color:var(--mut)}
+#chan span{display:flex;align-items:center;gap:12px}
+#cta{position:absolute;left:760px;top:890px;width:400px;height:70px;background:var(--blue);display:flex;align-items:center;justify-content:center;gap:22px;font:700 22px 'Inter'}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="air" viewBox="0 0 1920 1080" width="1920" height="1080"></svg>
+  <div id="brand"></div>
+  <div id="steps"></div>
+  <div id="scenes"></div>
+  <div id="fx"><div id="irisr"></div></div>
+  <div id="wipe"><div class="wp" id="wp1"></div><div class="wp" id="wp2"></div></div>
+</div>
+<script src="node_modules/gsap/dist/gsap.min.js"></script>
+<script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+<script>
+gsap.registerPlugin(MotionPathPlugin);
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+// ---------- icônes (Lucide, ISC)
+const P = {
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/>',
+  wa: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.5 9.5c.3 1.6 1.4 3.4 3 4.4.6.4 1.3.3 1.7-.2l.4-.5"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+  euro: '<path d="M4 10h12"/><path d="M4 14h9"/><path d="M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  fan: '<path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  link: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+};
+const ic = (n, s = 40, c = '#6ec6f9', w = 2) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+
+// ---------- logo Multiair redessiné (texte + deux arcs effilés)
+function arc(a0, a1, R, wmax, thickAt) {
+  const pts = [], n = 60, rad = (a) => a * Math.PI / 180;
+  for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; pts.push([R * Math.cos(rad(a)), R * Math.sin(rad(a))]); }
+  for (let i = n; i >= 0; i--) {
+    const u = i / n, a = a0 + (a1 - a0) * u;
+    const w = wmax * Math.pow(Math.sin(Math.PI * u), .7) * (thickAt === 'start' ? 1.25 - .6 * u : .65 + .6 * u);
+    pts.push([(R - w) * Math.cos(rad(a)), (R - w) * Math.sin(rad(a))]);
+  }
+  return 'M' + pts.map((p) => p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join(' L') + 'Z';
+}
+function logo(id, w, txt = '#fff') {
+  return `<svg id="${id}" width="${w}" viewBox="-82 -58 164 116" style="overflow:visible">
+    <defs><linearGradient id="${id}g1" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#1f7fe0"/><stop offset="1" stop-color="#6ec6f9"/></linearGradient>
+    <linearGradient id="${id}g2" x1="1" y1="0" x2="0" y2="0"><stop offset="0" stop-color="#1667c9"/><stop offset="1" stop-color="#6ec6f9"/></linearGradient></defs>
+    <path class="lgA" d="${arc(196, 344, 52, 7.5, 'start')}" fill="url(#${id}g1)"/>
+    <path class="lgB" d="${arc(18, 158, 52, 6.5, 'start')}" fill="url(#${id}g2)"/>
+    <text class="lgT" x="0" y="9" text-anchor="middle" font-family="Inter Display" font-weight="800" font-size="31" letter-spacing="-.5" fill="${txt}">MULTIAIR</text>
+    <text class="lgF" x="0" y="25" text-anchor="middle" font-family="Inter" font-weight="500" font-size="7.6" letter-spacing="2.4" fill="${txt}" opacity=".85">FRANCE</text>
+  </svg>`;
+}
+
+// ---------- fond : courants d'air
+(function () {
+  const svg = $('#air'); let h = '';
+  const lignes = [[-100, 260, 700, 120, 1300, 420, 2050, 220, .10, 2], [-100, 520, 600, 380, 1250, 700, 2050, 520, .07, 1.5],
+    [-100, 820, 700, 680, 1300, 980, 2050, 760, .09, 2.5], [-100, 120, 500, 300, 1400, 60, 2050, 300, .06, 1.2],
+    [-100, 960, 800, 860, 1200, 1060, 2050, 900, .06, 1.2], [-100, 640, 700, 560, 1100, 820, 2050, 640, .05, 1]];
+  lignes.forEach(([x0, y0, x1, y1, x2, y2, x3, y3, o, w], i) => {
+    h += `<path class="airl" d="M${x0} ${y0} C${x1} ${y1} ${x2} ${y2} ${x3} ${y3}" fill="none" stroke="#6ec6f9" stroke-opacity="${o * 1.6}" stroke-width="${w}" stroke-linecap="round" stroke-dasharray="${380 + i * 70} ${520 + i * 90}"/>`;
+  });
+  svg.innerHTML = h;
+})();
+$('#brand').innerHTML = logo('lg0', 140);
+$('#steps').innerHTML = ['Contact', 'Répondeur IA', 'Questions', 'Orientation', 'Prise en charge', 'Suivi'].map((s, i) => `<div class="st" data-i="${i + 1}"><em>0${i + 1}</em>${s}<span class="bar"></span></div>`).join('');
+
+// ---------- scènes
+const S = $('#scenes');
+S.innerHTML = `
+<section class="scene" id="s1"><div class="cam">
+  <div id="lgbig" style="position:absolute;left:660px;top:190px;width:600px">${logo('lg1', 600)}<div class="shbox" style="inset:0"><div class="shine" id="shine1"></div></div></div>
+  <div class="big" id="s1t" style="top:600px;font-size:104px"><b>Chaque demande compte.</b></div>
+  <div class="big" id="s1s" style="top:722px;font-size:66px"><i>Du premier contact à la réponse.</i></div>
+</div></section>
+
+<section class="scene" id="s2"><div class="cam">
+  <div class="kick" id="k2"><span class="kl"></span><span class="kt">Le contact</span></div>
+  <div class="title" id="t2"><b>Vous nous contactez</b> <i>comme vous voulez.</i></div>
+  ${[['phone', 'Téléphone', 'Notre assistante IA, 24 h/24'], ['mail', 'E-mail', 'Lu, compris et classé'],
+     ['chat', 'Chat du site', 'Des questions guidées'], ['wa', 'WhatsApp', 'Des échanges suivis']]
+    .map(([i, t, p], k) => `<div class="card" id="c2${k}" style="left:${140 + k * 420}px"><div class="ico"${i === 'wa' ? ' style="background:rgba(37,211,102,.16)"' : ''}>${ic(i, 50, i === 'wa' ? '#25d366' : '#6ec6f9')}</div><h3>${t}</h3><p>${p}</p></div>`).join('')}
+  <svg style="position:absolute;inset:0" width="1920" height="1080">${[330, 750, 1170, 1590].map((x, k) => `<path id="l2${k}" d="M${x} 700 C${x} 745 ${960 + (x - 960) * .25} 735 ${960 + (x - 960) * .2} 770" fill="none" stroke="#6ec6f9" stroke-width="2.5" stroke-dasharray="6 8" opacity=".7"/>`).join('')}${[0, 1, 2, 3].map((k) => `<circle id="d2${k}" r="7" cx="0" cy="0" fill="#fff" opacity="0" style="filter:drop-shadow(0 0 8px #6ec6f9)"/>`).join('')}</svg>
+  <div id="badge"><div class="ico">${ic('check', 28, '#fff', 3)}</div>Demande n° 1284 enregistrée</div>
+  <div class="cap" id="cap2">Quel que soit le canal, <b>chaque demande reçoit un numéro de suivi.</b></div>
+</div></section>
+
+<section class="scene" id="s2b"><div class="cam">
+  <div class="kick" id="k2b"><span class="kl"></span><span class="kt">Le répondeur IA</span></div>
+  <div class="title" id="t2b"><b>Un appel ?</b> <i>Claire vous reconnaît.</i></div>
+  <div id="h24">24 h/24 · 7 j/7</div><div id="num"><div class="ico" id="numico">${ic('phone', 56, '#fff', 2)}</div><div><small>RÉPONDEUR TÉLÉPHONIQUE IA</small><div class="nb" id="nb">${'09 72 16 39 35'.split(' ').map((x) => `<span>${x}</span>`).join(' ')}</div></div></div>
+  <div id="wave2b">${'<i></i>'.repeat(44)}</div>
+  ${[['a', 'Bonjour, ici Claire. Vous êtes bien M. Durand ?'], ['c2', 'Oui, c\u2019est pour mon compresseur.'], ['a', 'Votre demande n° 1239 est en cours : rappel demain 9 h.'], ['a', 'Je relance l\u2019équipe tout de suite.']]
+    .map(([w, t], k) => `<div class="bub ${w}" id="b2b${k}" style="top:${652 + k * 64}px;${w === 'c2' ? 'right:1020px' : 'left:120px'}">${t}</div>`).join('')}
+  <div id="caller"><div id="scan"></div><div class="k">APPEL ENTRANT · DIMANCHE 22:47</div><div class="n">06 •• •• •• 12</div>
+    <div id="srch">${ic('clock', 18, '#6b7a99', 2.4)} Recherche…</div><div id="reco">${ic('check', 18, '#15803d', 3)} Appelant reconnu</div>
+    ${[['Contact', 'Paul Durand · Ateliers Durand'], ['Profil', 'Distributeur · 12 demandes <span class="tag b">compte 4127</span>'], ['Machines connues', 'SPRX 10 (44) · Rollair 2500 (49)'],
+       ['Demande en cours', 'N° 1239 · rappel demain 9 h <span class="tag b">en cours</span>']]
+      .map(([l, v], k) => `<div class="row" id="rc${k}" style="top:${150 + k * 104}px"><div class="chk"><div class="on">${ic('check', 26, '#fff', 3)}</div></div>
+        <div><div class="l">${l}</div><div class="v"><div class="ph"></div><div class="vv">${v}</div></div></div></div>`).join('')}
+  </div>
+  <div id="relance">${ic('bell', 22, '#6ec6f9')} Équipe relancée</div>
+  <div class="cap" id="cap2b">Appelez quand vous voulez, même le soir : <b>la demande est traitée dès que possible.</b></div>
+</div></section>
+
+<section class="scene" id="s3"><div class="cam">
+  <div class="kick" id="k3"><span class="kl"></span><span class="kt">Les bonnes questions</span></div>
+  <div class="title" id="t3"><b>Les bonnes questions,</b> <i>tout de suite.</i></div>
+  <div id="panel"><div class="hd"><div class="ico">${ic('chat', 26, '#fff', 2.2)}</div><div><b>Assistant Multiair</b><small>Téléphone · E-mail · Chat · WhatsApp</small></div></div>
+    ${[['a', 'Bonjour ! Quel est le matériel concerné ?'], ['c', 'Notre compresseur SPRX 10'], ['a', 'Où est-il installé ?'], ['c', 'À Nantes, 44300'],
+       ['a', 'Votre production est-elle arrêtée ?'], ['c', 'Oui, depuis ce matin'], ['a', 'C’est noté : je transmets au SAV.']]
+      .map(([w, t], k) => `<div class="bub ${w}" id="b3${k}" style="top:${108 + k * 66}px">${t}</div>`).join('')}
+    ${[0, 2, 4, 6].map((k) => `<div class="bub a typ" id="ty${k}" style="top:${108 + k * 66}px;visibility:hidden"><i></i><i></i><i></i></div>`).join('')}
+  </div>
+  <div id="fiche"><div class="k">FICHE DE DEMANDE</div><div class="n">N° 1284</div><div class="d">Aujourd'hui · 09:12</div>
+    ${[['Client', 'Ateliers Durand <span class="tag b">client reconnu</span>'], ['Matériel', 'Compresseur SPRX 10'], ['Site', 'Nantes (44)'],
+       ['Urgence', 'Production arrêtée <span class="tag r">URGENT</span>']]
+      .map(([l, v], k) => `<div class="row" id="r3${k}" style="top:${150 + k * 104}px"><div class="chk"><div class="on">${ic('check', 26, '#fff', 3)}</div></div>
+        <div><div class="l">${l}</div><div class="v"><div class="ph"></div><div class="vv">${v}</div></div></div></div>`).join('')}
+  </div>
+  <div class="cap" id="cap3">Matériel, site, urgence : <b>rien n'est oublié.</b></div>
+</div></section>
+
+<section class="scene" id="s4"><div class="sbg"></div><div class="cam">
+  <div class="kick" id="k4"><span class="kl"></span><span class="kt">L'orientation</span></div>
+  <div class="title" id="t4"><b>Chaque demande</b> <i>au bon endroit.</i></div>
+  <svg id="routes" style="position:absolute;inset:0" width="1920" height="1080" viewBox="0 0 1920 1080"></svg>
+  ${[['wrench', 'Compresseur à l’arrêt'], ['box', 'Devis pièces détachées'], ['euro', 'Question sur une facture'], ['file', 'Schéma électrique, notice'], ['fan', 'Devis compresseur neuf']]
+    .map(([i, t], k) => `<div class="chip" id="ch${k}" style="top:${318 + k * 112}px"><div class="ico">${ic(i, 28)}</div>${t}</div>`).join('')}
+  <div id="hubring"></div>
+  <div id="hub">${logo('lg2', 150)}</div>
+  ${[['wrench', 'SAV', 'Support technique, techniciens terrain'], ['tag', 'Commerce', 'Pièces, équipements, documentation'], ['euro', 'Finance', 'Factures, règlements']]
+    .map(([i, t, p], k) => `<div class="dest" id="de${k}" style="top:${330 + k * 175}px"><div class="top"><div class="ico">${ic(i, 30)}</div><div><h3>${t}</h3><p>${p}</p></div></div><div class="tags" id="tg${k}"></div></div>`).join('')}
+  <div class="cap" id="cap4">Selon la nature de la demande, la marque et le secteur : <b>Commerce, SAV ou Finance.</b></div>
+</div></section>
+
+<section class="scene" id="s5"><div class="cam">
+  <div class="kick" id="k5"><span class="kl"></span><span class="kt">La prise en charge</span></div>
+  <div class="title" id="t5" style="font-size:74px"><b>Le bon interlocuteur confirme,</b><br><i>même sur la route.</i></div>
+  ${[['mail', 'Il reçoit la demande par e-mail et WhatsApp'], ['hand', 'Il la prend en charge en un geste'], ['bell', 'Le client est prévenu aussitôt']]
+    .map(([i, t], k) => `<div class="bul" id="u5${k}" style="top:${470 + k * 130}px"><div class="ico">${ic(i, 34)}</div>${t}</div>`).join('')}
+  <div id="phone"><div id="notch"></div><div id="screen">
+    <div class="scr" id="wa"><div class="hd"><div class="ico">${logo('lg3', 46, '#0d2458')}</div><div><b>Multiair</b><small>WhatsApp</small></div></div>
+      <div id="wamsg"><div class="t"><b>Nouvelle demande Multiair n° 1284</b> : Ateliers Durand — compresseur SPRX 10, production arrêtée. Ouvrez-la pour la prendre en charge.</div>
+        <div class="h">09:13</div><div class="btn" id="wabtn">${ic('link', 20, '#0a7cc2', 2.4)} Ouvrir la demande</div></div>
+    </div>
+    <div class="scr" id="pg"><div class="hd">MULTIAIR</div><div class="ct"><span class="tag r" style="padding:7px 16px;font:700 16px Inter;letter-spacing:.08em">URGENT</span><div class="n">Demande n° 1284</div>
+      <div class="r"><small>CLIENT</small><span>Ateliers Durand</span></div><div class="r"><small>MATÉRIEL</small><span>Compresseur SPRX 10</span></div>
+      <div class="r"><small>SITE</small><span>Nantes (44)</span></div><div class="r"><small>URGENCE</small><span>Production arrêtée</span></div></div>
+      <div class="pbtn" id="pb1">${ic('hand', 28, '#fff')} Je la prends en charge</div>
+      <div class="pbtn" id="pb2">${ic('check', 30, '#fff', 3)} Prise en charge</div>
+      <div id="toast">${ic('bell', 22, '#6ec6f9')} Le client est prévenu</div>
+    </div>
+    <div class="tap" id="tap1" style="left:192px;top:470px"></div>
+    <div class="tap" id="tap2" style="left:196px;top:706px"></div>
+  </div></div>
+</div></section>
+
+<section class="scene" id="s6"><div class="cam">
+  <div class="kick" id="k6"><span class="kl"></span><span class="kt">Le suivi</span></div>
+  <div class="title" id="t6"><b>Vous êtes informé</b> <i>à chaque étape.</i></div>
+  <div id="tline"></div><div id="tfill"></div>
+  ${[['09:12', 'Demande reçue — n° 1284', [['mail', 'E-mail'], ['wa', 'WhatsApp']]], ['09:20', 'Prise en charge par notre SAV', [['mail', 'E-mail'], ['wa', 'WhatsApp']]],
+     ['14:00', 'Rappel du technicien', [['phone', 'Téléphone']]], ['16:40', 'Demande traitée', [['mail', 'E-mail'], ['wa', 'WhatsApp']]]]
+    .map(([tm, h, ps], k) => `<div class="ts" id="ts${k}" style="top:${340 + k * 150}px"><div class="dot">${ic('check', 22, '#6ec6f9', 3)}</div><div class="tm">${tm}</div><h4>${h}</h4>
+      <div class="pills">${ps.map(([i, t]) => `<span class="pill">${ic(i, 18, i === 'wa' ? '#25d366' : '#a9dcfb', 2.2)}${t}</span>`).join('')}</div></div>`).join('')}
+  ${[['wa', '#25d366', 'WhatsApp · Multiair', 'Votre demande n° 1284 est bien enregistrée.'], ['mail', '#0b76d0', 'E-mail · Multiair SAV', 'Prise en charge par notre SAV : rappel prévu à 14 h.'],
+     ['phone', '#163a7a', 'Appel entrant', 'Multiair SAV — votre technicien'], ['wa', '#25d366', 'WhatsApp · Multiair', 'Demande n° 1284 traitée. Merci de votre confiance !']]
+    .map(([i, c, s, t], k) => `<div class="ncw" id="nw${k}"><div class="nc" id="nc${k}"><div class="ico" style="background:${c}">${ic(i, 32, '#fff', 2.2)}</div><div><small>${s}</small><span>${t}</span></div></div></div>`).join('')}
+  <div class="cap" id="cap6">Par e-mail, WhatsApp ou téléphone : <b>votre demande est toujours suivie.</b></div>
+</div></section>
+
+<section class="scene" id="s7"><div class="cam">
+  <div class="kw" id="kw0">Commerce.</div><div class="kw" id="kw1" style="color:var(--sky)">SAV.</div><div class="kw" id="kw2">Finance.</div>
+  <div id="krow">Commerce · SAV · Finance</div>
+  <div class="big" id="kline" style="top:440px;font-size:124px"><b>Tout arrive</b> <i>au bon endroit.</i></div>
+  <div class="big" id="t7" style="top:190px;font-size:80px"><b>Une organisation pensée</b><br><i>pour notre réseau.</i></div>
+  ${[['shield', 'Rien ne se perd', 'À toute heure, chaque demande a son numéro et son suivi.'], ['target', 'Le bon interlocuteur', 'Commerce, SAV ou Finance, du premier coup.'],
+     ['bell', 'Toujours informé', 'Une réponse confirmée, à chaque étape.']]
+    .map(([i, t, p], k) => `<div class="ben" id="be${k}" style="left:${150 + k * 560}px"><div class="ico">${ic(i, 48)}</div><h3>${t}</h3><p>${p}</p></div>`).join('')}
+</div></section>
+
+<section class="scene" id="s8"><div class="cam">
+  <div id="lgend" style="position:absolute;left:710px;top:150px;width:500px">${logo('lg4', 500)}<div class="shbox" style="inset:0"><div class="shine" id="shine2"></div></div></div>
+  <div class="big" id="t8a" style="top:560px;font-size:88px"><b>Organisés pour vous</b></div>
+  <div class="big" id="t8b" style="top:660px;font-size:88px"><i>répondre plus vite.</i></div>
+  <div id="endnum"><div>${ic('phone', 34, '#fff', 2.2)}09 72 16 39 35<small>répondeur IA · 24 h/24</small></div></div>
+  <div id="chan">${[['phone', 'Téléphone'], ['mail', 'E-mail'], ['chat', 'Chat'], ['wa', 'WhatsApp']].map(([i, t]) => `<span>${ic(i, 30, i === 'wa' ? '#25d366' : '#6ec6f9')}${t}</span>`).join('')}</div>
+</div></section>`;
+
+// ---------- routes de la scène 4
+const CHY = [356, 468, 580, 692, 804], DEY = [405, 580, 755];
+const ROUTES = [[0, 0, 'Panne · urgent'], [1, 1, 'Pièces'], [2, 2, 'Facture'], [3, 1, 'Documentation'], [4, 1, 'Équipement']];
+(function () {
+  let h = '';
+  CHY.forEach((y, k) => { h += `<path class="base" d="M640 ${y} C760 ${y} 780 580 865 580" fill="none" stroke="rgba(110,198,249,.28)" stroke-width="2"/>`; });
+  DEY.forEach((y, k) => { h += `<path class="base" d="M1055 580 C1150 580 1170 ${y} 1290 ${y}" fill="none" stroke="rgba(110,198,249,.28)" stroke-width="2"/>`; });
+  ROUTES.forEach(([c, d], k) => {
+    const y = CHY[c], dy = DEY[d];
+    h += `<path id="rt${k}" class="hl" d="M640 ${y} C760 ${y} 780 580 865 580 L1055 580 C1150 580 1170 ${dy} 1290 ${dy}" fill="none" stroke="#6ec6f9" stroke-width="4" stroke-linecap="round" opacity="0"/>`;
+    h += [3, 2, 1].map((j) => `<circle id="tr${k}_${j}" r="${9 - j * 1.8}" cx="0" cy="0" fill="#6ec6f9" opacity="0"/>`).join('');
+    h += `<circle id="dt${k}" r="10" cx="0" cy="0" fill="#fff" style="filter:drop-shadow(0 0 12px #6ec6f9)" opacity="0"/>`;
+  });
+  $('#routes').innerHTML = h;
+  ROUTES.forEach(([c, d, t], k) => { $('#tg' + d).insertAdjacentHTML('beforeend', `<span id="tt${k}">${t}</span>`); });
+})();
+
+// ---------- outils d'animation
+const master = gsap.timeline({paused: true, defaults: {ease: 'power3.out'}});
+let OFF = 0;  // décalage des scènes placées après le répondeur IA
+const pos = (t) => (typeof t === 'number' ? t + OFF : t);
+const tl = {fromTo: (a, b, c, t) => master.fromTo(a, b, c, pos(t)), to: (a, b, t) => master.to(a, b, pos(t)), set: (a, b, t) => master.set(a, b, pos(t))};
+const SFX = [];
+const sfx = (t, k, v = 1) => SFX.push({t: Math.round((t + OFF) * 1000) / 1000, k, v});
+let seed = 11;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const wrapWords = (t) => t.split(/(\s+)/).map((w) => (/^\s+$/.test(w) ? ' ' : (w ? `<span class="w"><span class="wi">${w}</span></span>` : ''))).join('');
+function split(el) {
+  [...el.childNodes].forEach((n) => {
+    if (n.nodeType === 3) {
+      if (!n.textContent.trim()) return;
+      const s = document.createElement('span'); s.innerHTML = wrapWords(n.textContent); n.replaceWith(s);
+    } else if (n.tagName === 'B' || n.tagName === 'I') { n.innerHTML = wrapWords(n.textContent); }
+  });
+}
+$$('.title, .big').forEach(split);
+const WORDS = (t, sel, o = {}) => tl.fromTo(`${sel} .wi`, {yPercent: 118, rotation: o.r ?? 4}, {yPercent: 0, rotation: 0, duration: o.d ?? .95, ease: 'expo.out', stagger: o.st ?? .055}, t);
+const WORDS_OUT = (t, sel) => tl.to(`${sel} .wi`, {yPercent: -118, duration: .42, ease: 'power2.in', stagger: .02}, t);
+const KICK = (t, id) => {
+  tl.fromTo(`${id} .kl`, {scaleX: 0}, {scaleX: 1, duration: .7, ease: 'expo.out'}, t);
+  tl.fromTo(`${id} .kt`, {autoAlpha: 0, x: -30}, {autoAlpha: 1, x: 0, duration: .7, ease: 'expo.out'}, t + .12);
+};
+const CAP = (t, id) => tl.fromTo(id, {autoAlpha: 0, y: 26, filter: 'blur(8px)'}, {autoAlpha: 1, y: 0, filter: 'blur(0px)', duration: .8, ease: 'expo.out'}, t);
+const CAM = (id, a, b) => tl.fromTo(`${id} > .cam`, {scale: 1}, {scale: 1.04, duration: b - a, ease: 'none'}, a);
+const STEP = (t, i) => {
+  tl.to('.st', {color: 'rgba(255,255,255,.4)', duration: .35}, t);
+  tl.to('.st .bar', {scaleX: 0, duration: .3}, t);
+  tl.to(`.st[data-i="${i}"]`, {color: '#fff', duration: .35}, t + .1);
+  tl.to(`.st[data-i="${i}"] .bar`, {scaleX: 1, duration: .6, ease: 'expo.out'}, t + .15);
+};
+function burst(t, x, y, color = '#6ec6f9', n = 18, r0 = 40, r1 = 170) {
+  for (let i = 0; i < n; i++) {
+    const d = document.createElement('div'); d.className = 'pt';
+    const s = 5 + rnd() * 9;
+    Object.assign(d.style, {left: x + 'px', top: y + 'px', width: s + 'px', height: s + 'px', marginLeft: -s / 2 + 'px', marginTop: -s / 2 + 'px', background: rnd() > .35 ? color : '#ffffff'});
+    $('#fx').appendChild(d);
+    const a = (i / n) * Math.PI * 2 + rnd() * .5, dist = r0 + rnd() * (r1 - r0);
+    tl.fromTo(d, {x: Math.cos(a) * r0 * .3, y: Math.sin(a) * r0 * .3, autoAlpha: 0, scale: 1}, {autoAlpha: 1, duration: .01}, t);
+    tl.to(d, {x: Math.cos(a) * dist, y: Math.sin(a) * dist, autoAlpha: 0, scale: .2, duration: .7 + rnd() * .35, ease: 'power3.out'}, t + .01);
+  }
+}
+function wave(t, x, y, size = 220, color = 'rgba(110,198,249,.85)', w = 3, d = .9) {
+  const e = document.createElement('div'); e.className = 'wv';
+  Object.assign(e.style, {left: x - size / 2 + 'px', top: y - size / 2 + 'px', width: size + 'px', height: size + 'px', border: `${w}px solid ${color}`});
+  $('#fx').appendChild(e);
+  tl.fromTo(e, {scale: .15, autoAlpha: 0}, {autoAlpha: 1, duration: .01}, t);
+  tl.to(e, {scale: 1, autoAlpha: 0, duration: d, ease: 'power2.out'}, t + .01);
+}
+// transitions
+gsap.set('.wp', {skewX: -14, x: -3300});
+function sweep(T, from, to, dir = 1) {
+  const a = dir > 0 ? -3300 : 2200, b = dir > 0 ? 2700 : -3000;
+  tl.fromTo('#wp1', {x: a}, {x: b, duration: .9, ease: 'power3.inOut'}, T - .47);
+  tl.fromTo('#wp2', {x: a}, {x: b, duration: .9, ease: 'power3.inOut'}, T - .41);
+  tl.set(from, {visibility: 'hidden'}, T); tl.set(to, {visibility: 'visible'}, T);
+  sfx(T - .45, 'swoosh');
+}
+function zoom(T, from, to) {
+  tl.to(from, {scale: 1.35, autoAlpha: 0, filter: 'blur(14px)', duration: .55, ease: 'power3.in'}, T - .45);
+  tl.fromTo(to, {scale: .86, autoAlpha: 0, filter: 'blur(14px)'}, {scale: 1, autoAlpha: 1, filter: 'blur(0px)', duration: .9, ease: 'expo.out'}, T);
+  tl.set(to, {filter: 'none'}, T + .95);
+  sfx(T - .45, 'whoosh'); sfx(T, 'impact', .8);
+}
+function iris(T, from, to) {
+  tl.set(to, {visibility: 'visible'}, T - .35);
+  tl.fromTo(to, {clipPath: 'circle(0% at 50% 54%)'}, {clipPath: 'circle(75% at 50% 54%)', duration: 1.0, ease: 'power3.inOut'}, T - .35);
+  tl.fromTo('#irisr', {scale: 0, autoAlpha: 0}, {scale: 1, autoAlpha: 1, duration: 1.0, ease: 'power3.inOut'}, T - .35);
+  tl.to('#irisr', {autoAlpha: 0, duration: .3}, T + .55);
+  tl.to(from, {scale: .9, autoAlpha: 0, duration: .8, ease: 'power2.inOut'}, T - .35);
+  tl.set(to, {clipPath: 'none'}, T + .7);
+  sfx(T - .5, 'riser', .7); sfx(T + .05, 'impact', .7);
+}
+function slide(T, from, to) {
+  tl.set(to, {visibility: 'visible'}, T - .4);
+  tl.fromTo(to, {x: 1920}, {x: 0, duration: .85, ease: 'power3.inOut'}, T - .4);
+  tl.to(from, {x: -1920, duration: .85, ease: 'power3.inOut'}, T - .4);
+  tl.set(from, {visibility: 'hidden'}, T + .5);
+  sfx(T - .4, 'whoosh');
+}
+function push(T, from, to) {
+  tl.set(to, {visibility: 'visible'}, T - .4);
+  tl.fromTo(to, {y: 1080}, {y: 0, duration: .85, ease: 'power3.inOut'}, T - .4);
+  tl.to(from, {y: -1080, duration: .85, ease: 'power3.inOut'}, T - .4);
+  tl.set(from, {visibility: 'hidden'}, T + .5);
+  sfx(T - .4, 'whoosh');
+}
+
+// fond continu
+tl.fromTo('.airl', {strokeDashoffset: 0}, {strokeDashoffset: -3000, duration: 82, ease: 'none'}, 0);
+
+// ===== S1 — 0 à 6 : ouverture
+tl.set('#s1', {visibility: 'visible'}, 0); CAM('#s1', 0, 6);
+sfx(0, 'impact', .9); sfx(0, 'rise');
+wave(.15, 960, 470, 1100, 'rgba(110,198,249,.55)', 2, 1.6); wave(.35, 960, 470, 700, 'rgba(255,255,255,.45)', 2, 1.3);
+tl.fromTo('#lg1 .lgA', {rotation: -220, svgOrigin: '0 0', autoAlpha: 0}, {rotation: 0, autoAlpha: 1, duration: 1.5, ease: 'expo.out'}, .15);
+tl.fromTo('#lg1 .lgB', {rotation: 220, svgOrigin: '0 0', autoAlpha: 0}, {rotation: 0, autoAlpha: 1, duration: 1.5, ease: 'expo.out'}, .25);
+tl.fromTo('#lg1 .lgT', {autoAlpha: 0, scale: 1.5, svgOrigin: '0 0'}, {autoAlpha: 1, scale: 1, duration: 1.0, ease: 'expo.out'}, .45);
+tl.fromTo('#lg1 .lgF', {autoAlpha: 0, attr: {'letter-spacing': 10}}, {autoAlpha: .85, attr: {'letter-spacing': 2.4}, duration: 1.3, ease: 'expo.out'}, .8);
+sfx(.5, 'chime');
+tl.fromTo('#shine1', {x: -700}, {x: 700, duration: .9, ease: 'power2.inOut'}, 1.2);
+tl.to('#lgbig', {y: -80, scale: .6, duration: 1.0, ease: 'expo.inOut'}, 1.9);
+WORDS(2.35, '#s1t', {st: .09}); sfx(2.35, 'whoosh', .4);
+WORDS(2.95, '#s1s', {st: .06});
+
+// ===== S2 — 6 à 14 : le contact
+zoom(6, '#s1', '#s2'); CAM('#s2', 6, 14);
+tl.fromTo('#brand', {autoAlpha: 0, y: -16}, {autoAlpha: 1, y: 0, duration: .7}, 6.2);
+tl.set('#steps', {visibility: 'visible'}, 6.2);
+tl.fromTo('.st', {autoAlpha: 0, y: -16}, {autoAlpha: 1, y: 0, duration: .6, stagger: .06}, 6.2); STEP(6.5, 1);
+KICK(6.3, '#k2'); WORDS(6.4, '#t2');
+[0, 1, 2, 3].forEach((k) => {
+  const t = 7.0 + k * .14;
+  tl.fromTo('#c2' + k, {autoAlpha: 0, y: 140, rotationX: -70, transformPerspective: 1400, transformOrigin: '50% 100%'},
+    {autoAlpha: 1, y: 0, rotationX: 0, duration: 1.0, ease: 'expo.out'}, t);
+  tl.fromTo(`#c2${k} .ico`, {scale: 0, rotation: -120}, {scale: 1, rotation: 0, duration: .8, ease: 'back.out(2.4)'}, t + .25);
+  sfx(t, 'pop', .6);
+  wave(t + .7, 330 + k * 420, 505, 230, 'rgba(110,198,249,.7)', 2, 1.0); wave(t + 1.0, 330 + k * 420, 505, 230, 'rgba(110,198,249,.45)', 2, 1.0);
+});
+[0, 1, 2, 3].forEach((k) => {
+  const p = $('#l2' + k), L = p.getTotalLength(), t = 8.6 + k * .08;
+  tl.fromTo(p, {strokeDasharray: `${L} ${L}`, strokeDashoffset: L}, {strokeDashoffset: 0, duration: .55, ease: 'power2.inOut'}, t);
+  tl.set('#d2' + k, {opacity: 1}, t + .3);
+  tl.fromTo('#d2' + k, {motionPath: {path: '#l2' + k, align: '#l2' + k, alignOrigin: [.5, .5], start: 0, end: 0}},
+    {motionPath: {path: '#l2' + k, align: '#l2' + k, alignOrigin: [.5, .5], start: 0, end: 1}, duration: .6, ease: 'power2.in'}, t + .3);
+  tl.set('#d2' + k, {opacity: 0}, t + .9);
+});
+tl.set(['#l20', '#l21', '#l22', '#l23'], {strokeDasharray: '6 8'}, 9.4);
+tl.fromTo('#badge', {autoAlpha: 0, scale: .5, y: 20}, {autoAlpha: 1, scale: 1, y: 0, duration: .8, ease: 'back.out(2)'}, 9.5);
+tl.fromTo('#badge .ico', {scale: 0, rotation: -90}, {scale: 1, rotation: 0, duration: .6, ease: 'back.out(3)'}, 9.7);
+burst(9.55, 960, 812, '#6ec6f9', 24, 70, 300); wave(9.55, 960, 812, 760, 'rgba(110,198,249,.7)', 3, 1.0); sfx(9.55, 'ping');
+CAP(10.3, '#cap2');
+
+
+// ===== S2b — 14 à 26 : le répondeur téléphonique IA (24 h/24)
+sweep(14, '#s2', '#s2b', 1); CAM('#s2b', 14, 26); STEP(14.2, 2);
+KICK(14.25, '#k2b'); WORDS(14.3, '#t2b');
+tl.fromTo('#num', {autoAlpha: 0, x: -140, rotationY: 20, transformPerspective: 1600}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, 14.6);
+tl.fromTo('#numico', {scale: 0, rotation: -120}, {scale: 1, rotation: 0, duration: .8, ease: 'back.out(2.4)'}, 14.8);
+tl.fromTo('#nb span', {autoAlpha: 0, y: 46, scale: .6}, {autoAlpha: 1, y: 0, scale: 1, duration: .5, ease: 'back.out(2.2)', stagger: .09}, 14.95);
+[0, 1, 2, 3, 4].forEach((k) => sfx(14.95 + k * .09, 'tick', .3));
+tl.fromTo('#h24', {autoAlpha: 0, scale: .4, rotation: -12}, {autoAlpha: 1, scale: 1, rotation: 0, duration: .6, ease: 'back.out(2.6)'}, 15.45); sfx(15.45, 'pop', .5);
+[15.7, 16.1, 16.5].forEach((t) => { wave(t, 216, 425, 300, 'rgba(110,198,249,.85)', 3, .8); });
+tl.fromTo('#numico', {rotation: 0}, {rotation: 14, duration: .06, yoyo: true, repeat: 11, ease: 'sine.inOut'}, 15.7); sfx(15.7, 'ring', .85);
+tl.to('#numico', {backgroundColor: '#16a34a', duration: .3}, 16.55); sfx(16.6, 'pickup', .6);
+tl.fromTo('#caller', {autoAlpha: 0, x: 140, rotationY: -24, transformPerspective: 1600}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, 16.55);
+tl.set('#reco', {autoAlpha: 0}, 14);
+tl.fromTo('#srch', {autoAlpha: 0}, {autoAlpha: 1, duration: .2}, 16.9);
+tl.fromTo('#scan', {autoAlpha: 0, y: -60}, {autoAlpha: 1, duration: .1}, 16.95);
+tl.to('#scan', {y: 580, duration: .85, ease: 'power1.inOut'}, 17.0);
+tl.to('#scan', {autoAlpha: 0, duration: .15}, 17.8);
+tl.to('#srch', {autoAlpha: 0, duration: .15}, 17.8);
+tl.fromTo('#reco', {autoAlpha: 0, scale: .5}, {autoAlpha: 1, scale: 1, duration: .5, ease: 'back.out(2.6)'}, 17.85); sfx(17.85, 'ping', .8);
+[18.1, 18.5, 18.9, 19.35].forEach((t, k) => {
+  tl.to(`#rc${k} .ph`, {autoAlpha: 0, scaleX: .3, transformOrigin: 'left', duration: .25}, t);
+  tl.to(`#rc${k} .vv`, {clipPath: 'inset(0 0% 0 0)', duration: .6, ease: 'expo.out'}, t + .05);
+  tl.fromTo(`#rc${k} .chk .on`, {scale: 0}, {scale: 1, duration: .5, ease: 'back.out(3)'}, t + .25);
+  wave(t + .3, 1087, 526 + k * 104, 120, 'rgba(11,118,208,.7)', 3, .7);
+  sfx(t + .25, 'tick', .6);
+});
+tl.fromTo('#rc3', {backgroundColor: 'rgba(227,241,253,0)'}, {backgroundColor: 'rgba(227,241,253,1)', duration: .5}, 19.7);
+// la voix de Claire et de l'appelant
+const VOIX = [[16.9, 18.4], [19.8, 22.4]];
+$$('#wave2b i').forEach((b, i) => {
+  VOIX.forEach(([a, z]) => {
+    const n = Math.max(1, Math.round((z - a) / .36));
+    tl.fromTo(b, {scaleY: .08}, {scaleY: .25 + rnd() * .75, duration: .18, yoyo: true, repeat: n * 2 - 1, ease: 'sine.inOut'}, a + (i % 7) * .025);
+  });
+});
+tl.fromTo('#wave2b', {autoAlpha: 0, scaleX: .6}, {autoAlpha: 1, scaleX: 1, duration: .5, ease: 'expo.out'}, 16.7);
+[[16.95, 'blip'], [18.6, 'blip2'], [19.9, 'blip'], [21.0, 'blip']].forEach(([t, k], i) => {
+  tl.fromTo('#b2b' + i, {autoAlpha: 0, scale: .5, y: 24}, {autoAlpha: 1, scale: 1, y: 0, duration: .55, ease: 'back.out(1.8)'}, t);
+  sfx(t, k, .55);
+});
+tl.fromTo('#relance', {autoAlpha: 0, y: 40, scale: .8}, {autoAlpha: 1, y: 0, scale: 1, duration: .6, ease: 'back.out(2)'}, 21.6);
+burst(21.65, 764, 873, '#6ec6f9', 14, 30, 140); sfx(21.65, 'notif', .6);
+CAP(22.4, '#cap2b');
+
+OFF = 12;
+// ===== S3 — 26 à 36 (14 à 24 + 12) : les bonnes questions
+slide(14, '#s2b', '#s3'); CAM('#s3', 14, 24); STEP(14.2, 3);
+KICK(14.25, '#k3'); WORDS(14.3, '#t3');
+tl.fromTo('#panel', {autoAlpha: 0, x: -140, rotationY: 20, transformPerspective: 1600}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, 14.6);
+tl.fromTo('#fiche', {autoAlpha: 0, x: 140, rotationY: -24, transformPerspective: 1600}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, 14.75);
+sfx(14.6, 'swish', .5);
+const B3 = [15.6, 16.35, 17.15, 17.85, 18.65, 19.35, 20.25];
+B3.forEach((t, k) => {
+  if (k % 2 === 0) {
+    tl.fromTo('#ty' + k, {autoAlpha: 0, scale: .5}, {autoAlpha: 1, scale: 1, duration: .25, ease: 'back.out(2)'}, t - .5);
+    tl.fromTo(`#ty${k} i`, {y: 0}, {y: -7, duration: .14, yoyo: true, repeat: 2, stagger: .07, ease: 'sine.inOut'}, t - .45);
+    tl.set('#ty' + k, {autoAlpha: 0}, t);
+  }
+  tl.fromTo('#b3' + k, {autoAlpha: 0, scale: .5, y: 24}, {autoAlpha: 1, scale: 1, y: 0, duration: .55, ease: 'back.out(1.8)'}, t);
+  sfx(t, k % 2 ? 'blip2' : 'blip', .55);
+});
+[15.8, 16.55, 18.05, 19.55].forEach((t, k) => {
+  tl.to(`#r3${k} .ph`, {autoAlpha: 0, scaleX: .3, transformOrigin: 'left', duration: .25}, t);
+  tl.to(`#r3${k} .vv`, {clipPath: 'inset(0 0% 0 0)', duration: .6, ease: 'expo.out'}, t + .05);
+  tl.fromTo(`#r3${k} .chk .on`, {scale: 0}, {scale: 1, duration: .5, ease: 'back.out(3)'}, t + .25);
+  wave(t + .3, 1087, 526 + k * 104, 120, 'rgba(11,118,208,.7)', 3, .7);
+  sfx(t + .25, 'tick', .7);
+});
+tl.fromTo('#r33 .tag.r', {scale: 1}, {scale: 1.2, duration: .2, yoyo: true, repeat: 3, ease: 'sine.inOut'}, 20.0); sfx(20.0, 'alert', .5);
+CAP(21.0, '#cap3');
+
+// ===== S4 — 24 à 34 : l'orientation
+iris(24, '#s3', '#s4'); CAM('#s4', 24, 34); STEP(24.2, 4);
+KICK(24.4, '#k4'); WORDS(24.45, '#t4');
+tl.fromTo('#hub', {scale: 0, rotation: -120}, {scale: 1, rotation: 0, duration: 1.0, ease: 'back.out(1.6)'}, 24.5);
+tl.fromTo('#hubring', {scale: .4, autoAlpha: 0}, {scale: 1, autoAlpha: 1, duration: 1.0, ease: 'expo.out'}, 24.6);
+tl.fromTo('#hubring', {rotation: 0}, {rotation: 220, duration: 9.4, ease: 'none'}, 24.6);
+wave(24.75, 960, 580, 560, 'rgba(110,198,249,.7)', 3, 1.1); sfx(24.6, 'impact', .45);
+$$('#routes .base').forEach((p, k) => { const L = p.getTotalLength(); tl.fromTo(p, {strokeDasharray: `${L} ${L}`, strokeDashoffset: L}, {strokeDashoffset: 0, duration: .8, ease: 'power2.inOut'}, 24.85 + k * .03); });
+[0, 1, 2].forEach((k) => tl.fromTo('#de' + k, {autoAlpha: 0, x: 140, rotationY: -28, transformPerspective: 1600}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, 25.0 + k * .12));
+ROUTES.forEach(([c, d], k) => {
+  const t = 25.7 + k * 1.2;
+  tl.fromTo('#ch' + c, {autoAlpha: 0, x: -120, scale: .9}, {autoAlpha: 1, x: 0, scale: 1, duration: .6, ease: 'expo.out'}, t); sfx(t, 'pop', .6);
+  tl.to('#rt' + k, {opacity: .9, duration: .25}, t + .25);
+  ['#dt' + k, '#tr' + k + '_1', '#tr' + k + '_2', '#tr' + k + '_3'].forEach((id, j) => {
+    tl.set(id, {opacity: j ? .55 - j * .13 : 1}, t + .25 + j * .035);
+    tl.fromTo(id, {motionPath: {path: '#rt' + k, align: '#rt' + k, alignOrigin: [.5, .5], start: 0, end: 0}},
+      {motionPath: {path: '#rt' + k, align: '#rt' + k, alignOrigin: [.5, .5], start: 0, end: 1}, duration: 1.0, ease: 'power2.inOut'}, t + .25 + j * .035);
+    tl.set(id, {opacity: 0}, t + 1.27 + j * .035);
+  });
+  tl.fromTo('#hub', {scale: 1}, {scale: 1.1, duration: .14, yoyo: true, repeat: 1, ease: 'power1.inOut'}, t + .7);
+  wave(t + .72, 960, 580, 320, 'rgba(110,198,249,.6)', 2, .6); sfx(t + .72, 'tick', .35);
+  tl.to('#rt' + k, {opacity: 0, duration: .5}, t + 1.3);
+  tl.fromTo('#de' + d, {borderColor: 'rgba(255,255,255,.16)', backgroundColor: 'rgba(255,255,255,.08)'},
+    {borderColor: 'rgba(110,198,249,.95)', backgroundColor: 'rgba(110,198,249,.2)', duration: .2, yoyo: true, repeat: 1, ease: 'power1.inOut'}, t + 1.25);
+  tl.fromTo('#tt' + k, {autoAlpha: 0, scale: .4, y: 10}, {autoAlpha: 1, scale: 1, y: 0, duration: .5, ease: 'back.out(2.6)'}, t + 1.25);
+  burst(t + 1.25, 1292, DEY[d], '#6ec6f9', 10, 20, 100); sfx(t + 1.25, 'ping', .75);
+});
+CAP(32.1, '#cap4');
+
+// ===== S5 — 34 à 42 : la prise en charge
+sweep(34, '#s4', '#s5', -1); CAM('#s5', 34, 42); STEP(34.2, 5);
+KICK(34.25, '#k5'); WORDS(34.3, '#t5');
+tl.set('#pg', {xPercent: 100}, 34); tl.set(['#pb2', '#toast', '#tap1', '#tap2'], {autoAlpha: 0}, 34);
+tl.fromTo('#phone', {autoAlpha: 0, y: 280, rotationY: -40, rotationX: 12, rotationZ: 7, transformPerspective: 1800},
+  {autoAlpha: 1, y: 0, rotationY: 0, rotationX: 0, rotationZ: 0, duration: 1.3, ease: 'expo.out'}, 34.4); sfx(34.4, 'swish', .6);
+tl.to('#phone', {y: -14, duration: 1.3, yoyo: true, repeat: 4, ease: 'sine.inOut'}, 35.75);
+tl.fromTo('#wamsg', {autoAlpha: 0, y: -70, scale: .9}, {autoAlpha: 1, y: 0, scale: 1, duration: .7, ease: 'back.out(1.6)'}, 35.75); sfx(35.75, 'notif');
+tl.fromTo('#phone', {rotationZ: 0}, {rotationZ: 1.6, duration: .05, yoyo: true, repeat: 7, ease: 'sine.inOut'}, 35.8);
+const BUL = (t, k) => { tl.fromTo('#u5' + k, {autoAlpha: 0, x: -80}, {autoAlpha: 1, x: 0, duration: .8, ease: 'expo.out'}, t);
+  tl.fromTo(`#u5${k} .ico`, {scale: 0, rotation: -90}, {scale: 1, rotation: 0, duration: .7, ease: 'back.out(2.6)'}, t + .1); };
+BUL(36.0, 0);
+tl.fromTo('#tap1', {autoAlpha: 0, scale: .4}, {autoAlpha: 1, scale: 1, duration: .22}, 36.85);
+tl.to('#tap1', {autoAlpha: 0, scale: 1.7, duration: .45}, 37.1); sfx(36.95, 'tap');
+tl.fromTo('#wabtn', {backgroundColor: 'rgba(230,242,251,0)'}, {backgroundColor: 'rgba(230,242,251,1)', duration: .15, yoyo: true, repeat: 1}, 36.95);
+tl.to('#pg', {xPercent: 0, duration: .6, ease: 'power3.inOut'}, 37.25); tl.to('#wa', {xPercent: -30, duration: .6, ease: 'power3.inOut'}, 37.25); sfx(37.25, 'swish', .45);
+tl.fromTo('#tap2', {autoAlpha: 0, scale: .4}, {autoAlpha: 1, scale: 1, duration: .22}, 38.45);
+tl.to('#tap2', {autoAlpha: 0, scale: 1.7, duration: .45}, 38.7); sfx(38.55, 'tap');
+tl.fromTo('#pb1', {scale: 1}, {scale: .95, duration: .12, yoyo: true, repeat: 1}, 38.55);
+tl.to('#pb2', {autoAlpha: 1, duration: .25}, 38.8); tl.fromTo('#pb2', {scale: .9}, {scale: 1, duration: .6, ease: 'back.out(3)'}, 38.8);
+burst(38.85, 1500, 812, '#34d399', 24, 30, 230); wave(38.85, 1500, 812, 460, 'rgba(52,211,153,.75)', 3, .9); sfx(38.85, 'success');
+BUL(38.95, 1);
+tl.fromTo('#toast', {autoAlpha: 0, y: 50}, {autoAlpha: 1, y: 0, duration: .6, ease: 'back.out(1.8)'}, 39.5); sfx(39.5, 'notif', .6);
+BUL(39.7, 2);
+
+// ===== S6 — 42 à 52 : le suivi
+push(42, '#s5', '#s6'); CAM('#s6', 42, 52); STEP(42.3, 6);
+KICK(42.4, '#k6'); WORDS(42.45, '#t6');
+tl.fromTo('#tline', {scaleY: 0, transformOrigin: 'top'}, {scaleY: 1, duration: .9, ease: 'expo.out'}, 42.8);
+tl.set('#tfill', {scaleY: 0}, 42);
+const T6 = [43.2, 45.0, 46.8, 48.6];
+T6.forEach((t, k) => {
+  tl.fromTo('#ts' + k, {autoAlpha: 0, x: -80}, {autoAlpha: 1, x: 0, duration: .7, ease: 'expo.out'}, t);
+  tl.fromTo(`#ts${k} .dot`, {scale: .2}, {scale: 1, duration: .55, ease: 'back.out(3)'}, t);
+  wave(t + .05, 183, 377 + k * 150, 130, 'rgba(110,198,249,.8)', 3, .7);
+  if (k > 0) tl.to('#tfill', {scaleY: k / 3, duration: .6, ease: 'power2.inOut'}, t - .25);
+  for (let j = 0; j < k; j++) tl.to('#nw' + j, {y: (k - j) * 140, duration: .6, ease: 'expo.inOut'}, t + .1);
+  tl.fromTo('#nc' + k, {autoAlpha: 0, x: 160, scale: .9, rotationY: -35, transformPerspective: 1400}, {autoAlpha: 1, x: 0, scale: 1, rotationY: 0, duration: .8, ease: 'expo.out'}, t + .2);
+  sfx(t + .2, k === 2 ? 'ring' : 'notif', .8);
+});
+tl.fromTo('#nc2 .ico', {rotation: 0}, {rotation: 16, duration: .06, yoyo: true, repeat: 11, ease: 'sine.inOut'}, T6[2] + .45);
+CAP(50.0, '#cap6');
+tl.to('#steps', {autoAlpha: 0, y: -16, duration: .4}, 51.4);
+
+// ===== S7 — 52 à 62 : temps fort + bénéfices
+sweep(52, '#s6', '#s7', 1); CAM('#s7', 52, 62);
+[0, 1, 2].forEach((k) => {
+  const t = 52.5 + k * .5;
+  tl.fromTo('#kw' + k, {autoAlpha: 0, scale: 1.9, filter: 'blur(20px)'}, {autoAlpha: 1, scale: 1, filter: 'blur(0px)', duration: .26, ease: 'power3.out'}, t);
+  tl.to('#kw' + k, {autoAlpha: 0, scale: .82, filter: 'blur(8px)', duration: .13, ease: 'power2.in'}, t + .36);
+  wave(t, 960, 520, 1000, 'rgba(110,198,249,.45)', 3, .7); sfx(t, 'hit');
+});
+tl.fromTo('#krow', {autoAlpha: 0, letterSpacing: '.6em', scale: 1.1}, {autoAlpha: 1, letterSpacing: '.14em', scale: 1, duration: .9, ease: 'expo.out'}, 54.0);
+sfx(54.0, 'impact', .9); burst(54.05, 960, 400, '#6ec6f9', 26, 80, 420);
+WORDS(54.2, '#kline', {st: .07});
+tl.to('#krow', {autoAlpha: 0, y: -40, duration: .4, ease: 'power2.in'}, 55.6); WORDS_OUT(55.6, '#kline');
+WORDS(56.1, '#t7', {st: .06}); sfx(56.1, 'whoosh', .4);
+[0, 1, 2].forEach((k) => {
+  const t = 56.7 + k * .2;
+  tl.fromTo('#be' + k, {autoAlpha: 0, x: 80, rotationY: 75, transformPerspective: 1600, transformOrigin: '0% 50%'}, {autoAlpha: 1, x: 0, rotationY: 0, duration: 1.0, ease: 'expo.out'}, t);
+  tl.fromTo(`#be${k} .ico`, {scale: 0, rotation: -120}, {scale: 1, rotation: 0, duration: .8, ease: 'back.out(2.4)'}, t + .2);
+  sfx(t, 'pop', .6);
+});
+tl.to('#brand', {autoAlpha: 0, y: -16, duration: .4}, 61.4);
+
+// ===== S8 — 62 à 70 : fin
+zoom(62, '#s7', '#s8'); CAM('#s8', 62, 70);
+tl.fromTo('#lg4 .lgA', {rotation: -220, svgOrigin: '0 0', autoAlpha: 0}, {rotation: 0, autoAlpha: 1, duration: 1.5, ease: 'expo.out'}, 62.2);
+tl.fromTo('#lg4 .lgB', {rotation: 220, svgOrigin: '0 0', autoAlpha: 0}, {rotation: 0, autoAlpha: 1, duration: 1.5, ease: 'expo.out'}, 62.3);
+tl.fromTo('#lg4 .lgT', {autoAlpha: 0, scale: 1.5, svgOrigin: '0 0'}, {autoAlpha: 1, scale: 1, duration: 1.0, ease: 'expo.out'}, 62.45);
+tl.fromTo('#lg4 .lgF', {autoAlpha: 0, attr: {'letter-spacing': 10}}, {autoAlpha: .85, attr: {'letter-spacing': 2.4}, duration: 1.3, ease: 'expo.out'}, 62.8);
+sfx(62.4, 'chime');
+WORDS(63.3, '#t8a', {st: .08}); WORDS(63.7, '#t8b', {st: .07});
+tl.fromTo('#shine2', {x: -700}, {x: 700, duration: 1.0, ease: 'power2.inOut'}, 64.3); sfx(64.3, 'shine', .5);
+tl.fromTo('#chan span', {autoAlpha: 0, y: 34, scale: .8}, {autoAlpha: 1, y: 0, scale: 1, duration: .7, ease: 'back.out(2)', stagger: .1}, 64.6);
+[0, 1, 2, 3].forEach((k) => sfx(64.6 + k * .1, 'pop', .35));
+tl.to('#stage', {opacity: 0, duration: 1.3, ease: 'power2.in'}, 68.7);
+
+window.DUREE = 82;
+window.SFX = SFX.sort((a, b) => a.t - b.t);
+window.seekTo = (t) => { master.time(t, false); };
+window.seekTo(0);
+</script>
+</body>
+</html>
