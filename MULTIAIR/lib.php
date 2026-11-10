@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-10a';
+const MA_VERSION = '2026-11-10b';
 
 function ma_config(): array
 {
@@ -530,6 +530,35 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             }
         }
         $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_routage_schemas', ?)")->execute([ma_now()]);
+    }
+
+    // SPRX (spirale Worthington Creyssensac / Mauguière) et libellé « Schéma électrique, notices » (Cyril, 10/11) :
+    // dans les listes déjà enregistrées, une fois.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'rep_listes_sprx'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('parametres', $present, true) && in_array('rep_regles', $present, true)) {
+        foreach (['rep_liste_marques' => 'worthington', 'rep_liste_natures' => 'schema_electrique'] as $cle => $code) {
+            $q = $pdo->prepare('SELECT valeur FROM parametres WHERE cle = ?');
+            $q->execute([$cle]);
+            $liste = json_decode((string) $q->fetchColumn(), true);
+            if (!is_array($liste)) {
+                continue;
+            }
+            foreach ($liste as &$x) {
+                if (is_array($x) && ma_plat($x['code'] ?? '') === $code) {
+                    if ($code === 'worthington' && !in_array('sprx', ma_csv($x['mots'] ?? ''), true)) {
+                        $x['mots'] = trim((string) ($x['mots'] ?? ''), ' ,') . ', sprx';
+                    }
+                    if ($code === 'schema_electrique' && ma_plat($x['libelle'] ?? '') === 'schema electrique') {
+                        $x['libelle'] = 'Schéma électrique, notices';
+                    }
+                }
+            }
+            unset($x);
+            $pdo->prepare('UPDATE parametres SET valeur = ? WHERE cle = ?')->execute([json_encode($liste, JSON_UNESCAPED_UNICODE), $cle]);
+        }
+        $pdo->exec("UPDATE rep_regles SET libelle = replace(libelle, 'Schéma électrique (toutes marques)', 'Schéma électrique, notices (toutes marques)') WHERE ordre = 96");
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('rep_listes_sprx', ?)")->execute([ma_now()]);
     }
 
     // Boîtes partagées : accès « ses demandes seulement » (décision de Cyril, 06/11), une fois ; ensuite « Équipe et accès » décide.
@@ -1324,7 +1353,7 @@ function ma_rep_listes(PDO $db): array
 {
     $defauts = [
         'marques' => [
-            ['code' => 'worthington', 'libelle' => 'Worthington Creyssensac', 'mots' => 'worthington, creyssensac, rollair, rlr, dixair, dnx, decibair, snx, pixair, pxr, blocair'],
+            ['code' => 'worthington', 'libelle' => 'Worthington Creyssensac', 'mots' => 'worthington, creyssensac, rollair, rlr, dixair, dnx, decibair, snx, pixair, pxr, blocair, sprx'],
             ['code' => 'mauguiere', 'libelle' => 'Mauguière', 'mots' => 'mauguiere, mav, mrl'],
             ['code' => 'abac', 'libelle' => 'ABAC', 'mots' => 'abac, genesis, formula, cross'],
             ['code' => 'pneumatech', 'libelle' => 'Pneumatech', 'mots' => 'pneumatech'],
@@ -1340,7 +1369,7 @@ function ma_rep_listes(PDO $db): array
                 'mots' => 'commande+compresseur, livraison+compresseur, suivi+compresseur, commande+secheur, commande+equipement, livraison+equipement'],
             ['code' => 'devis_equipement', 'libelle' => 'Devis équipement neuf',
                 'mots' => 'devis+compresseur, devis+secheur, devis+equipement, prix+compresseur, devis+materiel'],
-            ['code' => 'schema_electrique', 'libelle' => 'Schéma électrique', 'mots' => 'schema+electrique, plan+electrique, schema+cablage'],
+            ['code' => 'schema_electrique', 'libelle' => 'Schéma électrique, notices', 'mots' => 'schema+electrique, plan+electrique, schema+cablage'],
             ['code' => 'autre', 'libelle' => 'Autre demande commerciale', 'mots' => ''],
         ],
         // Chaque rôle appartient à un seul service : les équipes finance, SAV et commerce sont distinctes.
@@ -1409,9 +1438,9 @@ function ma_rep_marque(?string $marque, ?string $modele = null, ?array $marques 
 function ma_rep_nature(array $d, array $natures): string
 {
     $codes = array_map(fn($x) => ma_plat($x['code']), $natures);
-    // Un schéma électrique part à sa boîte, même si Claire a classé la demande en pièces ou en équipement.
-    if (in_array('schema_electrique', $codes, true) && ma_demande_schema_electrique(implode(' ', [$d['besoin_commercial'] ?? '',
-        $d['besoin_resume'] ?? '', $d['resume'] ?? '', $d['message_client'] ?? '']))) {
+    // Schéma électrique ou notice : leur boîte, même si Claire a classé la demande en pièces ou en équipement.
+    if (in_array('schema_electrique', $codes, true) && ma_demande_doc_acquisitions(implode(' ', [$d['besoin_commercial'] ?? '',
+        $d['besoin_resume'] ?? '', $d['resume'] ?? '', $d['message_client'] ?? '', $d['type_panne'] ?? '']), ma_rep_service($d['service'] ?? null) === 'sav')) {
         return 'schema_electrique';
     }
     $dit = ma_plat($d['nature'] ?? $d['type_demande'] ?? null);
@@ -1524,6 +1553,10 @@ function ma_rep_router(PDO $db, array $d): array
     $params = $db->query('SELECT cle, valeur FROM parametres')->fetchAll(PDO::FETCH_KEY_PAIR);
     $listes = ma_rep_listes($db);
     $service = ma_rep_service($d['service'] ?? null);
+    $documentSav = ma_rep_document_sav($d);
+    if ($documentSav) {
+        $service = 'commercial';
+    }
     $marque = ma_rep_marque($d['marque'] ?? null, $d['modele'] ?? null, $listes['marques']);
     $nature = ma_rep_nature($d, $listes['natures']);
     $typeClient = ma_rep_type_client($d);
@@ -1533,6 +1566,10 @@ function ma_rep_router(PDO $db, array $d): array
     $equip = $equip === '' ? '' : (str_contains($equip, 'piston') ? 'piston' : 'autre');
     $dep = ma_departement($d['code_postal'] ?? null, $d['departement'] ?? null);
     $notes = [];
+    if ($documentSav) {
+        $nature = 'schema_electrique';
+        $notes[] = 'Schéma ou notice demandé au SAV : envoyé comme une demande commerciale (Devis acquisitions)';
+    }
 
     $contacts = $db->query('SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom')->fetchAll();
     $regles = $db->query('SELECT * FROM rep_regles WHERE actif = 1 ORDER BY ordre, id')->fetchAll();
@@ -1814,7 +1851,7 @@ function ma_rep_grilles_enregistrer(PDO $db, array $g): void
         $ins->execute([95, 'Acquisitions OVITY / FITEC → ' . $contacts[$id], 'commercial', 'ovity,fitec', null, null, 'contacts', null, (string) $id, null]);
     }
     if ($id = $boite($g['schemas'] ?? null)) {
-        $ins->execute([96, 'Schéma électrique (toutes marques) → ' . $contacts[$id], 'commercial', null, null, 'schema_electrique', 'contacts', null, (string) $id, null]);
+        $ins->execute([96, 'Schéma électrique, notices (toutes marques) → ' . $contacts[$id], 'commercial', null, null, 'schema_electrique', 'contacts', null, (string) $id, null]);
     }
     $ordre = 100;
     foreach ($axes['com_natures'] as $n) {
@@ -2973,6 +3010,11 @@ function ma_rep_creer_demande(PDO $db, array $d, array $opt = []): array
     }
     $d['jeton_interne'] = ma_jeton();
     $d['jeton_client'] = ma_jeton();
+    // Schéma ou notice demandé au SAV (hors urgence) : demande commerciale, la boîte Devis acquisitions l'envoie.
+    if (ma_rep_document_sav($d)) {
+        $d['service'] = 'COMMERCIAL';
+        $d['besoin_commercial'] = ma_str($d['besoin_commercial'] ?? null) ?? ma_str($d['type_panne'] ?? null);
+    }
     $rt = ma_rep_router($db, $d);
     $d['marque_norm'] = $rt['marque'];
     $d['nature'] = $rt['nature'] ?: null;
@@ -3043,10 +3085,46 @@ function ma_demande_schema_electrique(string $texte): bool
         str_replace(['’', '`'], "'", ma_plat($texte)));
 }
 
-/** Nature d'une demande de documents : schéma électrique, pièces (vue éclatée, nomenclature…) ou équipement (notice, certificat…). */
+/**
+ * Documents envoyés par la boîte Devis acquisitions (Cyril, 10/11) : schéma électrique, notice d'utilisation,
+ * notice de pièces. $explicite : le document doit être demandé (verbe de demande juste avant, document en tête
+ * de l'objet, ou « svp » après) — sert au SAV, où « j'ai suivi la notice » n'est pas une demande de notice.
+ */
+function ma_demande_doc_acquisitions(string $texte, bool $explicite = false): bool
+{
+    $t = str_replace(['’', '`'], "'", ma_plat($texte));
+    $schema = "schemas? (?:electriques?|elec|de cablage|de branchement electrique)|plans? electriques?|cablage electrique";
+    $notice = "notices?|modes? d'emploi|manuels? (?:d'utilisation|d'instructions?|utilisateur|d'entretien)";
+    $doc = "(?:$schema|$notice)";
+    // Même bout de phrase : pas de ponctuation ni de « et / mais / il… » entre la demande et le document.
+    $suite = "(?:(?!\\b(?:et|mais|car|puis|donc|il|elle|ils|elles|on)\\b)[^.!?\\n,;:])";
+    $verbe = "envoy\\w*|renvoy\\w*|transmet\\w*|transmis|transferer|parvenir|fournir|recevoir|obtenir|besoin|cherch\\w*|recherch\\w*"
+        . "|demand\\w*|souhait\\w*|voudr\\w*|aimer\\w*|pourri\\w*|pouvez|auri\\w*|avez|dispos\\w*|manqu\\w*|perdu\\w*|egare\\w*|recuper\\w*|telecharg\\w*";
+    if (preg_match("/\\b(?:$verbe)\\b$suite{0,40}\\b$doc\\b|(?:^|«|objet ?:)\\s*(?:(?:re|tr|fw|fwd) ?: ?)*$doc\\b|\\b$doc\\b$suite{0,60}\\b(?:svp|s'il vous plait)\\b/u", $t)) {
+        return true;
+    }
+    if ($explicite) {
+        return false;
+    }
+    // Côté commerce : un schéma électrique cité suffit ; une notice aussi, sauf dans un devis ou une commande (« livré avec sa notice »).
+    return (bool) preg_match("/\\b(?:$schema)\\b/u", $t)
+        || (preg_match("/\\b(?:$notice)\\b/u", $t) && !preg_match('/\b(devis|prix|tarifs?|cotation|commande[rz]?)\b/u', $t));
+}
+
+/** Schéma ou notice demandés au SAV, hors urgence : c'est la boîte Devis acquisitions qui les envoie (Cyril, 10/11). */
+function ma_rep_document_sav(array $d): bool
+{
+    if (ma_rep_service($d['service'] ?? null) !== 'sav' || ma_rep_urgent($d)) {
+        return false;
+    }
+    return ma_demande_doc_acquisitions(implode(' ', [$d['type_panne'] ?? '', $d['besoin_commercial'] ?? '', $d['besoin_resume'] ?? '',
+        $d['resume'] ?? '', $d['message_client'] ?? '']), true);
+}
+
+/** Nature d'une demande de documents : schéma ou notice (Devis acquisitions), pièces (vue éclatée, nomenclature…) ou équipement (certificat…). */
 function ma_nature_documents(string $texte): ?string
 {
-    if (ma_demande_schema_electrique($texte)) {
+    if (ma_demande_doc_acquisitions($texte)) {
         return 'schema_electrique';
     }
     return ma_demande_doc_pieces($texte) ? 'devis_pieces' : (ma_demande_documents($texte) ? 'commande_equipement' : null);
@@ -3356,7 +3434,7 @@ function ma_email_infos(PDO $db, string $sujet, string $corps, string $from): ar
     $urgent = (bool) preg_match('/\b(urgent\w*|urgence|a l.arret|arret de (?:la )?production|production (?:arretee|bloquee)|plus d.air)\b/u', $t);
     $marque = null;
     foreach (['worthington' => 'Worthington Creyssensac', 'creyssensac' => 'Worthington Creyssensac', 'pneumatech' => 'Pneumatech',
-        'abac' => 'ABAC', 'mauguiere' => 'Mauguière'] as $mot => $nom) {
+        'abac' => 'ABAC', 'mauguiere' => 'Mauguière', 'sprx' => 'SPRX (Worthington Creyssensac / Mauguière)'] as $mot => $nom) {
         if (preg_match('/\b' . $mot . '\b/u', $t)) {
             $marque = $nom;
             break;

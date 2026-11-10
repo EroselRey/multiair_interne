@@ -631,6 +631,25 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - testé sur la copie locale : demande en 44300 → Cédric (Commerce, 44/49/85) puis le RSO du 44 en tête ; demande
   sans code postal → liste inchangée ; champ départements visible pour Commerce, RSO, CTA, caché sinon.
 
+## Schémas et notices → Devis acquisitions ; SPRX reconnu (correctif 60, 10/11)
+
+- décision de Cyril : « un schéma électrique, notice d'utilisation, notice des pièces : devis acquisition » ;
+  « SPRX est une marque pour les compresseurs SPIRALE pour Worthington Creyssensac et Mauguière » ;
+- `ma_demande_doc_acquisitions()` : schéma électrique (ou de câblage, plan électrique), notice (d'utilisation,
+  d'instructions, de pièces), mode d'emploi, manuel d'utilisation / d'entretien → nature `schema_electrique`
+  (libellé « Schéma électrique, notices »), donc boîte Devis acquisitions (règle 96) ; vue éclatée, nomenclature,
+  liste de pièces restent à l'équipe pièces ; une notice citée dans un devis ou une commande (« livré avec sa
+  notice ») ne compte pas ;
+- demande classée SAV : part aussi à Devis acquisitions (la demande devient commerciale) quand le document est bien
+  demandé (« pouvez-vous m'envoyer… », « besoin de la notice », objet « Schéma électrique… ») ; reste au SAV pour une
+  urgence (production arrêtée) et pour « j'ai suivi la notice, il ne démarre plus » ;
+- SPRX : mot-clé de la marque Worthington Creyssensac (routage identique à Mauguière, commerce comme SAV) ; dans les
+  e-mails, marque notée « SPRX (Worthington Creyssensac / Mauguière) » ; « Mauguière SPRX » reste Mauguière ;
+- migration unique `rep_listes_sprx` : ajoute « sprx » et le nouveau libellé dans les listes déjà enregistrées,
+  renomme la règle 96 ;
+- testé sur la copie locale : 11 phrases (commerce et SAV, urgence, notice citée dans un devis, panne avec notice),
+  création d'une demande SAV « schéma électrique » → enregistrée Commerce, Devis acquisitions ; e-mails SPRX.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
