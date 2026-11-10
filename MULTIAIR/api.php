@@ -850,7 +850,7 @@ try {
                 // Un service n'a besoin que des noms (« pris en charge par »).
                 $rows = $db->query("SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom")->fetchAll();
                 out(['ok' => true, 'rows' => array_map(fn($c) => ['id' => (int) $c['id'], 'nom' => $c['nom'], 'fonction' => $c['fonction'], 'role' => $c['role'],
-                    'commentaire' => $c['commentaire'], 'competences' => $c['competences'], 'service_equipe' => ma_contact_service($c),
+                    'commentaire' => $c['commentaire'], 'competences' => $c['competences'], 'departements' => $c['departements'], 'service_equipe' => ma_contact_service($c),
                     'joignable' => (bool) ma_liste_emails($c['email'] ?? null)], $rows),
                     'responsables' => array_map(fn($r) => $r ? (int) $r['id'] : null, ma_responsables($db))]);
             }

@@ -615,7 +615,21 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   messages WhatsApp des clients ;
 - testé sur la copie locale : transfert à une fiche avec portable → WhatsApp + e-mail ; adresse saisie + portable →
   WhatsApp ; SAV → SMS seul ; interrupteur coupé → rien ;
-- à faire après approbation du modèle : déposer le correctif, cocher l'interrupteur, test sur le portable de Cyril.
+- 09/11 : modèle approuvé (Active), correctif déposé, interrupteur coché, portable de Cyril renseigné ; reste le
+  test réel (transfert d'une demande à Cyril) et la fiche de Cédric Béranger à créer.
+
+## Vendeur du secteur proposé au transfert (correctif 59, 10/11)
+
+- question de Cyril : une liste des vendeurs avec leurs départements ; choix retenu : rien d'automatique, le vendeur
+  du département du client est proposé en tête de « Transférer à » (pas de choix d'office) ;
+- fiche « Équipe et accès » : le champ « Départements couverts » s'affiche aussi pour le service Commerce (avant :
+  RSO et CTA seulement) ; pour un vendeur, rôle « Membre », il ne change rien à l'envoi automatique des demandes ;
+- transfert : groupe « Secteur du client (département 44) » en tête de la liste, vendeurs du Commerce d'abord puis
+  RSO/CTA qui couvrent ce département, et la ligne « Client dans le 44 : … couvre ce secteur » ; département pris sur
+  la demande, sinon déduit du code postal, sinon celui de la fiche client ; rien si inconnu ;
+- api `equipe` (lecture par un service) : renvoie aussi `departements` (jamais les portables) ;
+- testé sur la copie locale : demande en 44300 → Cédric (Commerce, 44/49/85) puis le RSO du 44 en tête ; demande
+  sans code postal → liste inchangée ; champ départements visible pour Commerce, RSO, CTA, caché sinon.
 
 ## Reste à faire
 

@@ -626,7 +626,22 @@
     const opt = (c, lib) => `<option value="${c.id}">${h(lib || c.nom)}${c.fonction && !lib ? ' — ' + h(c.fonction) : ''}</option>`;
     const groupe = (t, liste) => liste.length ? `<optgroup label="${h(t)}">${liste.join('')}</optgroup>` : '';
     const parSvc = (s) => actifs.filter((c) => !boite(c) && c.service_equipe === s).sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map((c) => opt(c));
+    // Secteur du client : ceux qui couvrent son département (vendeurs, RSO…) sont proposés en premier, rien n'est choisi d'office.
+    const depCp = (cp) => {
+      let x = String(cp || '').replace(/\D/g, '');
+      if (x.length === 4) x = '0' + x;
+      if (x.length !== 5) return '';
+      if (/^9[78]/.test(x)) return x.slice(0, 3);
+      if (x.startsWith('20')) return Number(x) < 20200 ? '2A' : '2B';
+      return x.slice(0, 2);
+    };
+    const depDem = String(d.departement || depCp(d.code_postal) || (d.client || {}).departement || '').toUpperCase();
+    const couvre = (c) => !!depDem && String(c.departements || '').split(/[,;\s]+/).map((x) => x.trim().toUpperCase()).filter(Boolean)
+      .map((x) => (/^\d$/.test(x) ? '0' + x : x)).includes(depDem);
+    const duSecteur = actifs.filter((c) => !boite(c) && couvre(c))
+      .sort((a, b) => (a.service_equipe === 'commerce' ? 0 : 1) - (b.service_equipe === 'commerce' ? 0 : 1) || a.nom.localeCompare(b.nom, 'fr'));
     const choix = `<select name="cible" class="inp"><option value="">— Choisir —</option>
+      ${groupe('Secteur du client (département ' + depDem + ')', duSecteur.map((c) => opt(c)))}
       ${groupe('Responsables de service', Object.entries(nomsResp).map(([k, t]) => { const c = actifs.find((x) => Number(x.id) === Number(resp[k])); return c ? opt(c, t + ' (' + c.nom + ')') : ''; }).filter(Boolean))}
       ${groupe('Finance', parSvc('finance'))}${groupe('SAV', parSvc('sav'))}${groupe('Commerce', parSvc('commerce'))}${groupe('RH', parSvc('rh'))}${groupe('Direction', parSvc('direction'))}
       ${groupe('Boîtes partagées', actifs.filter(boite).map((c) => opt(c, c.nom + (c.competences ? ' — ' + c.competences : ''))))}</select>`;
@@ -634,6 +649,7 @@
       <p class="hint" style="margin:0">La personne choisie reçoit la demande par e-mail (et par SMS pour le SAV), avec le lien pour la prendre en charge.
         La demande repasse « à traiter » chez elle. Le client n'est pas prévenu.</p>
       <label class="field"><span>Transférer à</span>${choix}</label>
+      ${duSecteur.length ? `<p class="hint" style="margin:-4px 0 0">Client dans le ${h(depDem)} : ${h(duSecteur.map((c) => c.nom).join(', '))} ${duSecteur.length > 1 ? 'couvrent' : 'couvre'} ce secteur (en tête de la liste).</p>` : ''}
       <label class="field"><span>… ou à une autre adresse e-mail</span><input type="email" name="email_libre" class="inp" placeholder="ex. rh@multiairfrance.fr" autocomplete="off"></label>
       <label id="transfClore" style="display:none;gap:6px;align-items:flex-start;font-size:13px"><input type="checkbox" name="cloturer">Marquer la demande traitée ici : la suite se fait hors plateforme (le client n'est pas prévenu)</label>
       <label class="field" id="transfPortable" style="display:none"><span>Son portable (facultatif) — la demande part aussi sur son WhatsApp</span><input name="mobile_libre" class="inp" placeholder="ex. 06 12 34 56 78" inputmode="tel" autocomplete="off"></label>
@@ -1203,7 +1219,7 @@
         ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`, 'Sert aussi d\'identifiant de connexion.'),
         ligne('Portable', `<input name="mobile" value="${h(c.mobile)}" placeholder="06 12 34 56 78">`, 'Reçoit le SMS des demandes SAV qui lui sont transmises. Jamais communiqué aux clients.'),
         ligne('Rôle dans l\'envoi des demandes', sel('role', ROLES_ROUTAGE, role), 'Détermine quelles demandes lui sont envoyées (menu « Qui reçoit quoi »).'),
-        ligne('Départements couverts', `<input name="departements" value="${h(c.departements)}" placeholder="69, 01, 38">`, 'Pour un RSO ou un CTA : les demandes de ces départements lui arrivent.'),
+        ligne('Départements couverts', `<input name="departements" value="${h(c.departements)}" placeholder="69, 01, 38">`, 'RSO ou CTA : les demandes de ces départements lui arrivent. Vendeur : il est proposé en tête quand on transfère la demande d\'un client de son secteur.'),
         ligne('Accès à la plateforme', sel('acces', [['', 'Aucun'], ...Object.entries(MA.acces)], c.acces || ''), 'Admin : tout, réglages compris. Service : les demandes de son service. Ses demandes seulement : celles envoyées à son adresse (boîtes partagées).'),
         ligne('Actif', sel('actif', [['1', 'Oui'], ['0', 'Non (absent, parti…)']], String(c.actif ?? 1))),
         role === 'boite' ? ligne('Lue par', `<textarea name="membres">${h(c.membres)}</textarea>`) : '',
@@ -1226,10 +1242,10 @@
         toast(tous ? 'Tous les appareils sont déconnectés' : 'Appareil déconnecté');
         closeDrawer(); await tabs.equipe();
       });
-      // Départements : seulement pour ceux qui couvrent un secteur (RSO, CTA).
-      const roleSel = $('#drawerBody [name="role"]'), depRow = $('#drawerBody [name="departements"]').closest('.editrow');
-      const secteur = () => { depRow.hidden = !['rso', 'cta'].includes(roleSel.value); };
-      roleSel.addEventListener('change', secteur); secteur();
+      // Départements : seulement pour ceux qui couvrent un secteur (RSO, CTA, vendeurs du service Commerce).
+      const roleSel = $('#drawerBody [name="role"]'), svcSel = $('#drawerBody [name="service"]'), depRow = $('#drawerBody [name="departements"]').closest('.editrow');
+      const secteur = () => { depRow.hidden = !['rso', 'cta'].includes(roleSel.value) && svcSel.value !== 'commerce'; };
+      roleSel.addEventListener('change', secteur); svcSel.addEventListener('change', secteur); secteur();
       $('#drawerSave').onclick = async () => {
         const b = $('#drawerBody');
         const body = {};
