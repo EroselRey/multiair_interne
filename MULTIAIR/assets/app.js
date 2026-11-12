@@ -599,19 +599,93 @@
       <p class="hint" style="margin:0">Envoyé à <b>${h(d.email)}</b> depuis l'adresse du service clients, avec ${copie} en copie.
         L'objet garde le n° de la demande : si le client répond, sa réponse revient ici et vous est transmise.</p>
       <label class="field"><span>Votre réponse</span><textarea name="message" class="inp" rows="10" placeholder="Bonjour${d.contact ? ' ' + h(String(d.contact).split(' ')[0]) : ''},&#10;&#10;…"></textarea></label>
+      <div class="frow" style="gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn small" id="repImgBtn" type="button">${ic('plus', 's')}Ajouter une image</button>
+        <span class="hint" style="margin:0;flex:1;min-width:220px">ou collez une capture d'écran (Ctrl+V) dans le texte : elle apparaît à cet endroit dans l'e-mail, et part aussi en pièce jointe.</span>
+        <input type="file" id="repImgFile" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+      </div>
+      <div id="repImgs" class="rep-imgs"></div>
       <p class="hint" style="margin:0">Votre nom et votre fonction sont ajoutés en signature, avec le standard. Le message du client est cité en dessous.</p>`,
       '<button class="btn primary" id="repOk">Envoyer la réponse</button>');
     const zone = $('#drawerBody [name=message]');
     zone.focus();
+    // Images : collées (Ctrl+V), glissées ou choisies ; « [Image 2] » marque leur place dans le texte.
+    const imgs = [];
+    let num = 0;
+    const enBase64 = (blob) => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, '')); r.onerror = ko; r.readAsDataURL(blob); });
+    const alleger = (file) => new Promise((ok) => {
+      // Grande photo : 2 200 px de large au plus, en JPEG. Une capture d'écran reste telle quelle.
+      const url = URL.createObjectURL(file), im = new Image();
+      im.onload = () => {
+        const k = Math.min(1, 2200 / im.naturalWidth), c = document.createElement('canvas');
+        c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob((b) => ok(b && b.size < file.size ? b : file), 'image/jpeg', 0.85);
+      };
+      im.onerror = () => { URL.revokeObjectURL(url); ok(file); };
+      im.src = url;
+    });
+    const placer = (jeton) => {
+      const s = zone.selectionStart ?? zone.value.length, f = zone.selectionEnd ?? s, v = zone.value;
+      const avant = v.slice(0, s), apres = v.slice(f);
+      const ins = (avant && !avant.endsWith('\n') ? '\n' : '') + jeton + (apres.startsWith('\n') ? '' : '\n');
+      zone.value = avant + ins + apres;
+      const p = (avant + ins).length; zone.setSelectionRange(p, p); zone.focus();
+    };
+    const dessiner = () => {
+      $('#repImgs').innerHTML = imgs.map((x) => `<figure class="rep-img"><img src="${x.url}" alt=""><figcaption>Image ${x.n} · ${poids(x.taille)}</figcaption>
+        <button type="button" data-suppr="${x.n}" title="Retirer l'image">×</button></figure>`).join('');
+      $$('#repImgs [data-suppr]').forEach((b) => b.onclick = () => {
+        const n = Number(b.dataset.suppr), i = imgs.findIndex((x) => x.n === n);
+        if (i < 0) return;
+        URL.revokeObjectURL(imgs[i].url); imgs.splice(i, 1);
+        zone.value = zone.value.replace(new RegExp('\\n?\\[Image ' + n + '\\]', 'g'), '');
+        dessiner();
+      });
+    };
+    const ajouter = async (file) => {
+      if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) return toast('Image non prise en charge : PNG, JPEG, GIF ou WebP', true);
+      if (imgs.length >= 10) return toast('10 images au plus par réponse', true);
+      const blob = file.size > 1.5e6 && file.type !== 'image/gif' ? await alleger(file) : file;
+      if (blob.size > 8e6) return toast('Image trop lourde (8 Mo au plus)', true);
+      const n = ++num;
+      const nom = file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name) ? file.name.replace(/\.[^.]+$/, '') : 'capture-' + n;
+      imgs.push({n, nom, data: await enBase64(blob), url: URL.createObjectURL(blob), taille: blob.size});
+      placer('[Image ' + n + ']');
+      dessiner();
+    };
+    const images = (liste) => [...(liste || [])].map((x) => (x.kind === 'file' ? x.getAsFile() : x)).filter((f) => f && /^image\//.test(f.type));
+    zone.addEventListener('paste', (ev) => {
+      const fichiers = images(ev.clipboardData && ev.clipboardData.items);
+      if (!fichiers.length) return;
+      ev.preventDefault();
+      (async () => { for (const f of fichiers) await ajouter(f); })();
+    });
+    zone.addEventListener('dragover', (ev) => { if ([...(ev.dataTransfer?.types || [])].includes('Files')) ev.preventDefault(); });
+    zone.addEventListener('drop', (ev) => {
+      const fichiers = images(ev.dataTransfer && ev.dataTransfer.files);
+      if (!fichiers.length) return;
+      ev.preventDefault();
+      (async () => { for (const f of fichiers) await ajouter(f); })();
+    });
+    $('#repImgBtn').onclick = () => $('#repImgFile').click();
+    $('#repImgFile').onchange = async (ev) => { for (const f of images(ev.target.files)) await ajouter(f); ev.target.value = ''; };
     $('#repOk').onclick = async () => {
       const message = zone.value.trim();
-      if (!message) return toast('Écrivez votre réponse', true);
+      if (!message && !imgs.length) return toast('Écrivez votre réponse', true);
+      const total = imgs.reduce((s, x) => s + x.taille, 0);
+      if (total > 20e6) return toast('Images trop lourdes au total (20 Mo au plus) : retirez-en une', true);
       $('#repOk').disabled = true;
+      $('#repOk').textContent = imgs.length ? 'Envoi des images…' : 'Envoi…';
       try {
-        const r = await api('rep/demandes/' + d.id + '/repondre', {method: 'POST', body: {message}});
-        closeDrawer(); toast('Réponse envoyée' + (r.copie ? ' — copie à ' + r.copie : '')); refreshBadges();
+        const r = await api('rep/demandes/' + d.id + '/repondre', {method: 'POST', body: {message, images: imgs.map(({n, nom, data}) => ({n, nom, data}))}});
+        imgs.forEach((x) => URL.revokeObjectURL(x.url));
+        closeDrawer();
+        toast('Réponse envoyée' + (imgs.length ? ' avec ' + imgs.length + ' image' + (imgs.length > 1 ? 's' : '') : '') + (r.copie ? ' — copie à ' + r.copie : ''));
+        refreshBadges();
         show('demande', d.id, false);
-      } catch (e) { toast(e.message, true); $('#repOk').disabled = false; }
+      } catch (e) { toast(e.message, true); $('#repOk').disabled = false; $('#repOk').textContent = 'Envoyer la réponse'; }
     };
   }
 
@@ -699,7 +773,7 @@
   const pieceHtml = (demId) => (p) => {
     const url = 'api.php?r=rep/demandes/' + demId + '/pieces/' + p.id;
     const legende = `<div class="pj-l"><a href="${url}" target="_blank" rel="noopener">${h(p.nom)}</a>
-      <small>${h(poids(Number(p.taille) || 0))} · ${h(p.source === 'email' ? 'reçue avec l\'e-mail' : 'ajoutée' + (p.ajoute_par ? ' par ' + p.ajoute_par : ''))} · ${h(fmtDate(p.created_at))}</small>
+      <small>${h(poids(Number(p.taille) || 0))} · ${h(p.source === 'email' ? 'reçue avec l\'e-mail' : (p.source === 'reponse' ? 'envoyée au client' : 'ajoutée') + (p.ajoute_par ? ' par ' + p.ajoute_par : ''))} · ${h(fmtDate(p.created_at))}</small>
       ${p.erreur ? `<small style="color:var(--danger)">Non enregistrée : ${h(p.erreur)} — voir l'e-mail d'origine</small>` : `<a href="${url}&telecharger=1" class="hint">Télécharger</a>`}
       ${moi.acces === 'admin' ? `<button class="btn small ghost" data-suppr-piece="${p.id}">Supprimer</button>` : ''}</div>`;
     if (p.erreur) return `<div class="pj">${legende}</div>`;

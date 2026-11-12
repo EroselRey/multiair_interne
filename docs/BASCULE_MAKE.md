@@ -650,6 +650,24 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - testé sur la copie locale : 11 phrases (commerce et SAV, urgence, notice citée dans un devis, panne avec notice),
   création d'une demande SAV « schéma électrique » → enregistrée Commerce, Devis acquisitions ; e-mails SPRX.
 
+## Images collées dans la réponse au client (correctif 61, 12/11)
+
+- demande de Cyril : coller une capture d'écran dans « Répondre au client » ;
+- page : Ctrl+V d'une image dans le texte (ou glisser-déposer, ou « Ajouter une image ») → repère « [Image 1] » à
+  l'endroit du curseur et miniature sous le texte (× pour la retirer) ; PNG, JPEG, GIF, WebP ; 10 images, 8 Mo
+  chacune, 20 Mo en tout ; une grande photo est réduite (2 200 px, JPEG) avant l'envoi, une capture reste telle quelle ;
+- serveur : `ma_rep_images_reponse()` vérifie que ce sont de vraies images ; elles sont enregistrées sur la demande
+  (pièces jointes, source `reponse`, « envoyée au client par … ») ; l'e-mail les montre à l'endroit du repère
+  (600 px de large au plus) avec « Voir l'image en grand » ; si l'e-mail ne part pas, les images sont retirées ;
+- lien des images : `suivi.php?c=<lien du client>&image=<n°>` ; ne sert que les images envoyées à ce client ;
+- Make 9885724 (12/11) : la route « E-mail du client » ne prend plus que les e-mails sans image (filtre `pieces`
+  absent) ; nouvelle route « E-mail du client avec images » : chaque image (`pieces[].url`) est téléchargée depuis
+  la plateforme et jointe à l'e-mail (itérateur → HTTP « Get a file » → agrégateur vers les pièces jointes → e-mail,
+  même compte, même objet, même copie) ; les e-mails sans image ne changent pas ;
+- testé sur la copie locale (webhook simulé) : capture collée au milieu du texte + image ajoutée par le bouton →
+  e-mail avec les deux images à leur place, 2 pièces jointes enregistrées, lien d'image 200 avec le bon lien client,
+  404 sinon ; historique « Réponse envoyée au client — … — 2 images ».
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

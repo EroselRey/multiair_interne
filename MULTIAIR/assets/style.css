@@ -411,3 +411,11 @@ pre.raw { background: #f7f9fb; border: 1px solid var(--border); border-radius: 1
 .pj-l a:first-child { font-weight: 700; }
 .pj-l small { color: var(--muted); }
 .pj-l .btn { align-self: flex-start; margin-top: 4px; }
+
+/* Images d'une réponse au client */
+.rep-imgs{display:flex;flex-wrap:wrap;gap:12px}
+.rep-imgs:empty{display:none}
+.rep-img{position:relative;margin:0;width:124px}
+.rep-img img{display:block;width:124px;height:92px;object-fit:cover;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
+.rep-img figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+.rep-img button{position:absolute;top:-8px;right:-8px;width:26px;height:26px;border-radius:50%;border:1px solid var(--border-2);background:#fff;color:var(--text);font-size:17px;line-height:22px;cursor:pointer}

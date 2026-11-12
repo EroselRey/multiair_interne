@@ -16,6 +16,22 @@ if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
     $st->execute([$jeton]);
     $dem = $st->fetch() ?: null;
 }
+// Image d'une réponse de l'équipe (lien dans l'e-mail) : seulement les images envoyées à ce client.
+if (isset($_GET['image'])) {
+    $p = null;
+    if ($dem) {
+        $st = $db->prepare("SELECT * FROM rep_pieces WHERE id = ? AND demande_id = ? AND source = 'reponse'");
+        $st->execute([(int) $_GET['image'], (int) $dem['id']]);
+        $p = $st->fetch() ?: null;
+    }
+    if ($p) {
+        ma_piece_servir($p);
+    }
+    http_response_code(404);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'Image introuvable.';
+    exit;
+}
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $standard = ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
 $standardTel = preg_replace('/\D/', '', $standard);

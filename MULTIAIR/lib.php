@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-10b';
+const MA_VERSION = '2026-11-12a';
 
 function ma_config(): array
 {
@@ -2158,10 +2158,48 @@ function ma_rep_a_reponse(PDO $db, int $id): bool
  * scénario Make de suivi), avec la personne qui répond en copie, dans le fil de l'e-mail d'origine.
  * L'objet garde « demande n° X » : la réponse du client revient sur la même demande.
  */
-function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $message): array
+/**
+ * Images collées dans une réponse au client (captures d'écran…) : vraie image PNG, JPEG, GIF ou WebP,
+ * 8 Mo au plus chacune, 20 Mo et 10 images au plus en tout. Rend [n, nom, contenu, largeur].
+ */
+function ma_rep_images_reponse(array $images): array
+{
+    $images = array_values(array_filter($images, 'is_array'));
+    if (count($images) > 10) {
+        throw new InvalidArgumentException('10 images au plus par réponse');
+    }
+    $out = [];
+    $total = 0;
+    foreach ($images as $i => $im) {
+        $n = max(1, (int) ($im['n'] ?? $i + 1));
+        $brut = base64_decode(preg_replace('/^data:[^,]*,/', '', (string) ($im['data'] ?? '')), true);
+        if ($brut === false || $brut === '') {
+            throw new InvalidArgumentException('Image ' . $n . ' illisible : collez-la à nouveau');
+        }
+        if (strlen($brut) > 8 * 1048576) {
+            throw new InvalidArgumentException('Image ' . $n . ' trop lourde (8 Mo au plus)');
+        }
+        $total += strlen($brut);
+        $info = @getimagesizefromstring($brut);
+        $ext = ['image/png' => 'png', 'image/jpeg' => 'jpg', 'image/gif' => 'gif', 'image/webp' => 'webp'][$info['mime'] ?? ''] ?? null;
+        if (!$ext) {
+            throw new InvalidArgumentException('Image ' . $n . ' : format non reconnu (PNG, JPEG, GIF ou WebP)');
+        }
+        $base = trim((string) ($im['nom'] ?? ''));
+        $nom = $base !== '' ? pathinfo(ma_piece_nom($base), PATHINFO_FILENAME) : '';
+        $out[] = ['n' => $n, 'nom' => ($nom !== '' ? $nom : 'image-' . $n) . '.' . $ext, 'contenu' => $brut, 'largeur' => (int) ($info[0] ?? 0)];
+    }
+    if ($total > 20 * 1048576) {
+        throw new InvalidArgumentException('Images trop lourdes au total (20 Mo au plus) : envoyez-en moins à la fois');
+    }
+    return $out;
+}
+
+function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $message, array $images = []): array
 {
     $message = trim(str_replace("\r", '', $message));
-    if ($message === '') {
+    $imgs = ma_rep_images_reponse($images);
+    if ($message === '' && !$imgs) {
         throw new InvalidArgumentException('Écrivez votre réponse');
     }
     if (mb_strlen($message) > 10000) {
@@ -2197,9 +2235,47 @@ function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $messag
     $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
     $gris = 'color:#5b6675';
     $standard = ma_param($db, 'rep_standard_tel', '01 34 32 95 00');
+    // Images : enregistrées sur la demande, montrées dans l'e-mail par le lien de suivi du client
+    // (il ne donne que les images qu'on lui a envoyées), et jointes à l'e-mail par Make.
+    $parN = [];
+    if ($imgs) {
+        if (empty($dem['jeton_client'])) {
+            $dem['jeton_client'] = ma_jeton();
+            $db->prepare('UPDATE rep_demandes SET jeton_client = ? WHERE id = ?')->execute([$dem['jeton_client'], $id]);
+        }
+        $lienClient = ma_rep_liens($db, $dem)['client'];
+        foreach ($imgs as $im) {
+            $p = ma_piece_ajouter($db, $id, $im['nom'], null, $im['contenu'], 'reponse', $nom, null, null, false);
+            if (!empty($p['erreur'])) {
+                ma_rep_pieces_retirer($db, array_column($parN, 'id'));
+                $db->prepare('DELETE FROM rep_pieces WHERE id = ?')->execute([(int) $p['id']]);
+                throw new InvalidArgumentException('Image ' . $im['n'] . ' : ' . $p['erreur']);
+            }
+            $parN[$im['n']] = ['id' => (int) $p['id'], 'nom' => $p['nom'], 'url' => $lienClient . '&image=' . (int) $p['id'], 'largeur' => $im['largeur']];
+        }
+    }
+    $bloc = fn(array $p) => '<div style="margin:14px 0"><a href="' . $e($p['url']) . '"><img src="' . $e($p['url']) . '" alt="' . $e($p['nom']) . '" width="'
+        . min(600, $p['largeur'] ?: 600) . '" style="display:block;max-width:100%;height:auto;border:1px solid #e3e7ec;border-radius:6px"></a>'
+        . '<div style="font-size:12px;margin-top:4px"><a href="' . $e($p['url']) . '" style="color:#5b6675">Voir l\'image en grand</a></div></div>';
+    // « [Image 2] » dans le texte : l'image à cet endroit ; les autres à la fin du message.
+    $corps = '';
+    $placees = [];
+    foreach (preg_split('/(\[\s*image\s*\d+\s*\])/iu', preg_replace('/\n?(\[\s*image\s*\d+\s*\])\n?/iu', '$1', $message), -1, PREG_SPLIT_DELIM_CAPTURE) as $bout) {
+        if (preg_match('/^\[\s*image\s*(\d+)\s*\]$/iu', $bout, $m) && isset($parN[(int) $m[1]]) && !isset($placees[(int) $m[1]])) {
+            $corps .= $bloc($parN[(int) $m[1]]);
+            $placees[(int) $m[1]] = true;
+        } elseif ($bout !== '') {
+            $corps .= nl2br($e($bout));
+        }
+    }
+    foreach ($parN as $n => $p) {
+        if (!isset($placees[$n])) {
+            $corps .= $bloc($p);
+        }
+    }
     $html = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#ffffff">'
         . '<div style="max-width:640px;font-family:\'Segoe UI\',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1c2431">'
-        . '<div>' . nl2br($e($message)) . '</div>'
+        . '<div>' . $corps . '</div>'
         . '<p style="margin:22px 0 0"><b>' . $e($nom) . '</b><br><span style="' . $gris . '">'
         . $e(trim((string) ($c['fonction'] ?? '')) !== '' ? $c['fonction'] . ' — Multiair France' : 'Multiair France') . '</span><br>'
         . '<span style="' . $gris . '">Standard : ' . $e($standard) . '</span></p>'
@@ -2214,16 +2290,23 @@ function ma_rep_repondre_client(PDO $db, array $dem, array $user, string $messag
         'email' => $client, 'cc' => $copie, 'objet' => $objet, 'html' => $html,
         'in_reply_to' => trim((string) ($orig['message_id'] ?? '')), 'lien' => ma_rep_liens($db, $dem)['client'],
     ];
+    if ($parN) {
+        // Pour Make : chaque image est téléchargée et jointe à l'e-mail.
+        $payload['pieces'] = array_values(array_map(fn($p) => ['nom' => $p['nom'], 'url' => $p['url']], $parN));
+    }
     $statut = ma_webhook_suivi($db, $payload);
     if ($statut !== 'envoyé') {
+        ma_rep_pieces_retirer($db, array_column($parN, 'id'));
         throw new RuntimeException('La réponse n\'est pas partie (' . $statut . ') : réessayez dans un instant');
     }
     $envois = [['canal' => 'E-mail', 'a' => $client]];
     if ($copie !== '') {
         $envois[] = ['canal' => 'E-mail', 'a' => $copie, 'role' => 'copie'];
     }
-    ma_rep_evenement($db, $id, 'reponse', $nom, 'plateforme', 'Réponse envoyée au client — « ' . $objet . ' »',
-        ['texte' => $message, 'envois' => $envois, 'envoi' => $statut]);
+    $nbImg = count($parN);
+    ma_rep_evenement($db, $id, 'reponse', $nom, 'plateforme', 'Réponse envoyée au client — « ' . $objet . ' »'
+        . ($nbImg ? ' — ' . $nbImg . ' image' . ($nbImg > 1 ? 's' : '') : ''),
+        ['texte' => $message, 'envois' => $envois, 'envoi' => $statut, 'images' => array_values(array_map(fn($p) => ['piece_id' => $p['id'], 'nom' => $p['nom']], $parN))]);
     // Répondre, c'est prendre la demande en charge (sans second e-mail au client).
     if (($dem['statut'] ?? '') === 'a_traiter') {
         $db->prepare("UPDATE rep_demandes SET statut = 'en_cours', pris_at = COALESCE(pris_at, ?), pris_par = COALESCE(NULLIF(pris_par, ''), ?) WHERE id = ?")
@@ -3594,7 +3677,7 @@ function ma_piece_nom(string $nom): string
  * Rend la ligne enregistrée. Un fichier refusé (trop lourd, vide) est noté avec l'erreur, pour que
  * l'équipe sache qu'il existe et aille le chercher dans l'e-mail d'origine.
  */
-function ma_piece_ajouter(PDO $db, int $demandeId, string $nom, ?string $chemin, ?string $contenu, string $source = 'equipe', ?string $par = null, ?int $advId = null, ?string $erreur = null): array
+function ma_piece_ajouter(PDO $db, int $demandeId, string $nom, ?string $chemin, ?string $contenu, string $source = 'equipe', ?string $par = null, ?int $advId = null, ?string $erreur = null, bool $evenement = true): array
 {
     $nom = ma_piece_nom($nom);
     $ext = strtolower(pathinfo($nom, PATHINFO_EXTENSION));
@@ -3620,12 +3703,26 @@ function ma_piece_ajouter(PDO $db, int $demandeId, string $nom, ?string $chemin,
     $id = ma_inserer($db, 'rep_pieces', ['demande_id' => $demandeId, 'adv_id' => $advId, 'nom' => $nom, 'type' => $type, 'taille' => $taille,
         'fichier' => $fichier, 'source' => $source, 'ajoute_par' => $par, 'erreur' => $erreur, 'created_at' => ma_now()]);
     $poids = $taille >= 1048576 ? round($taille / 1048576, 1) . ' Mo' : max(1, (int) round($taille / 1024)) . ' Ko';
-    ma_rep_evenement($db, $demandeId, 'piece', $par ?: ($source === 'email' ? 'Client' : null), $source === 'email' ? 'email' : 'plateforme',
+    $evenement && ma_rep_evenement($db, $demandeId, 'piece', $par ?: ($source === 'email' ? 'Client' : null), $source === 'email' ? 'email' : 'plateforme',
         $erreur === null ? 'Pièce jointe : ' . $nom . ' (' . $poids . ')' : 'Pièce jointe non enregistrée : ' . $nom . ' — ' . $erreur,
         ['piece_id' => $id, 'nom' => $nom, 'taille' => $taille]);
     $st = $db->prepare('SELECT * FROM rep_pieces WHERE id = ?');
     $st->execute([$id]);
     return $st->fetch();
+}
+
+/** Retire des pièces (fichier et ligne) : images d'une réponse qui n'est finalement pas partie. */
+function ma_rep_pieces_retirer(PDO $db, array $ids): void
+{
+    foreach ($ids as $pid) {
+        $st = $db->prepare('SELECT fichier FROM rep_pieces WHERE id = ?');
+        $st->execute([(int) $pid]);
+        $f = (string) $st->fetchColumn();
+        if ($f !== '') {
+            @unlink(ma_pieces_dossier() . '/' . basename($f));
+        }
+        $db->prepare('DELETE FROM rep_pieces WHERE id = ?')->execute([(int) $pid]);
+    }
 }
 
 /** Pièces d'une demande, pour l'affichage (sans le nom de fichier interne). */

@@ -583,8 +583,14 @@ try {
                         if (!$user || trim((string) ($user['nom'] ?? '')) === '') {
                             fail('Connectez-vous avec votre compte pour répondre au client', 403);
                         }
+                        // Images collées trop lourdes : PHP jette tout le corps de la requête, on le dit clairement.
+                        $limite = ini_get('post_max_size');
+                        $octets = (int) $limite * (['k' => 1024, 'm' => 1048576, 'g' => 1073741824][strtolower(substr((string) $limite, -1))] ?? 1);
+                        if ($octets > 0 && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > $octets) {
+                            fail('Images trop lourdes pour le serveur (limite ' . $limite . ') : envoyez-en moins à la fois', 413);
+                        }
                         try {
-                            $r = ma_rep_repondre_client($db, $dem, $user, (string) ($body['message'] ?? ''));
+                            $r = ma_rep_repondre_client($db, $dem, $user, (string) ($body['message'] ?? ''), (array) ($body['images'] ?? []));
                         } catch (InvalidArgumentException $e) {
                             fail($e->getMessage());
                         } catch (RuntimeException $e) {
