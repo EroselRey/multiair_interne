@@ -864,7 +864,7 @@
           <section class="box2"><h2>Liens</h2>
             <a href="${h(d.liens.client)}" target="_blank" rel="noopener">${ic('oeil', 's')} Voir ce que voit le client</a>
             <div class="lienbox"><input readonly value="${h(d.liens.interne)}" aria-label="Lien de la demande pour l'équipe"><button class="btn small" data-copier>Copier</button></div>
-            <span class="hint">Ce lien ouvre la demande sans mot de passe : il est réservé à l'équipe.</span></section>
+            <span class="hint">Ce lien ouvre la demande sans mot de passe : il est réservé à l'équipe. Il cesse de marcher 30 jours après que la demande est traitée.</span></section>
           ${ADMIN ? `<section class="box2"><h2>Transmission</h2>${kv([['Règle', h(d.regle_libelle)], ['E-mail à', h(String(d.dest_to || '').replace(/;/g, ', '))],
             ['Copie', h(String(d.dest_cc || '').replace(/;/g, ', '))], ['SMS à', h(String(d.dest_sms || '').replace(/;/g, ', '))], ['Origine', h(L(d.source))]])}
             <button class="link danger" id="suppr" style="align-self:flex-start;color:var(--danger)">Supprimer cette demande</button></section>` : ''}

@@ -683,6 +683,18 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - testé sur la copie locale : admin → connecté ; SAV avec bon mot de passe → message « réservé aux administrateurs » ;
   mauvais mot de passe ou inconnu → « E-mail ou mot de passe incorrect » ; session admin rétrogradée → fermée.
 
+## Lien d'équipe valable 30 jours après traitement (correctif 63, 17/11)
+
+- décision de Cyril : le lien envoyé à l'équipe avec chaque demande (demande.php?t=…, aussi celui des transferts à
+  une personne sans compte et du bouton WhatsApp) cesse de marcher 30 jours après que la demande est traitée ;
+  la clé API Make est gardée telle quelle ; le lien du client (suivi.php) ne change pas ;
+- `ma_lien_interne_expire()` : demande traitée depuis plus de `lien_interne_jours` jours (30 par défaut ; date de
+  traitement, sinon de création) ; rouverte ou retransférée, elle n'est plus « traitée » : le lien remarche ;
+- page « Lien expiré » (n° de la demande, bouton vers la plateforme) ; ni actions ni pièces jointes ; une personne
+  connectée à la plateforme est envoyée directement sur la demande ;
+- testé sur la copie locale : en cours → ouverte ; traitée il y a 5 jours → ouverte ; traitée il y a 31 jours →
+  « Lien expiré », pièce jointe non servie.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

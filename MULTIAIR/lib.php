@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-17a';
+const MA_VERSION = '2026-11-17b';
 
 function ma_config(): array
 {
@@ -1953,6 +1953,20 @@ function ma_jeton(): string
 }
 
 /** Liens de suivi d'une demande (vides si la demande n'a pas encore ses jetons). */
+/**
+ * Lien d'équipe (demande.php) : valable tant que la demande est ouverte, puis 30 jours après qu'elle est
+ * traitée (décision de Cyril, 17/11 ; paramètre lien_interne_jours). Rouverte ou retransférée : il remarche.
+ */
+function ma_lien_interne_expire(PDO $db, array $dem): bool
+{
+    if (($dem['statut'] ?? '') !== 'traite') {
+        return false;
+    }
+    $jours = (int) (ma_param($db, 'lien_interne_jours', '30') ?: 30);
+    $t = strtotime((string) (($dem['traite_at'] ?? '') ?: ($dem['created_at'] ?? '')));
+    return $t !== false && $t < time() - $jours * 86400;
+}
+
 function ma_rep_liens(PDO $db, array $dem): array
 {
     $base = ma_url_base($db);

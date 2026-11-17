@@ -18,6 +18,17 @@ if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
 }
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 $connecte = ma_user();
+// Demande traitée depuis plus de 30 jours : le lien ne l'ouvre plus (ni actions, ni pièces jointes).
+// Quelqu'un de connecté à la plateforme la retrouve directement.
+$expiree = 0;
+if ($dem && ma_lien_interne_expire($db, $dem)) {
+    if ($connecte) {
+        header('Location: index.php#demande/' . (int) $dem['id'], true, 303);
+        exit;
+    }
+    $expiree = (int) $dem['id'];
+    $dem = null;
+}
 
 // Une pièce jointe de la demande : le lien secret suffit, comme pour la demande elle-même.
 if ($dem && isset($_GET['piece'])) {
@@ -121,7 +132,7 @@ $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) =
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title><?= $dem ? 'Demande n° ' . (int) $dem['id'] . ' — Multiair' : 'Demande introuvable — Multiair' ?></title>
+<title><?= $dem ? 'Demande n° ' . (int) $dem['id'] . ' — Multiair' : ($expiree ? 'Lien expiré — Multiair' : 'Demande introuvable — Multiair') ?></title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/style.css?v=<?= MA_VERSION ?>">
@@ -155,7 +166,12 @@ $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) =
 </style>
 </head>
 <body>
-<?php if (!$dem): ?>
+<?php if (!$dem && $expiree): ?>
+  <div class="m-top"><div class="marque">MULTIAIR</div><h1>Lien expiré</h1></div>
+  <div class="m-wrap"><div class="m-card">La demande n° <?= $expiree ?> est traitée depuis plus de <?= (int) (ma_param($db, 'lien_interne_jours', '30') ?: 30) ?> jours : ce lien ne l'ouvre plus.
+    Connectez-vous à la plateforme pour la retrouver, ou demandez qu'on vous la renvoie.
+    <a class="btn primary" href="index.php#demande/<?= $expiree ?>">Ouvrir la plateforme</a></div></div>
+<?php elseif (!$dem): ?>
   <div class="m-top"><div class="marque">MULTIAIR</div><h1>Demande introuvable</h1></div>
   <div class="m-wrap"><div class="m-card">Ce lien n'est pas valide. Utilisez le lien reçu par e-mail ou par SMS, ou connectez-vous à la plateforme.
     <a class="btn primary" href="index.php">Ouvrir la plateforme</a></div></div>
