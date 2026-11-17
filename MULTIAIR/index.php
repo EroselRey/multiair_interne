@@ -57,11 +57,11 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
       <div id="lienMsg" aria-live="polite"></div>
       <button class="btn primary block big" type="submit">Recevoir mon lien de connexion</button>
     </form>
-    <button class="link lien" id="mdpBtn" type="button">Se connecter avec un mot de passe</button>
+    <button class="link lien" id="mdpBtn" type="button">Administrateur : se connecter avec un mot de passe</button>
   </div>
   <div id="vueConnexion" hidden>
     <h1>Connexion par mot de passe</h1>
-    <p class="auth-sous">Pour les comptes qui ont choisi un mot de passe.</p>
+    <p class="auth-sous">Réservée aux administrateurs. Les autres comptes reçoivent un lien de connexion par e-mail.</p>
     <form id="loginForm" class="auth-form" autocomplete="on">
       <label class="field"><span>Adresse e-mail</span><input name="login" type="text" inputmode="email" required autocomplete="username"></label>
       <label class="field"><span>Mot de passe</span><input name="password" type="password" required autocomplete="current-password"></label>

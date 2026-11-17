@@ -668,6 +668,21 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   e-mail avec les deux images à leur place, 2 pièces jointes enregistrées, lien d'image 200 avec le bon lien client,
   404 sinon ; historique « Réponse envoyée au client — … — 2 images ».
 
+## Mot de passe réservé aux administrateurs (correctif 62, 17/11)
+
+- décision de Cyril : « juste email et mot de passe pour les admin » ; tous les autres comptes (service, boîtes
+  partagées) se connectent par le lien reçu par e-mail ; les clients ne sont pas concernés (pas de compte) ;
+- connexion par mot de passe : comptes `admin` seulement (et l'identifiant de secours de config.php) ; un compte non
+  administrateur qui tape son bon mot de passe est invité à demander son lien (message vu par lui seul) ;
+- « mot de passe oublié » et page de choix du mot de passe (compte.php?j=) : administrateurs seulement ;
+- sessions déjà ouvertes par mot de passe par un non-administrateur : fermées à la requête suivante (motif noté
+  dans « Appareils connectés ») ; un administrateur qui perd ce rôle est aussi déconnecté ;
+- page de connexion : « Administrateur : se connecter avec un mot de passe » ;
+- au 17/11, 7 comptes avaient un mot de passe, dont 2 administrateurs (Cyril Mortier, Marco Carraro) ; les 5 autres
+  passent au lien e-mail ;
+- testé sur la copie locale : admin → connecté ; SAV avec bon mot de passe → message « réservé aux administrateurs » ;
+  mauvais mot de passe ou inconnu → « E-mail ou mot de passe incorrect » ; session admin rétrogradée → fermée.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

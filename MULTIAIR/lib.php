@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-12a';
+const MA_VERSION = '2026-11-17a';
 
 function ma_config(): array
 {
@@ -2555,9 +2555,15 @@ function ma_user_actualiser(PDO $db): ?array
     }
     $cnx = (int) ($_SESSION['ma_cnx'] ?? 0);
     if ($cnx > 0) {
-        $q = $db->prepare('SELECT fin_at, vu_at FROM rep_connexions WHERE id = ?');
+        $q = $db->prepare('SELECT fin_at, vu_at, via FROM rep_connexions WHERE id = ?');
         $q->execute([$cnx]);
         $x = $q->fetch();
+        if ($x && !$x['fin_at'] && $x['via'] === 'mot_de_passe' && $c['acces'] !== 'admin') {
+            // Connecté par mot de passe sans être administrateur : il passe au lien e-mail.
+            $db->prepare("UPDATE rep_connexions SET fin_at = ?, fin_par = 'mot de passe réservé aux administrateurs' WHERE id = ?")
+                ->execute([ma_now(), $cnx]);
+            $x['fin_at'] = ma_now();
+        }
         if ($x && $x['fin_at']) {
             // Appareil déconnecté depuis « Équipe et accès ».
             $_SESSION = [];
@@ -2586,9 +2592,8 @@ function ma_verifier_connexion(PDO $db, string $login, string $pass): ?array
     if (!str_contains($login, '@') || $pass === '') {
         return null;
     }
-    // Tous les accès de MA_ACCES (y compris « Service RH ») peuvent se connecter.
-    $acces = implode(',', array_map(fn($a) => $db->quote($a), array_keys(MA_ACCES)));
-    $st = $db->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ($acces)
+    // Mot de passe : administrateurs seulement (décision de Cyril, 17/11). Les autres reçoivent un lien par e-mail.
+    $st = $db->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces = 'admin'
         AND mdp_hash IS NOT NULL AND mdp_hash != '' LIMIT 1");
     $st->execute([$login]);
     $c = $st->fetch();

@@ -58,6 +58,14 @@ if ($parts === ['auth', 'login'] && $method === 'POST') {
         out(['ok' => true, 'utilisateur' => $u]);
     }
     usleep(500000);
+    // Bon mot de passe d'un compte qui n'est pas administrateur : on lui dit d'utiliser le lien
+    // (seul le vrai titulaire voit ce message ; sinon la réponse reste la même pour tous).
+    $st = ma_db()->prepare("SELECT mdp_hash FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces != 'admin' AND mdp_hash IS NOT NULL AND mdp_hash != '' LIMIT 1");
+    $st->execute([trim((string) ($body['login'] ?? ''))]);
+    $h = (string) $st->fetchColumn();
+    if ($h !== '' && password_verify((string) ($body['password'] ?? ''), $h)) {
+        fail('Le mot de passe est réservé aux administrateurs : demandez votre lien de connexion par e-mail (page précédente).', 403);
+    }
     fail('E-mail ou mot de passe incorrect', 401);
 }
 if ($parts === ['auth', 'logout']) {
@@ -77,7 +85,7 @@ if ($parts === ['auth', 'recover'] && $method === 'POST') {
     // dans tous les cas, pour ne pas révéler qui a un compte.
     $email = trim((string) ($body['email'] ?? ''));
     if (str_contains($email, '@')) {
-        $st = ma_db()->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces IN ('admin','sav','commerce','finance') LIMIT 1");
+        $st = ma_db()->prepare("SELECT * FROM rep_contacts WHERE lower(email) = lower(?) AND actif = 1 AND acces = 'admin' LIMIT 1");
         $st->execute([$email]);
         if ($c = $st->fetch()) {
             ma_compte_lien(ma_db(), $c, 'reinit');

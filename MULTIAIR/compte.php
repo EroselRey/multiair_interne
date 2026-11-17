@@ -70,8 +70,8 @@ if (isset($_GET['c']) || isset($_POST['c'])) {
 $jeton = (string) ($_POST['j'] ?? $_GET['j'] ?? '');
 $c = null;
 if (preg_match('/^[a-f0-9]{32}$/', $jeton)) {
-    $st = $db->prepare("SELECT * FROM rep_contacts WHERE mdp_jeton = ? AND mdp_jeton_exp > ? AND actif = 1
-        AND acces IN ('admin','sav','commerce','finance')");
+    // Choisir un mot de passe : administrateurs seulement ; les autres se connectent par le lien e-mail.
+    $st = $db->prepare("SELECT * FROM rep_contacts WHERE mdp_jeton = ? AND mdp_jeton_exp > ? AND actif = 1 AND acces = 'admin'");
     $st->execute([hash('sha256', $jeton), ma_now()]);
     $c = $st->fetch() ?: null;
 }
