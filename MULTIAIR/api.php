@@ -928,6 +928,25 @@ try {
                 $nouveau = getOne($db, 'rep_contacts', $id);
                 $lien = $lienAuto([], $nouveau);
                 out(['ok' => true, 'id' => $id, 'personne' => ma_contact_public(getOne($db, 'rep_contacts', $id)), 'lien_connexion' => $lien]);
+            } elseif ($sub === 'inviter-tous' && $method === 'POST') {
+                // Lien de connexion (invitation, 7 jours) à tous ceux qui ont un accès, ou à ceux qui ne se sont jamais connectés.
+                $acces = implode(',', array_map(fn($a) => $db->quote($a), array_keys(MA_ACCES)));
+                $jamais = ($body['qui'] ?? '') === 'jamais'
+                    ? " AND (derniere_connexion IS NULL OR derniere_connexion = '') AND NOT EXISTS (SELECT 1 FROM rep_connexions x WHERE x.contact_id = rep_contacts.id)" : '';
+                $liste = $db->query("SELECT * FROM rep_contacts WHERE actif = 1 AND acces IN ($acces) AND email LIKE '%@%'$jamais ORDER BY nom")->fetchAll();
+                $envoyes = 0;
+                $echecs = [];
+                foreach ($liste as $c) {
+                    $r = ma_connexion_lien($db, $c, 'invitation');
+                    if (str_starts_with((string) $r['envoi'], 'échec')) {
+                        $echecs[] = $c['nom'];
+                    } else {
+                        $envoyes++;
+                    }
+                }
+                logEvent($db, 'plateforme', $echecs ? 'erreur' : 'ok', 'liens_equipe', $envoyes . ' lien(s) de connexion envoyé(s) à l\'équipe'
+                    . ($jamais ? ' (jamais connectés)' : '') . ($user ? ' par ' . $user['nom'] : '') . ($echecs ? ' — pas partis : ' . implode(', ', $echecs) : ''));
+                out(['ok' => true, 'envoyes' => $envoyes, 'echecs' => $echecs]);
             } elseif ($sub !== null && $sub !== 'responsables') {
                 $id = idFrom($parts, 1);
                 $c = getOne($db, 'rep_contacts', $id) ?? fail('Personne introuvable', 404);

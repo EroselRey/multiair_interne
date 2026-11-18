@@ -324,8 +324,20 @@
     + (Number(d.nb_relances) && d.statut !== 'traite' ? ` <span class="pill danger" title="Le client a rappelé">Relancée${Number(d.nb_relances) > 1 ? ' ×' + d.nb_relances : ''}</span>` : '');
   const svcPill = (s) => `<span class="pill">${h(SERVICES[s] || s || '—')}</span>`;
   const telFr = (t) => { const m = String(t || '').match(/^33(\d{9})$/); return m ? ('0' + m[1]).replace(/(\d{2})(?=\d)/g, '$1 ') : (t || ''); };
-  const sujetDe = (d) => d.type_panne || d.besoin_commercial || (d.nature ? nomDe(R_NATURES, d.nature) : '')
-    || (d.reference_facture ? 'Facture ' + d.reference_facture : '') || d.resume || '';
+  // Texte d'e-mail sans les liens de signature (<https://…>, [https://…]).
+  const sansLiens = (t) => String(t || '').replace(/<\s*(https?:\/\/|mailto:)[^>]*>/gi, '').replace(/\[\s*(https?:\/\/|mailto:)[^\]]*\]/gi, '')
+    .replace(/[<\[]\s*(https?:\/\/|mailto:)[^\s>\]]*\s*$/i, '').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  // Une ligne courte (titres, listes) : coupée sur un mot, vers 90 caractères.
+  const court = (t, n = 90) => {
+    t = sansLiens(t).replace(/\s+/g, ' ').trim();
+    if (t.length <= n) return t;
+    const c = t.slice(0, n), i = c.lastIndexOf(' ');
+    return (i > n - 25 ? c.slice(0, i) : c).replace(/[\s,;:.—-]+$/, '') + '…';
+  };
+  // Objet de l'e-mail d'origine (« E-mail « RE: Demande de prix » » dans le résumé), sans RE: / TR:.
+  const objetMail = (d) => { const m = /E-mail « (.+?) »/.exec(d.resume || ''); return m ? m[1].replace(/^\s*((re|tr|fwd?|aw)\s*:\s*)+/i, '').trim() : ''; };
+  const sujetDe = (d) => court(objetMail(d) || d.type_panne || d.besoin_commercial || (d.nature ? nomDe(R_NATURES, d.nature) : '')
+    || (d.reference_facture ? 'Facture ' + d.reference_facture : '') || d.resume || '');
   const materielDe = (d) => [d.marque_norm && d.marque_norm !== 'autre' ? nomDe(R_MARQUES, d.marque_norm) : (d.marque && !/^inconnu/i.test(d.marque) ? d.marque : ''), d.modele].filter(Boolean).join(' ');
   const clientDe = (d) => [d.contact, d.type_client ? L(d.type_client).toLowerCase() : ''].filter(Boolean).join(' · ');
   const prenom = (n) => String(n || '').trim().split(/\s+/)[0] || '';
@@ -842,8 +854,8 @@
             ${champ('Nature', h(d.nature ? nomDe(R_NATURES, d.nature) : ''))}
             ${champ('Réf. facture', h(d.reference_facture || ''))}
             ${champ('Production arrêtée', d.service === 'SAV' ? (d.priorite === 'URGENT' ? 'Oui' : 'Non') : '')}
-            ${champ('Problème', h(d.type_panne || ''), true)}
-            ${champ('Besoin', h(d.besoin_commercial || ''), true)}
+            ${champ('Problème', h(sansLiens(d.type_panne)), true)}
+            ${champ('Besoin', h(sansLiens(d.besoin_commercial)), true)}
             ${champ('Pourquoi urgent', h(d.priorite === 'URGENT' ? d.justification_urgence || '' : ''), true)}
           </div>${d.resume ? `<p class="texte">${h(d.resume)}</p>` : ''}</section>
           <section class="box2"><h2>Pièces jointes${pieces.length ? ' (' + pieces.length + ')' : ''}</h2>
@@ -1238,7 +1250,8 @@
         && (!vueEquipe.q || [c.nom, c.email, c.fonction, c.departements].join(' ').toLowerCase().includes(vueEquipe.q.toLowerCase())));
       main.innerHTML = `
         <div class="page-head"><div class="t"><h1>Équipe et accès</h1><p>Qui fait partie de l'équipe, comment le joindre, et ce qu'il voit sur la plateforme.</p></div>
-          <button class="btn primary" id="ajout">${ic('plus', 's')}Ajouter une personne</button></div>
+          <div class="frow" style="gap:10px;flex-wrap:wrap"><button class="btn" id="invTous">${ic('envoi', 's')}Envoyer le lien à toute l'équipe</button>
+          <button class="btn primary" id="ajout">${ic('plus', 's')}Ajouter une personne</button></div></div>
         <section class="section" style="margin-top:0"><h2>Responsables de service</h2>
           <p class="hint">Ils reçoivent les demandes que la plateforme ne sait attribuer à personne d'autre.</p>
           <div class="resp">${RESP.map(([k, t]) => { const c = parId(r.responsables[k]); return `<div class="box2"><span class="lab">${h(t.toUpperCase())}</span>
@@ -1270,6 +1283,31 @@
             <span class="txt">${h(c.email || '')}</span><span></span><span class="txt">${h(c.membres || '')}</span><span>${acces(c)}</span><span>${connexion(c)}</span>
             <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span></div>`).join('')}</div></section>`;
       $('#ajout', main).onclick = () => fiche({actif: 1, role: 'membre', service: 'sav'});
+      // Lien de connexion (valable 7 jours) à toutes les personnes et boîtes qui ont un accès.
+      $('#invTous', main).onclick = () => {
+        const avecAcces = r.rows.filter((c) => Number(c.actif ?? 1) && c.acces && String(c.email || '').includes('@'));
+        const jamais = avecAcces.filter((c) => !c.derniere_connexion && !(c.connexions || []).length);
+        openDrawer('Envoyer le lien de connexion', `
+          <p style="margin:0">Chaque personne (et chaque boîte partagée) qui a un accès reçoit un e-mail avec le bouton « Me connecter ».
+            Le lien est valable 7 jours ; ensuite, elle reste connectée 30 jours sur son appareil.</p>
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:14px"><input type="radio" name="qui" value="tous" checked>
+            <span><b>Toute l'équipe</b> — ${avecAcces.length} adresse${avecAcces.length > 1 ? 's' : ''}</span></label>
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:14px"><input type="radio" name="qui" value="jamais"${jamais.length ? '' : ' disabled'}>
+            <span><b>Seulement ceux qui ne se sont jamais connectés</b> — ${jamais.length} adresse${jamais.length > 1 ? 's' : ''}${jamais.length ? ' : ' + h(jamais.map((c) => c.nom).join(', ')) : ''}</span></label>
+          <p class="hint" style="margin:0">Boîte partagée : le lien ne sert qu'une fois ; les autres personnes qui la lisent demandent le leur sur la page de connexion, avec l'adresse de la boîte.</p>
+          <div id="invRes"></div>`, '<button class="btn primary" id="invOk">Envoyer</button>');
+        $('#invOk').onclick = async () => {
+          const qui = $('#drawerBody [name=qui]:checked').value;
+          $('#invOk').disabled = true; $('#invOk').textContent = 'Envoi…';
+          try {
+            const x = await api('equipe/inviter-tous', {method: 'POST', body: {qui}});
+            $('#invRes').innerHTML = `<p style="margin:0"><b>${x.envoyes} lien${x.envoyes > 1 ? 's' : ''} envoyé${x.envoyes > 1 ? 's' : ''}.</b></p>`
+              + (x.echecs.length ? `<p class="hint" style="margin:4px 0 0;color:var(--danger)">Pas parti : ${h(x.echecs.join(', '))}</p>` : '');
+            $('#invOk').textContent = 'Envoyé';
+            toast(x.envoyes + ' lien' + (x.envoyes > 1 ? 's' : '') + ' de connexion envoyé' + (x.envoyes > 1 ? 's' : ''));
+          } catch (e) { toast(e.message, true); $('#invOk').disabled = false; $('#invOk').textContent = 'Envoyer'; }
+        };
+      };
       $('#waEquipe', main).onchange = async (ev) => {
         await api('parametres', {method: 'POST', body: {valeurs: {rep_whatsapp_equipe: ev.target.checked ? '1' : '0'}}});
         (r.parametres = r.parametres || {}).rep_whatsapp_equipe = ev.target.checked ? '1' : '0';

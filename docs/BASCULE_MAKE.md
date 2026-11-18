@@ -695,6 +695,17 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - testé sur la copie locale : en cours → ouverte ; traitée il y a 5 jours → ouverte ; traitée il y a 31 jours →
   « Lien expiré », pièce jointe non servie.
 
+## Titre court des demandes, lien de connexion à toute l'équipe (correctif 64, 18/11)
+
+- titre de la page d'une demande (et lignes des listes) : objet de l'e-mail d'origine sans « RE: », sinon le début du
+  problème ou du besoin, coupé sur un mot vers 90 caractères (ex. n° 131 : « Mabeo Industries — Demande de prix et
+  délai / marché 2027 » au lieu de tout l'e-mail et de la signature) ;
+- « Problème » et « Besoin » : liens de signature retirés à l'affichage (<https://…>, [https://…], lien coupé en fin) ;
+- « Équipe et accès » : bouton « Envoyer le lien à toute l'équipe » → lien de connexion (invitation, 7 jours) à toutes
+  les personnes et boîtes qui ont un accès, ou seulement à celles qui ne se sont jamais connectées ; route
+  `POST equipe/inviter-tous` (administrateurs) ; résultat : nombre envoyé et adresses non parties ;
+- testé sur la copie locale : titre de la n° 131 reproduit ; 14 liens envoyés aux jamais connectés (webhook simulé).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
