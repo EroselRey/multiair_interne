@@ -716,6 +716,14 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   les lignes déjà enregistrées ; la carte ne compte plus que les vraies erreurs ;
 - testé sur la copie locale : ancienne ligne repassée en « info », nouvelle ligne reçue en « erreur » enregistrée en « info ».
 
+## N° de demande visible, recherche par n° (correctif 66, 18/11)
+
+- liste « Demandes » : 1re colonne « N° · REÇUE » (n° en gras, date dessous, « il y a … » au survol) ; sur téléphone,
+  « n° 93 · Société » ; accueil : n° sur chaque carte ;
+- recherche : « 93 », « n° 93 », « n93 » ou « #93 » mettent la demande n° 93 en tête (les autres demandes qui
+  contiennent 93 — département, téléphone — suivent) ; Entrée ouvre directement la demande n° 93 ;
+- testé sur la copie locale : « n° 8 » → n° 8 en tête, Entrée → page de la demande n° 8 ; cartes de l'accueil numérotées.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

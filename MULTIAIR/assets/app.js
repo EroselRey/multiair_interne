@@ -405,7 +405,7 @@
           ? `<span>Pris par <b>${h(d.pris_par || '—')}</b></span>${d.rappel_prevu ? `<span>Rappel : ${h(jourFr(d.rappel_prevu))}</span>` : ''}`
           : ((d.destinataires || d.dest_to) ? `<span>Transmise à ${h(d.destinataires || String(d.dest_to || '').replace(/;/g, ', '))}</span>` : '');
         return `<article class="dcard ${estUrgente(d) ? 'urgent' : ''}" data-ouvrir="${d.id}">
-          <div class="c1">${etatPill(d)}<span class="quand">${ic(canalDe(d), 's')}${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></div>
+          <div class="c1">${etatPill(d)}<span class="quand"><b>n° ${d.id}</b> · ${ic(canalDe(d), 's')}${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></div>
           <div class="c2"><b>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</b>
             <span>${h([SERVICES[d.service], materielDe(d)].filter(Boolean).join(' · '))}</span></div>
           <div class="c3"><b>${h(clientDe(d) || '—')}</b>${d.code_postal || d.departement ? `<span>Site : ${h(d.code_postal || d.departement)}</span>` : ''}${qui}</div>
@@ -481,9 +481,17 @@
       marque: (d, v) => (d.marque_norm || '') === v,
       client: (d, v) => (d.type_client || '') === v,
     };
-    const filtrer = (sauf) => toutes.filter((d) => Object.entries(vueDemandes.f).every(([k, v]) => !v || k === sauf || FILTRES[k](d, v))
-      && (!vueDemandes.q || [d.id, d.societe, d.contact, d.tel, telFr(d.tel), d.email, d.resume, d.type_panne, d.besoin_commercial, d.destinataires, d.pris_par, d.commentaire]
-        .join(' ').toLowerCase().includes(vueDemandes.q.toLowerCase())));
+    // Recherche d'un n° : « 93 », « n° 93 », « n93 », « #93 » ; la demande n° 93 passe en tête.
+    const numQ = () => { const m = /^\s*(?:n\s*°?\s*|no\.?\s*|#)?(\d{1,6})\s*$/i.exec(vueDemandes.q || ''); return m ? Number(m[1]) : null; };
+    const texteDem = (d) => [d.id, d.societe, d.contact, d.tel, telFr(d.tel), d.email, d.resume, d.type_panne, d.besoin_commercial, d.destinataires, d.pris_par, d.commentaire]
+      .join(' ').toLowerCase();
+    const trouvee = (d) => {
+      if (!vueDemandes.q) return true;
+      const n = numQ();
+      return n !== null ? (Number(d.id) === n || texteDem(d).includes(String(n))) : texteDem(d).includes(vueDemandes.q.toLowerCase());
+    };
+    const exacte = (d) => numQ() !== null && Number(d.id) === numQ() && !d.fiche;
+    const filtrer = (sauf) => toutes.filter((d) => Object.entries(vueDemandes.f).every(([k, v]) => !v || k === sauf || FILTRES[k](d, v)) && trouvee(d));
     const rang = (d) => (estUrgente(d) ? 0 : ({qualification: 1, a_traiter: 2, en_cours: 3}[etatDe(d)] ?? 4));
     const chips = (cle, items, avecNombre = true) => {
       const base = filtrer(cle);
@@ -499,7 +507,7 @@
       return `<span class="qui ${estUrgente(d) ? 'rouge' : ''}">${h(d.destinataires || String(d.dest_to || '').replace(/;/g, ', ') || '—')}${estUrgente(d) ? ' · pas encore pris' : ''}</span>`;
     };
     const render = () => {
-      const rows = filtrer().sort((a, b) => rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
+      const rows = filtrer().sort((a, b) => (exacte(b) - exacte(a)) || rang(a) - rang(b) || String(b.created_at).localeCompare(String(a.created_at)));
       const pages = Math.max(1, Math.ceil(rows.length / PAGE_D));
       vueDemandes.page = Math.min(vueDemandes.page, pages - 1);
       const tranche = rows.slice(vueDemandes.page * PAGE_D, (vueDemandes.page + 1) * PAGE_D);
@@ -528,16 +536,16 @@
           <button class="btn small primary" id="selClore" ${vueDemandes.sel.size ? '' : 'disabled'}>Marquer traitées sans prévenir les clients</button>
           <span class="hint">Pour faire le ménage (anciennes demandes, doublons). Cliquez sur les lignes pour les cocher.</span></div>` : ''}
         <div class="panel dl" style="margin-top:16px">
-          <div class="row head"><span>REÇUE</span><span>CANAL</span><span>SUIVI</span><span>SERVICE</span><span>CLIENT</span><span>DEMANDE</span><span>QUI S'EN OCCUPE</span></div>
+          <div class="row head"><span>N° · REÇUE</span><span>CANAL</span><span>SUIVI</span><span>SERVICE</span><span>CLIENT</span><span>DEMANDE</span><span>QUI S'EN OCCUPE</span></div>
           ${tranche.length ? tranche.map((d, i) => { const coche = vueDemandes.sel && !d.fiche && vueDemandes.sel.has(d.id); return `<div class="row ${estUrgente(d) ? 'urgent' : ''}" data-i="${i}" role="link" tabindex="0" style="${coche ? 'background:var(--info-bg)' : ''}">
-            <span class="two">${vueDemandes.sel && !d.fiche ? `<b>${coche ? '☑' : '☐'} n° ${d.id}</b>` : `<b>${h(quand(d.created_at))}</b>`}<span>${h(rel(d.created_at))}</span></span>
+            <span class="two">${vueDemandes.sel && !d.fiche ? `<b>${coche ? '☑' : '☐'} n° ${d.id}</b>` : `<b>${d.fiche ? 'Avec Claire' : 'n° ' + d.id}</b>`}<span title="${h(rel(d.created_at))}">${h(quand(d.created_at))}</span></span>
             ${canalHtml(canalDe(d))}
             <span>${etatPill(d)}</span>
             <span>${svcPill(d.service)}</span>
             <span class="two"><b>${h(d.societe || d.contact || '—')}</b><span>${h([d.type_client ? L(d.type_client) : '', d.departement].filter(Boolean).join(' · '))}</span></span>
             <span class="txt">${h([materielDe(d), sujetDe(d)].filter(Boolean).join(' — ') || '—')}</span>
             ${qui(d)}
-            <span class="m1"><b>${h(d.societe || d.contact || '—')}</b><span>${h(sujetDe(d))}</span><span>${ic(canalDe(d), 's')} ${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></span>
+            <span class="m1"><b>${d.fiche ? '' : 'n° ' + d.id + ' · '}${h(d.societe || d.contact || '—')}</b><span>${h(sujetDe(d))}</span><span>${ic(canalDe(d), 's')} ${h(CANAUX[canalDe(d)])} · ${h(rel(d.created_at))}</span></span>
             <span class="m2">${etatPill(d)}${svcPill(d.service)}</span>
           </div>`; }).join('') : '<div class="vide" style="border:0">Aucune demande ne correspond.</div>'}
           <div class="pied"><span>${rows.length} demande${rows.length > 1 ? 's' : ''}</span>${pages > 1 ? `<span>
@@ -546,6 +554,11 @@
             <button class="btn small" data-page="1" ${vueDemandes.page >= pages - 1 ? 'disabled' : ''}>Suivantes ›</button></span>` : ''}</div>
         </div>`;
       const q = $('#dq', main);
+      q.onkeydown = (ev) => {
+        if (ev.key !== 'Enter') return;
+        const n = numQ(), d = n !== null && toutes.find((x) => Number(x.id) === n && !x.fiche);
+        if (d) { ev.preventDefault(); show('demande', d.id); }
+      };
       q.oninput = () => { vueDemandes.q = q.value; vueDemandes.page = 0; clearTimeout(q._t); q._t = setTimeout(() => { render(); const n = $('#dq', main); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200); };
       $$('button[data-f]', main).forEach((b) => b.onclick = () => { vueDemandes.f[b.dataset.f] = b.dataset.v; vueDemandes.page = 0; render(); });
       $$('select[data-f]', main).forEach((s) => s.onchange = () => { vueDemandes.f[s.dataset.f] = s.value; vueDemandes.page = 0; render(); });
