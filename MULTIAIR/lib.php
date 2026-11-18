@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-18a';
+const MA_VERSION = '2026-11-18b';
 
 function ma_config(): array
 {
@@ -562,6 +562,14 @@ function ma_migrate(PDO $pdo, bool $fresh): void
     }
 
     // Boîtes partagées : accès « ses demandes seulement » (décision de Cyril, 06/11), une fois ; ensuite « Équipe et accès » décide.
+    // Pièces jointes ignorées par l'analyse des devis (catalogues, notices…) : notées « info », plus « erreur » (18/11), une fois.
+    $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'log_pj_info'");
+    $st->execute();
+    if (!$st->fetchColumn() && in_array('executions_log', $present, true) && in_array('parametres', $present, true)) {
+        $n = $pdo->exec("UPDATE executions_log SET statut = 'info' WHERE type_evenement = 'piece_jointe_non_exploitable' AND statut = 'erreur'");
+        $pdo->prepare("INSERT OR REPLACE INTO parametres(cle, valeur) VALUES ('log_pj_info', ?)")->execute([ma_now() . ' : ' . (int) $n . ' ligne(s)']);
+    }
+
     $st = $pdo->prepare("SELECT valeur FROM parametres WHERE cle = 'acces_boites'");
     $st->execute();
     if (!$st->fetchColumn() && in_array('rep_contacts', $present, true)) {

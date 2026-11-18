@@ -363,7 +363,12 @@ try {
         case 'log':
             if ($method === 'POST') {
                 $scenario = ma_str($body['scenario'] ?? null) ?? fail('scenario requis');
-                logEvent($db, $scenario, ma_str($body['statut'] ?? null) ?? 'ok', ma_str($body['type'] ?? null) ?? 'execution',
+                // Pièce jointe qui n'est pas un devis (catalogue, notice, bon de commande…) : ignorée, ce n'est pas une erreur.
+                $statutLog = ma_str($body['statut'] ?? null) ?? 'ok';
+                if ($statutLog === 'erreur' && in_array(ma_str($body['type'] ?? null), ['piece_jointe_non_exploitable'], true)) {
+                    $statutLog = 'info';
+                }
+                logEvent($db, $scenario, $statutLog, ma_str($body['type'] ?? null) ?? 'execution',
                     ma_str($body['resume'] ?? null), $body['payload'] ?? null);
                 out(['ok' => true]);
             }

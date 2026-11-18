@@ -706,6 +706,16 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   `POST equipe/inviter-tous` (administrateurs) ; résultat : nombre envoyé et adresses non parties ;
 - testé sur la copie locale : titre de la n° 131 reproduit ; 14 liens envoyés aux jamais connectés (webhook simulé).
 
+## Pièces jointes ignorées par l'analyse des devis : « info », plus « erreur » (correctif 65, 18/11)
+
+- les « 13 erreur(s) 7 j » de la carte CSO devis étaient toutes `piece_jointe_non_exploitable` : PDF joints aux e-mails
+  de devis qui ne sont pas un devis Multiair (listes de pièces Mauguière/Worthington, notice, bon de commande client) ;
+  le scénario les ignore, et le devis lui-même est bien enregistré (vérifié le 18/11 : offres 987413759, 987410094,
+  987413020, 987412599, 987410058, 987410106 présentes ; 987356284 / E2MI : seul le bon de commande du client était joint) ;
+- api `log` : ce type est noté « info » même si Make l'envoie en « erreur » ; migration unique `log_pj_info` pour
+  les lignes déjà enregistrées ; la carte ne compte plus que les vraies erreurs ;
+- testé sur la copie locale : ancienne ligne repassée en « info », nouvelle ligne reçue en « erreur » enregistrée en « info ».
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
