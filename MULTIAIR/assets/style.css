@@ -52,7 +52,10 @@ svg.ic.s { width: 15px; height: 15px; }
 .btn:hover { background: #f6f8fa; }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn.primary:hover { background: var(--primary-2); }
-.btn.go { color: var(--ok); }
+.btn.go { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.go:hover { background: #185a3a; }
+.btn.bleu { background: var(--info); border-color: var(--info); color: #fff; }
+.btn.bleu:hover { background: #1a43c0; }
 .btn.urgent { background: var(--danger-strong); border-color: var(--danger-strong); color: #fff; }
 .btn.danger { color: var(--danger); }
 .btn.ghost { border-color: transparent; background: transparent; }

@@ -823,13 +823,15 @@
     ];
     const champ = (k, v, large = false) => v ? `<div class="${large ? 'large' : ''}"><span>${h(k)}</span><b>${v}</b></div>` : '';
     const notes = String(d.commentaire || '').split('\n').filter((l) => l.trim());
+    // Dans l'ordre du travail : prendre en charge, répondre, rappeler, (transférer), et clore en dernier.
+    const boutonRepondre = d.email ? `<button class="btn big bleu" data-act="repondre">${ic('email')}Répondre au client</button>` : '';
     const actions = d.statut === 'traite'
-      ? `<button class="btn big" data-act="rouvrir">${ic('retour')}Rouvrir la demande</button>`
+      ? `<button class="btn big" data-act="rouvrir">${ic('retour')}Rouvrir la demande</button>${boutonRepondre}`
       : `${d.statut === 'a_traiter' ? `<button class="btn big ${urgent ? 'urgent' : 'primary'}" data-act="prendre">${ic('prendre')}Je la prends en charge</button>` : ''}
+         ${boutonRepondre}
          <button class="btn big" data-act="rappel">${ic('agenda')}${d.rappel_prevu ? 'Changer le rappel' : 'Planifier un rappel'}</button>
-         <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>
-         <button class="btn big" data-act="transferer">${ic('envoi')}Transférer</button>`;
-    const boutonRepondre = d.email ? `<button class="btn big" data-act="repondre">${ic('email')}Répondre au client</button>` : '';
+         <button class="btn big" data-act="transferer">${ic('envoi')}Transférer</button>
+         <button class="btn big go" data-act="traiter">${ic('check')}Marquer traitée</button>`;
     main.innerHTML = `
       <div class="crumb"><a href="#demandes" data-retour>Demandes</a> › n° ${d.id}</div>
       <div class="dtitle"><h1>${h(d.societe || d.contact || 'Client')}${sujetDe(d) ? ' — ' + h(sujetDe(d)) : ''}</h1>
@@ -837,7 +839,7 @@
           <span class="pill">${ic(canal, 's')}Reçue ${h({telephone: 'par téléphone', whatsapp: 'sur WhatsApp', chat: 'par le chat du site', email: 'par e-mail'}[canal])}${h(via)}</span>
           <span class="hint">${h(jourFr(d.created_at))}</span></div></div>
       ${urgent ? '<div class="msg err" style="margin-bottom:16px"><b>Urgent — production arrêtée.</b> Personne n\'a encore pris cette demande en charge.</div>' : ''}
-      <section class="actions" aria-label="Actions">${actions}${boutonRepondre}
+      <section class="actions" aria-label="Actions">${actions}
         <span class="note">Chaque action prévient le client ${['chat', 'email'].includes(canal) ? 'par e-mail' : 'par WhatsApp et e-mail'}.</span>
         <div class="rappel-form" id="rappelForm" hidden>
           <label for="rappelDate"><b>Rappel prévu le</b></label>

@@ -724,6 +724,14 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   contiennent 93 — département, téléphone — suivent) ; Entrée ouvre directement la demande n° 93 ;
 - testé sur la copie locale : « n° 8 » → n° 8 en tête, Entrée → page de la demande n° 8 ; cartes de l'accueil numérotées.
 
+## Boutons d'action en couleur et dans l'ordre du travail (correctif 67, 18/11)
+
+- demande de Cyril : rendre visibles « prendre en charge », « fermer » et « répondre au client », dans l'ordre logique ;
+- page d'une demande : Je la prends en charge (bleu marine, rouge si urgente) → Répondre au client (bleu) → Planifier
+  un rappel → Transférer (blancs) → Marquer traitée (vert, en dernier) ; demande traitée : Rouvrir → Répondre ;
+- « Traitée » en vert plein partout : page de la demande, cartes de l'accueil, page mobile de l'équipe (demande.php) ;
+- testé sur la copie locale (demande à traiter et en cours, carte de l'accueil).
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
