@@ -732,6 +732,13 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
 - « Traitée » en vert plein partout : page de la demande, cartes de l'accueil, page mobile de l'équipe (demande.php) ;
 - testé sur la copie locale (demande à traiter et en cours, carte de l'accueil).
 
+## « Je la prends » ouvre la demande (correctif 68, 18/11)
+
+- accueil : « Je la prends » prend la demande en charge (client prévenu) puis ouvre sa page, pour répondre ou planifier
+  un rappel tout de suite ; avant, la carte disparaissait de « À prendre » sans rien ouvrir ; en cas d'erreur, le
+  bouton redevient cliquable ;
+- testé sur la copie locale : clic sur « Je la prends » (n° 13) → page de la demande, statut « En cours ».
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

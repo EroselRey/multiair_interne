@@ -446,11 +446,14 @@
         if (e.target.closest('[data-prendre],[data-traiter]')) return;
         e.stopPropagation(); show('demande', el.dataset.ouvrir);
       }));
+      // Je la prends : prise en charge, puis la demande s'ouvre (répondre, planifier un rappel…).
       $$('[data-prendre]', main).forEach((b) => b.onclick = async () => {
         b.disabled = true;
         const d = toutes.find((x) => !x.fiche && String(x.id) === b.dataset.prendre);
-        Object.assign(d, await avancer(d, {statut: 'en_cours'}, 'Demande prise en charge — le client est prévenu'));
-        render();
+        try {
+          Object.assign(d, await avancer(d, {statut: 'en_cours'}, 'Demande prise en charge — le client est prévenu'));
+          show('demande', d.id);
+        } catch (e) { toast(e.message, true); b.disabled = false; }
       });
       $$('[data-traiter]', main).forEach((b) => b.onclick = async () => {
         b.disabled = true;
