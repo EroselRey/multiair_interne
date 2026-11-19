@@ -1059,6 +1059,63 @@ try {
             if ($sub === 'reconstruire' && $method === 'POST' && $estAdmin) {
                 out(['ok' => true, 'rattachees' => ma_clients_reprise($db)]);
             }
+            // Liste de clients (CSV ou Excel) : aperçu ligne par ligne, puis import une fois confirmé.
+            if ($sub === 'import' && $method === 'POST' && $estAdmin) {
+                $contenu = isset($body['fichier']) ? base64_decode((string) $body['fichier'], true) : (string) ($body['texte'] ?? '');
+                if ($contenu === false || trim($contenu) === '') {
+                    // Requête vidée par PHP : le fichier dépasse post_max_size.
+                    fail(!$body && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0
+                        ? 'Fichier trop lourd pour le serveur (limite ' . ini_get('post_max_size') . ') : découpez-le ou enregistrez-le en CSV.'
+                        : 'Fichier vide ou illisible');
+                }
+                if (strlen($contenu) > 8 * 1024 * 1024) {
+                    fail('Fichier trop lourd (8 Mo au plus) : découpez-le en plusieurs parties.');
+                }
+                try {
+                    $r = ma_client_import($db, $contenu, ma_bool($body['confirmer'] ?? false), ma_bool($body['remplacer'] ?? false));
+                } catch (RuntimeException $e) {
+                    fail($e->getMessage());
+                }
+                if ($r['confirme']) {
+                    logEvent($db, 'plateforme', 'ok', 'clients_importes', 'Import de clients'
+                        . (!empty($body['nom']) ? ' « ' . mb_substr((string) $body['nom'], 0, 80) . ' »' : '') . ' : ' . $r['creees'] . ' fiche(s) créée(s), '
+                        . $r['completees'] . ' complétée(s), ' . $r['ignorees_lignes'] . ' ligne(s) ignorée(s)' . ($user ? ' — ' . $user['nom'] : ''));
+                }
+                out(['ok' => true] + $r);
+            }
+            // Nouveau client saisi à la main : Claire le reconnaîtra dès son premier appel.
+            if ($sub === null && $method === 'POST' && $estAdmin) {
+                $v = ma_client_valeurs($body);
+                if ($v['tels_illisibles']) {
+                    fail('Numéro illisible : « ' . implode(' / ', $v['tels_illisibles']) . ' »');
+                }
+                if (!$v['tels'] && !$v['email']) {
+                    fail('Indiquez au moins un téléphone ou un e-mail : c\'est à cela que Claire le reconnaîtra.');
+                }
+                if (!ma_bool($body['forcer'] ?? false)) {
+                    $f = null;
+                    $par = 'Ce numéro';
+                    foreach ($v['tels'] as $t) {
+                        if ($f = ma_client_par_tel($db, $t)) {
+                            break;
+                        }
+                    }
+                    if (!$f && $v['email']) {
+                        $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY id LIMIT 1');
+                        $q->execute([$v['email']]);
+                        $f = $q->fetch() ?: null;
+                        $par = 'Cet e-mail';
+                    }
+                    if ($f) {
+                        $nomF = trim(implode(' — ', array_filter([$f['contact'], $f['societe']]))) ?: ma_tel_lisible($f['tel']);
+                        out(['ok' => false, 'erreur' => $par . ' est déjà sur la fiche « ' . $nomF . ' ».', 'existe' => ['id' => (int) $f['id'], 'nom' => $nomF]], 409);
+                    }
+                }
+                $cid = ma_client_creer($db, $v, 'manuel');
+                logEvent($db, 'plateforme', 'ok', 'client_ajoute', 'Fiche client ' . $cid . ' ajoutée à la main'
+                    . ($v['contact'] || $v['societe'] ? ' : ' . trim(implode(' — ', array_filter([$v['contact'], $v['societe']]))) : '') . ($user ? ' par ' . $user['nom'] : ''));
+                out(['ok' => true, 'id' => $cid]);
+            }
             if ($sub !== null) {
                 $id = idFrom($parts, 1);
                 $c = getOne($db, 'rep_clients', $id) ?? fail('Client introuvable', 404);
@@ -1099,11 +1156,42 @@ try {
                     ma_clients_fusionner($db, $id, $autre);
                     logEvent($db, 'plateforme', 'ok', 'clients_fusionnes', "Fiche client $autre fusionnée dans $id" . ($user ? ' par ' . $user['nom'] : ''));
                     $c = getOne($db, 'rep_clients', $id);
+                } elseif ($method === 'DELETE' && $sub2 === null && $estAdmin) {
+                    $st = $db->prepare('SELECT COUNT(*) FROM rep_demandes WHERE client_id = ?');
+                    $st->execute([$id]);
+                    if ($n = (int) $st->fetchColumn()) {
+                        fail('Cette fiche a ' . $n . ' demande' . ($n > 1 ? 's' : '') . ' : réunissez-la plutôt avec l\'autre fiche (Fusionner).');
+                    }
+                    $db->prepare('DELETE FROM rep_equipements WHERE client_id = ?')->execute([$id]);
+                    $db->prepare('DELETE FROM rep_clients WHERE id = ?')->execute([$id]);
+                    logEvent($db, 'plateforme', 'ok', 'client_supprime', 'Fiche client ' . $id . ' supprimée ('
+                        . (trim(implode(' — ', array_filter([$c['contact'], $c['societe']]))) ?: ma_tel_lisible($c['tel'])) . ')' . ($user ? ' par ' . $user['nom'] : ''));
+                    out(['ok' => true, 'supprime' => $id]);
                 } elseif (($method === 'PATCH' || $method === 'POST') && $estAdmin) {
                     $identite = ['contact', 'civilite', 'societe', 'tel', 'email', 'type_client', 'type_interlocuteur', 'code_postal', 'departement', 'compte_distributeur'];
-                    $d = array_intersect_key($body, array_flip([...$identite, 'statut_client', 'notes']));
+                    $d = array_intersect_key($body, array_flip([...$identite, 'statut_client', 'notes', 'autres_tels']));
+                    $enPlus = [];
                     if (array_key_exists('tel', $d)) {
-                        $d['tel'] = ma_tel_cle((string) $d['tel']);
+                        // « 01 23 45 67 89 / 06 12 34 56 78 » : le premier est le numéro principal, les autres s'ajoutent.
+                        $brut = trim((string) $d['tel']);
+                        $liste = ma_tels_liste($brut);
+                        if ($brut !== '' && !$liste) {
+                            fail('Numéro de téléphone illisible : « ' . $brut . ' »');
+                        }
+                        $d['tel'] = $liste[0] ?? null;
+                        $enPlus = array_slice($liste, 1);
+                    }
+                    if (array_key_exists('autres_tels', $d) || $enPlus) {
+                        $brut = trim((string) ($d['autres_tels'] ?? ''));
+                        $autres = array_key_exists('autres_tels', $d) ? ma_tels_liste($brut) : ma_csv($c['autres_tels'] ?? '');
+                        if ($brut !== '' && !$autres) {
+                            fail('Autres numéros illisibles : « ' . $brut . ' »');
+                        }
+                        $principal = array_key_exists('tel', $d) ? $d['tel'] : $c['tel'];
+                        $d['autres_tels'] = implode(',', array_values(array_diff(array_unique([...$enPlus, ...$autres]), [$principal]))) ?: null;
+                    }
+                    if (isset($d['email'])) {
+                        $d['email'] = mb_strtolower(trim((string) $d['email'])) ?: null;
                     }
                     if (!empty($d['code_postal'])) {
                         $d['departement'] = ma_departement((string) $d['code_postal']);
@@ -1142,7 +1230,8 @@ try {
             $rows = $db->query('SELECT c.*, (SELECT COUNT(*) FROM rep_demandes d WHERE d.client_id = c.id AND d.statut != \'traite\') AS nb_ouvertes,
                 (SELECT group_concat(DISTINCT d.service) FROM rep_demandes d WHERE d.client_id = c.id) AS services,
                 (SELECT group_concat(DISTINCT d.canal) FROM rep_demandes d WHERE d.client_id = c.id) AS canaux
-                FROM rep_clients c WHERE c.nb_demandes > 0 ORDER BY c.derniere_demande DESC')->fetchAll();
+                FROM rep_clients c WHERE c.nb_demandes > 0 OR c.source IN (\'manuel\', \'import\')
+                ORDER BY COALESCE(c.derniere_demande, c.created_at) DESC')->fetchAll();
             foreach ($rows as &$r) {
                 $r['fidelite'] = ma_client_fidelite($r);
             }

@@ -160,6 +160,13 @@ button.tile:hover { border-color: var(--border-2); }
 .dl { overflow: hidden; }
 .dl .row { display: grid; grid-template-columns: 120px 150px 140px 110px minmax(0, 1.2fr) minmax(0, 1.5fr) 200px; gap: 16px; padding: 14px 20px; border-top: 1px solid #eef1f4; align-items: center; font-size: 14px; cursor: pointer; }
 .dl .row:hover { background: #f7f9fb; }
+.cl .cder { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.cl .cmod { padding: 5px 7px; flex: none; }
+.imp-lignes { display: flex; flex-direction: column; gap: 7px; max-height: 360px; overflow: auto; border-top: 1px solid #eef1f4; padding-top: 8px; }
+.imp-l { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; align-items: start; font-size: 13px; }
+.imp-l .pill { justify-self: start; }
+.imp-l > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.imp-l > span:last-child b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl .row.head { background: #f7f9fb; border-top: 0; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted); cursor: default; padding: 12px 20px; }
 .dl .row.urgent { background: #fff7f6; }
 .dl .row.urgent:hover { background: #fdeeec; }

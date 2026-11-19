@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS rep_clients (
   premiere_demande TEXT, derniere_demande TEXT, derniere_demande_id INTEGER,
   statut_client TEXT,             -- '' | fidele | vip | a_surveiller (choisi par l'équipe)
   notes TEXT,
+  autres_tels TEXT,               -- autres numéros (clés, séparées par des virgules) : Claire le reconnaît aussi
+  source TEXT,                    -- manuel | import (fiche créée avant toute demande)
+  champs_corriges TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rep_clients_tel ON rep_clients(tel);

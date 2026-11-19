@@ -307,6 +307,8 @@
     oeil: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
     retour: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    import: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+    telecharger: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
   };
   const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[n] || ''}</svg>`;
   const CANAUX = {telephone: 'Téléphone', whatsapp: 'WhatsApp', chat: 'Chat du site', email: 'E-mail'};
@@ -1013,30 +1015,186 @@
     a_surveiller: ['À surveiller', 'danger'], distributeur: ['Distributeur', 'info']};
   const fidPill = (f) => FIDELITE[f] ? `<span class="pill ${FIDELITE[f][1]}">${h(FIDELITE[f][0])}</span>` : '';
   const vueClients = {f: '', q: '', tri: 'recent', page: 0};
+  const nomClient = (c) => [c.contact, c.societe].filter(Boolean).join(' — ') || telFr(c.tel) || c.email || 'Client';
+  const autresTels = (c) => String(c.autres_tels || '').split(',').filter(Boolean);
+  const sansDemande = (c) => !Number(c.nb_demandes);
+  const ajouteLe = (c) => (c.source === 'import' ? 'importé' : 'ajouté à la main');
+
+  // Ajouter ou modifier une fiche client. Ce qui est saisi ici n'est plus écrasé par les demandes suivantes.
+  const ficheClient = (c, apres) => {
+    const neuf = !c.id;
+    const distri = c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur';
+    openDrawer(neuf ? 'Ajouter un client' : 'Modifier — ' + h(nomClient(c)), [
+      neuf ? '<p class="hint" style="margin:0">Claire le reconnaîtra dès son premier appel ou son premier e-mail : elle le saluera et ne redemandera pas ce qui est déjà connu.</p>' : '',
+      ligne('Civilité', sel('civilite', [['', 'Non renseignée'], ['M', 'Monsieur'], ['Mme', 'Madame']], c.civilite || ''), 'Claire dira « Bonjour Monsieur Dupont ». Sans civilité : « Bonjour Jean Dupont ».'),
+      ligne('Contact (prénom et nom)', `<input name="contact" value="${h(c.contact)}" placeholder="ex. Jean Dupont">`),
+      ligne('Société', `<input name="societe" value="${h(c.societe)}">`),
+      ligne('Type', sel('type_client', [['direct', 'Client direct'], ['distributeur', 'Distributeur']], distri ? 'distributeur' : 'direct')),
+      ligne('Téléphone', `<input name="tel" value="${h(telFr(c.tel))}" inputmode="tel" placeholder="ex. 06 12 34 56 78">`, 'Claire le reconnaît quand il appelle de ce numéro.'),
+      ligne('Autres numéros', `<input name="autres_tels" value="${h(autresTels(c).map(telFr).join(' / '))}" inputmode="tel" placeholder="ex. 04 78 00 00 00 / 06 98 76 54 32">`,
+        'Fixe, standard, autre portable : séparez-les par « / ». Il est reconnu sur chacun.'),
+      ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`),
+      ligne('Code postal du site principal', `<input name="code_postal" value="${h(c.code_postal)}" inputmode="numeric">`),
+      ligne('Compte distributeur', `<input name="compte_distributeur" value="${h(c.compte_distributeur)}">`),
+      ligne('Note pour l\'équipe et pour Claire', `<textarea name="notes" rows="3" placeholder="ex. Parc de 3 compresseurs Worthington. Préfère être rappelé le matin.">${h(c.notes || '')}</textarea>`),
+      neuf ? `<h3 style="margin:6px 0 0;font-size:15px">Sa machine <span class="hint" style="font-weight:400">(facultatif)</span></h3>
+        ${ligne('Marque', `<input name="marque" list="dlMarquesC"><datalist id="dlMarquesC">${R_MARQUES.filter(([k]) => k !== 'autre').map(([, t]) => `<option value="${h(t)}">`).join('')}</datalist>`)}
+        ${ligne('Modèle', '<input name="modele" placeholder="ex. ROLLAIR 220">')}${ligne('N° de série', '<input name="numero_serie">')}` : '',
+      '<div id="clAlerte"></div>',
+    ].join(''), (!neuf && sansDemande(c) ? delBtn() : '') + saveBtn(neuf ? 'Ajouter le client' : 'Enregistrer'));
+    const envoyer = async (forcer) => {
+      const body = {};
+      ['contact', 'societe', 'tel', 'autres_tels', 'email', 'code_postal', 'compte_distributeur', 'notes'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
+      body.type_client = $('#drawerBody [name="type_client"]').value;
+      body.civilite = $('#drawerBody [name="civilite"]').value;
+      body.type_interlocuteur = body.type_client === 'distributeur' ? 'distributeur' : (c.type_interlocuteur === 'distributeur' ? '' : (c.type_interlocuteur || ''));
+      if (neuf) {
+        ['marque', 'modele', 'numero_serie'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
+        body.forcer = forcer;
+      }
+      if (!body.tel && !body.autres_tels && !body.email) { toast('Indiquez au moins un téléphone ou un e-mail : c\'est à cela que Claire le reconnaît', true); return; }
+      const bt = $('#drawerSave');
+      bt.disabled = true;
+      try {
+        if (neuf) {
+          const r = await api('clients', {method: 'POST', body});
+          toast('Client ajouté : Claire le reconnaîtra dès son premier appel');
+          closeDrawer(); show('client', r.id);
+        } else {
+          await patch('clients/' + c.id, body);
+          toast('Fiche enregistrée'); closeDrawer(); apres();
+        }
+      } catch (e) {
+        bt.disabled = false;
+        if (!e.data?.existe) { toast(e.message, true); return; }
+        // Ce numéro ou cet e-mail est déjà sur une fiche : l'ouvrir, ou créer une fiche séparée (ligne partagée).
+        $('#clAlerte').innerHTML = `<div class="box2" style="gap:8px;background:#fff8e6;border-color:#f3d48a"><b>${h(e.message)}</b>
+          <div class="frow" style="gap:8px;flex-wrap:wrap"><button class="btn small primary" id="clOuvrir">Ouvrir sa fiche</button>
+          <button class="btn small" id="clForcer">Créer quand même une fiche séparée</button></div>
+          <span class="hint">Une ligne partagée (le standard d'une société) peut servir à plusieurs personnes : une fiche par personne, et Claire demande à qui elle parle.</span></div>`;
+        $('#clOuvrir').onclick = () => { closeDrawer(); show('client', e.data.existe.id); };
+        $('#clForcer').onclick = () => envoyer(true);
+        $('#clAlerte').scrollIntoView({block: 'nearest'});
+      }
+    };
+    $('#drawerSave').onclick = () => envoyer(false);
+    const del = $('#drawerDelete');
+    if (del) del.onclick = async () => {
+      if (!confirm(`Supprimer la fiche « ${nomClient(c)} » ? Elle n'a aucune demande.`)) return;
+      try { await api('clients/' + c.id, {method: 'DELETE'}); toast('Fiche supprimée'); closeDrawer(); show('clients'); } catch (e) { toast(e.message, true); }
+    };
+  };
+
+  // Importer une liste (Excel ou CSV) : aperçu ligne par ligne, puis import confirmé.
+  const importerClients = () => {
+    openDrawer('Importer une liste de clients', `
+      <p style="margin:0">Une ligne par personne ; la première ligne donne les titres des colonnes. Claire reconnaîtra ces clients dès leur premier appel.</p>
+      <p class="hint" style="margin:0">Colonnes lues : Civilité, Prénom, Nom (ou Contact), Société, Téléphone, Portable, Autres numéros, E-mail, Code postal,
+        Type (client direct ou distributeur), Compte distributeur, Marque, Modèle, N° de série, Notes. Les titres approchants sont reconnus
+        (« Tél. », « Mobile », « Raison sociale », « CP »…). Il faut au moins un téléphone ou un e-mail par ligne.</p>
+      <button class="btn small" id="impModele" style="align-self:flex-start">${ic('telecharger', 's')}Télécharger le modèle à remplir</button>
+      <div class="editrow"><label>Fichier Excel (.xlsx) ou CSV</label><input type="file" id="impFichier" accept=".xlsx,.csv,.txt"></div>
+      <div class="editrow"><label>… ou collez ici les lignes copiées depuis Excel, titres compris</label><textarea id="impTexte" rows="4" placeholder="Société&#9;Contact&#9;Téléphone&#9;E-mail"></textarea></div>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:14px"><input type="checkbox" id="impRemplacer">
+        <span>Remplacer ce qui est déjà connu par ce que dit le fichier <span class="hint">— sinon les fiches existantes sont seulement complétées, rien n'est effacé</span></span></label>
+      <div id="impRes"></div>`, '<button class="btn primary" id="impOk">Vérifier avant d\'importer</button>');
+    const ACTIONS = {creee: ['Nouvelle fiche', 'ok'], completee: ['Complétée', 'info'], identique: ['Déjà à jour', 'muted'], ignoree: ['Ignorée', 'danger']};
+    const CHAMPS = {civilite: 'civilité', prenom: 'prénom', nom: 'nom', contact: 'contact', societe: 'société', tel: 'téléphone', portable: 'portable',
+      autres_tels: 'autres numéros', email: 'e-mail', code_postal: 'code postal', type_client: 'type', compte_distributeur: 'compte distributeur',
+      marque: 'marque', modele: 'modèle', numero_serie: 'n° de série', notes: 'note'};
+    const ok = $('#impOk');
+    let apercu = null;
+    const raz = () => { apercu = null; ok.disabled = false; ok.textContent = 'Vérifier avant d\'importer'; $('#impRes').innerHTML = ''; };
+    $('#impFichier').onchange = raz;
+    $('#impTexte').oninput = raz;
+    $('#impRemplacer').onchange = raz;
+    $('#impModele').onclick = () => {
+      const titres = ['Civilité', 'Prénom', 'Nom', 'Société', 'Téléphone', 'Portable', 'E-mail', 'Code postal', 'Type', 'Compte distributeur', 'Marque', 'Modèle', 'N° de série', 'Notes'];
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['﻿' + titres.join(';') + '\r\n'], {type: 'text/csv;charset=utf-8'}));
+      a.download = 'modele_clients_multiair.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+    };
+    const lire = () => new Promise((resolve, reject) => {
+      const f = $('#impFichier').files[0];
+      if (!f) {
+        const t = $('#impTexte').value;
+        return t.trim() ? resolve({texte: t, nom: 'lignes collées'}) : reject(new Error('Choisissez un fichier ou collez des lignes'));
+      }
+      if (f.size > 8 * 1024 * 1024) return reject(new Error('Fichier trop lourd (8 Mo au plus) : découpez-le'));
+      const r = new FileReader();
+      r.onload = () => resolve({fichier: String(r.result).split(',')[1] || '', nom: f.name});
+      r.onerror = () => reject(new Error('Fichier illisible'));
+      r.readAsDataURL(f);
+    });
+    const afficher = (x) => {
+      const n = (k, t) => x[k] ? `<span class="pill ${ACTIONS[t][1]}">${x[k]} ${h(ACTIONS[t][0].toLowerCase())}${x[k] > 1 && t !== 'identique' ? 's' : ''}</span>` : '';
+      $('#impRes').innerHTML = `<section class="box2" style="gap:8px">
+        <b>${x.confirme ? 'Import terminé' : 'Voici ce que fera l\'import (rien n\'est encore enregistré)'}</b>
+        <div class="frow" style="gap:6px;flex-wrap:wrap">${n('creees', 'creee')}${n('completees', 'completee')}${n('identiques', 'identique')}${n('ignorees_lignes', 'ignoree')}</div>
+        <span class="hint">Colonnes lues : ${x.colonnes.map((c) => h(c.colonne) + ' → ' + h(CHAMPS[c.champ] || c.champ)).join(', ')}${x.ignorees.length ? '. Non utilisées : ' + h(x.ignorees.join(', ')) : ''}.</span>
+        <div class="imp-lignes">${x.lignes.slice(0, 300).map((l) => `<div class="imp-l"><span class="pill ${ACTIONS[l.action][1]}">${h(ACTIONS[l.action][0])}</span>
+          <span><b>Ligne ${l.ligne} · ${h(l.nom || telFr(l.tel) || l.email || '—')}</b><span class="hint">${h([telFr(l.tel), ...(l.autres_tels || []).map(telFr), l.email].filter(Boolean).join(' · '))}${l.detail ? ' — ' + h(l.detail) : ''}</span></span></div>`).join('')}
+          ${x.lignes.length > 300 ? `<span class="hint">… et ${x.lignes.length - 300} autres lignes.</span>` : ''}</div></section>`;
+    };
+    ok.onclick = async () => {
+      if (apercu && apercu.fait) { closeDrawer(); show('clients'); return; }
+      ok.disabled = true;
+      try {
+        const source = apercu ? apercu.source : await lire();
+        const confirmer = !!apercu;
+        ok.textContent = confirmer ? 'Import en cours…' : 'Vérification…';
+        const x = await api('clients/import', {method: 'POST', body: {...source, remplacer: $('#impRemplacer').checked, confirmer}});
+        afficher(x);
+        if (confirmer) {
+          apercu = {fait: true};
+          toast(`${x.creees} client${x.creees > 1 ? 's' : ''} ajouté${x.creees > 1 ? 's' : ''}, ${x.completees} fiche${x.completees > 1 ? 's' : ''} complétée${x.completees > 1 ? 's' : ''}`);
+          ok.disabled = false; ok.textContent = 'Voir la liste des clients';
+          return;
+        }
+        apercu = {source};
+        const total = x.creees + x.completees;
+        ok.disabled = !total;
+        ok.textContent = total ? `Importer : ${[x.creees ? x.creees + ' nouvelle' + (x.creees > 1 ? 's' : '') + ' fiche' + (x.creees > 1 ? 's' : '') : '', x.completees ? x.completees + ' complétée' + (x.completees > 1 ? 's' : '') : ''].filter(Boolean).join(', ')}` : 'Rien à importer';
+      } catch (e) {
+        toast(e.message, true);
+        $('#impRes').innerHTML = `<p style="margin:0;color:var(--danger)"><b>${h(e.message)}</b></p>`;
+        ok.disabled = false; ok.textContent = apercu ? ok.textContent : 'Vérifier avant d\'importer';
+      }
+    };
+  };
+
   tabs.clients = async () => {
-    const r = await api('clients');
+    const [r] = await Promise.all([api('clients'), chargerListes().catch(() => {})]);
     const tous = r.rows;
     const FILTRES = {
       '': () => true,
       fideles: (c) => ['fidele', 'vip'].includes(c.fidelite),
       reviennent: (c) => Number(c.nb_demandes) >= 2,
       nouveaux: (c) => Number(c.nb_demandes) === 1,
+      attente: sansDemande,
       distributeurs: (c) => c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur',
       directs: (c) => c.type_client !== 'distributeur' && c.type_interlocuteur !== 'distributeur',
       ouvertes: (c) => Number(c.nb_ouvertes) > 0,
     };
+    const quandC = (c) => String(c.derniere_demande || c.created_at || '');
     const render = () => {
       let rows = tous.filter(FILTRES[vueClients.f] || FILTRES['']).filter((c) => !vueClients.q
-        || [c.contact, c.societe, c.email, c.tel, telFr(c.tel), c.departement, c.code_postal, c.marque].join(' ').toLowerCase().includes(vueClients.q.toLowerCase()));
-      rows = rows.sort(vueClients.tri === 'nombre' ? (a, b) => b.nb_demandes - a.nb_demandes || String(b.derniere_demande).localeCompare(String(a.derniere_demande))
-        : (a, b) => String(b.derniere_demande).localeCompare(String(a.derniere_demande)));
+        || [c.contact, c.societe, c.email, c.tel, telFr(c.tel), ...autresTels(c), ...autresTels(c).map(telFr), c.departement, c.code_postal, c.marque, c.compte_distributeur]
+          .join(' ').toLowerCase().includes(vueClients.q.toLowerCase()));
+      rows = rows.sort(vueClients.tri === 'nombre' ? (a, b) => b.nb_demandes - a.nb_demandes || quandC(b).localeCompare(quandC(a))
+        : (a, b) => quandC(b).localeCompare(quandC(a)));
       const pages = Math.max(1, Math.ceil(rows.length / 50));
       vueClients.page = Math.min(vueClients.page, pages - 1);
       const tranche = rows.slice(vueClients.page * 50, (vueClients.page + 1) * 50);
       const n = (f) => tous.filter(FILTRES[f]).length;
+      const typePill = (c) => (sansDemande(c) && !c.statut_client ? `<span class="pill muted">${c.source === 'import' ? 'Importé' : 'Ajouté à la main'}</span>` : fidPill(c.fidelite));
+      const modif = (i) => (ADMIN ? `<button class="btn small cmod" data-cmod="${i}" title="Modifier ses coordonnées" aria-label="Modifier">${ic('note', 's')}</button>` : '');
       main.innerHTML = `
-        <div class="page-head"><div class="t"><h1>Clients</h1><p>Tous ceux qui nous ont contactés, reconnus par leur numéro ou leur e-mail. Claire les reconnaît quand ils rappellent.</p></div>
-          <label class="search">${ic('search', 's')}<input type="search" id="cq" placeholder="Nom, société, téléphone, e-mail…" aria-label="Rechercher" value="${h(vueClients.q)}"></label></div>
+        <div class="page-head"><div class="t"><h1>Clients</h1><p>Tous ceux qui nous ont contactés, et ceux que vous ajoutez ou importez. Claire les reconnaît à leur numéro ou à leur e-mail.</p></div>
+          <div class="frow" style="gap:10px;flex-wrap:wrap">
+            <label class="search">${ic('search', 's')}<input type="search" id="cq" placeholder="Nom, société, téléphone, e-mail…" aria-label="Rechercher" value="${h(vueClients.q)}"></label>
+            ${ADMIN ? `<button class="btn" id="cImp">${ic('import', 's')}Importer une liste</button><button class="btn primary" id="cAjout">${ic('plus', 's')}Ajouter un client</button>` : ''}</div></div>
         <div class="tiles">
           <button class="tile" data-cf=""><b>${tous.length}</b><span>Clients et contacts</span></button>
           <button class="tile bleu" data-cf="reviennent"><b>${n('reviennent')}</b><span>Nous ont contactés plusieurs fois</span></button>
@@ -1044,23 +1202,23 @@
           <button class="tile orange" data-cf="distributeurs"><b>${n('distributeurs')}</b><span>Distributeurs</span></button>
         </div>
         <div class="panel filtres" style="margin-top:16px"><div class="frow"><span class="lab">Afficher</span>
-          ${[['', 'Tous'], ['reviennent', 'Qui reviennent'], ['fideles', 'Fidèles'], ['nouveaux', 'Nouveaux'], ['distributeurs', 'Distributeurs'], ['directs', 'Clients directs'], ['ouvertes', 'Avec une demande ouverte']]
-            .map(([v, t]) => `<button class="chip ${vueClients.f === v ? 'on' : ''}" data-cf="${v}">${t} · ${n(v)}</button>`).join('')}
+          ${[['', 'Tous'], ['reviennent', 'Qui reviennent'], ['fideles', 'Fidèles'], ['nouveaux', 'Nouveaux'], ['attente', 'Ajoutés, pas encore de demande'], ['distributeurs', 'Distributeurs'], ['directs', 'Clients directs'], ['ouvertes', 'Avec une demande ouverte']]
+            .filter(([v]) => v !== 'attente' || n('attente')).map(([v, t]) => `<button class="chip ${vueClients.f === v ? 'on' : ''}" data-cf="${v}">${t} · ${n(v)}</button>`).join('')}
           <select id="ctri" aria-label="Trier" style="margin-left:auto"><option value="recent" ${vueClients.tri === 'recent' ? 'selected' : ''}>Contact le plus récent</option>
             <option value="nombre" ${vueClients.tri === 'nombre' ? 'selected' : ''}>Le plus de demandes</option></select></div></div>
         <div class="panel dl cl" style="margin-top:16px">
           <div class="row head"><span>CLIENT</span><span>TYPE</span><span>DEMANDES</span><span>SERVICES</span><span>CANAUX</span><span>SITE · MATÉRIEL</span><span>DERNIER CONTACT</span></div>
           ${tranche.map((c, i) => `<div class="row" data-i="${i}" role="link" tabindex="0">
-            <span class="two"><b>${h(c.societe || c.contact || telFr(c.tel) || c.email)}</b><span>${h([c.societe ? c.contact : '', telFr(c.tel) || c.email].filter(Boolean).join(' · '))}</span></span>
-            <span>${fidPill(c.fidelite)}${c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur' ? ' <span class="pill">Distributeur</span>' : ''}</span>
-            <span class="two"><b>${c.nb_demandes}</b><span>${Number(c.nb_ouvertes) ? c.nb_ouvertes + ' ouverte' + (c.nb_ouvertes > 1 ? 's' : '') : 'toutes traitées'}${Number(c.nb_urgences) ? ' · ' + c.nb_urgences + ' urgence' + (c.nb_urgences > 1 ? 's' : '') : ''}</span></span>
+            <span class="two"><b>${h(c.societe || c.contact || telFr(c.tel) || c.email)}</b><span>${h([c.societe ? c.contact : '', telFr(c.tel) || c.email].filter(Boolean).join(' · '))}${autresTels(c).length ? ' +' + autresTels(c).length : ''}</span></span>
+            <span>${typePill(c)}${c.type_client === 'distributeur' || c.type_interlocuteur === 'distributeur' ? ' <span class="pill">Distributeur</span>' : ''}</span>
+            <span class="two"><b>${c.nb_demandes}</b><span>${sansDemande(c) ? 'aucune encore' : Number(c.nb_ouvertes) ? c.nb_ouvertes + ' ouverte' + (c.nb_ouvertes > 1 ? 's' : '') : 'toutes traitées'}${Number(c.nb_urgences) ? ' · ' + c.nb_urgences + ' urgence' + (c.nb_urgences > 1 ? 's' : '') : ''}</span></span>
             <span class="txt">${h(String(c.services || '').split(',').filter(Boolean).map((x) => SERVICES[x] || x).join(', '))}</span>
             <span style="display:flex;gap:6px">${String(c.canaux || '').split(',').filter(Boolean).map((k) => `<span title="${h(CANAUX[k] || k)}">${ic(k, 's')}</span>`).join('')}</span>
             <span class="txt">${h([c.code_postal || c.departement, [c.marque, c.modele].filter(Boolean).join(' ')].filter(Boolean).join(' · ') || '—')}</span>
-            <span class="two"><b>${h(quand(c.derniere_demande))}</b><span>${h(rel(c.derniere_demande))}</span></span>
-            <span class="m1"><b>${h(c.societe || c.contact || telFr(c.tel))}</b><span>${c.nb_demandes} demande${c.nb_demandes > 1 ? 's' : ''} · ${h(rel(c.derniere_demande))}</span></span>
-            <span class="m2">${fidPill(c.fidelite)}</span>
-          </div>`).join('') || '<div class="vide" style="border:0">Aucun client ne correspond.</div>'}
+            <span class="cder"><span class="two">${c.derniere_demande ? `<b>${h(quand(c.derniere_demande))}</b><span>${h(rel(c.derniere_demande))}</span>` : `<b>Pas encore</b><span title="Fiche créée le ${h(fmtDate(c.created_at, false))}">fiche du ${h(fmtDate(c.created_at, false).slice(0, 5))}</span>`}</span>${modif(i)}</span>
+            <span class="m1"><b>${h(c.societe || c.contact || telFr(c.tel))}</b><span>${sansDemande(c) ? h(ajouteLe(c)) + ', pas encore de demande' : `${c.nb_demandes} demande${c.nb_demandes > 1 ? 's' : ''} · ${h(rel(c.derniere_demande))}`}</span></span>
+            <span class="m2">${typePill(c)}${modif(i)}</span>
+          </div>`).join('') || `<div class="vide" style="border:0">${tous.length ? 'Aucun client ne correspond.' : 'Aucun client pour l\'instant.'}</div>`}
           <div class="pied"><span>${rows.length} client${rows.length > 1 ? 's' : ''}</span>${pages > 1 ? `<span>
             <button class="btn small" data-cpage="-1" ${vueClients.page === 0 ? 'disabled' : ''}>‹ Précédents</button> Page ${vueClients.page + 1} / ${pages}
             <button class="btn small" data-cpage="1" ${vueClients.page >= pages - 1 ? 'disabled' : ''}>Suivants ›</button></span>` : ''}</div>
@@ -1070,7 +1228,13 @@
       $$('[data-cf]', main).forEach((b) => b.onclick = () => { vueClients.f = b.dataset.cf; vueClients.page = 0; render(); });
       $('#ctri', main).onchange = (e) => { vueClients.tri = e.target.value; render(); };
       $$('[data-cpage]', main).forEach((b) => b.onclick = () => { vueClients.page += Number(b.dataset.cpage); render(); window.scrollTo(0, 0); });
-      $$('.cl .row[data-i]', main).forEach((el) => { const go = () => show('client', tranche[Number(el.dataset.i)].id); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); }; });
+      $$('.cl .row[data-i]', main).forEach((el) => { const go = () => show('client', tranche[Number(el.dataset.i)].id); el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter' && e.target === el) go(); }; });
+      // Modifier directement depuis la liste, sans ouvrir la fiche.
+      $$('[data-cmod]', main).forEach((b) => b.onclick = (e) => { e.stopPropagation(); ficheClient(tranche[Number(b.dataset.cmod)], () => show('clients', null, false)); });
+      if (ADMIN) {
+        $('#cAjout', main).onclick = () => ficheClient({type_client: 'direct'});
+        $('#cImp', main).onclick = importerClients;
+      }
     };
     render();
   };
@@ -1084,7 +1248,8 @@
       <div class="crumb"><a href="#clients" data-retour>Clients</a> › ${h(c.societe || c.contact || '')}</div>
       <div class="dtitle"><h1>${h([c.contact, c.societe].filter(Boolean).join(' — ') || telFr(c.tel) || c.email)}</h1>
         <div class="tags">${fidPill(c.fidelite)}${distri ? '<span class="pill">Distributeur</span>' : '<span class="pill">Client direct</span>'}
-          <span class="hint">Premier contact ${h(jourFr(c.premiere_demande))}</span></div></div>
+          <span class="hint">${c.premiere_demande ? 'Premier contact ' + h(jourFr(c.premiere_demande))
+            : 'Fiche ' + (c.source === 'import' ? 'importée' : 'ajoutée à la main') + ' ' + h(jourFr(c.created_at)) + ', pas encore de demande'}</span></div></div>
       <div class="tiles">
         <div class="tile"><b>${c.nb_demandes}</b><span>Demande${c.nb_demandes > 1 ? 's' : ''}</span></div>
         <div class="tile ${c.demandes.some((x) => x.statut !== 'traite') ? 'orange' : 'vert'}"><b>${c.demandes.filter((x) => x.statut !== 'traite').length}</b><span>En cours ou à traiter</span></div>
@@ -1093,14 +1258,15 @@
       </div>
       <div class="dgrid" style="margin-top:20px"><div class="dcol">
         <section class="box2"><div class="frow" style="justify-content:space-between"><h2 style="margin:0;font-size:16px">Coordonnées</h2>
-          ${ADMIN ? '<button class="btn small" id="clCorr">Corriger</button>' : ''}</div><div class="kvg">
+          ${ADMIN ? `<button class="btn small primary" id="clMod">${ic('note', 's')}Modifier</button>` : ''}</div><div class="kvg">
           ${champ('Contact', h(c.contact || ''))}${champ('Société', h(c.societe || ''))}
           ${champ('Type', distri ? 'Distributeur' : 'Client direct')}
           ${champ('Téléphone', c.tel ? `<a href="tel:+${h(c.tel)}" style="font-weight:800">${h(telFr(c.tel))}</a>` : '')}
+          ${champ('Autres numéros', autresTels(c).map((t) => `<a href="tel:+${h(t)}">${h(telFr(t))}</a>`).join(' · '))}
           ${champ('E-mail', c.email ? `<a href="mailto:${h(c.email)}">${h(c.email)}</a>` : '')}
           ${champ('Site', h([c.code_postal, c.departement && !c.code_postal ? 'dpt ' + c.departement : ''].filter(Boolean).join(' ')))}
           ${champ('Compte distributeur', h(c.compte_distributeur || c.reconnaissance?.compte_distributeur || ''))}
-        </div>${c.champs_corriges ? `<span class="hint">Corrigé à la main (les prochaines demandes ne l'écraseront pas) : ${h(c.champs_corriges.split(',').map((k) => ({contact: 'contact', societe: 'société', tel: 'téléphone', email: 'e-mail', type_client: 'type', type_interlocuteur: 'type', code_postal: 'site', departement: 'site', compte_distributeur: 'compte'})[k] || k).filter((x, i, a) => a.indexOf(x) === i).join(', '))}.</span>` : ''}</section>
+        </div>${c.champs_corriges ? `<span class="hint">Saisi ou corrigé à la main (les prochaines demandes ne l'écraseront pas) : ${h(c.champs_corriges.split(',').map((k) => ({civilite: 'civilité', contact: 'contact', societe: 'société', tel: 'téléphone', email: 'e-mail', type_client: 'type', type_interlocuteur: 'type', code_postal: 'site', departement: 'site', compte_distributeur: 'compte'})[k] || k).filter((x, i, a) => a.indexOf(x) === i).join(', '))}.</span>` : ''}</section>
         <section class="box2"><div class="frow" style="justify-content:space-between"><h2 style="margin:0;font-size:16px">Parc machines (${c.equipements.filter((e) => Number(e.actif)).length})</h2>
           <button class="btn small" id="eqAjout">${ic('plus', 's')}Ajouter une machine</button></div>
           <p class="hint" style="margin:0">Chaque machine citée dans une demande s'ajoute ici toute seule, sans remplacer les autres. Corrigez ou retirez-la si besoin.</p>
@@ -1116,7 +1282,7 @@
           <div class="panel dl" style="border:0">${c.demandes.map((d, i) => `<div class="row" data-d="${d.id}" role="link" tabindex="0" style="grid-template-columns:110px 130px 120px minmax(0,1fr)">
             <span class="two"><b>n° ${d.id}</b><span>${h(fmtDate(d.created_at, false))}</span></span>${canalHtml(canalDe(d))}<span>${etatPill(d)}</span>
             <span class="txt">${h([SERVICES[d.service], sujetDe(d)].filter(Boolean).join(' — '))}</span>
-            <span class="m1"><b>n° ${d.id} — ${h(sujetDe(d))}</b><span>${h(fmtDate(d.created_at, false))}</span></span><span class="m2">${etatPill(d)}</span></div>`).join('') || '<div class="vide" style="border:0">Aucune demande visible pour votre service.</div>'}</div></section>
+            <span class="m1"><b>n° ${d.id} — ${h(sujetDe(d))}</b><span>${h(fmtDate(d.created_at, false))}</span></span><span class="m2">${etatPill(d)}</span></div>`).join('') || `<div class="vide" style="border:0">${sansDemande(c) ? 'Pas encore de demande : Claire le reconnaîtra dès son premier appel.' : 'Aucune demande visible pour votre service.'}</div>`}</div></section>
         ${ADMIN && c.devis && c.devis.length ? `<section class="box2"><h2>Devis CSO (${c.devis.length})</h2>${c.devis.map((x) => `<div class="frow" style="justify-content:space-between;border-top:1px solid #eef1f4;padding-top:8px">
           <span><b>Offre ${h(x.n_offre)}</b> <span class="hint">${h(fmtDate(x.date_offre, false))}${x.commercial ? ' · ' + h(x.commercial) : ''}</span></span>
           <span>${eur(x.montant_ht)} HT ${pill(L(x.statut), cls(x.statut))}</span></div>`).join('')}</section>` : ''}
@@ -1124,7 +1290,7 @@
         <section class="box2"><h2>Ce que Claire sait quand il appelle</h2>
           ${c.reconnaissance?.accueil ? `<p class="texte" style="margin:0"><b>Accueil : « ${h(c.reconnaissance.accueil)} »</b></p>` : ''}
           <p class="texte" style="margin:0">${h(c.reconnaissance?.contexte || '—')}</p>
-          <span class="hint">Claire l'accueille par son nom et fait confirmer ces informations au lieu de les redemander.${c.civilite ? '' : ' Indiquez sa civilité (bouton Corriger) pour « Bonjour Monsieur … ».'}</span></section>
+          <span class="hint">Claire l'accueille par son nom et fait confirmer ces informations au lieu de les redemander.${c.civilite ? '' : ' Indiquez sa civilité (bouton Modifier) pour « Bonjour Monsieur … ».'}</span></section>
         <section class="box2"><h2>Relation client</h2>
           ${ADMIN ? `<label class="field"><span>Statut</span>${sel('statut_client', [['', 'Automatique (' + (FIDELITE[c.fidelite]?.[0] || '') + ')'], ['fidele', 'Client fidèle'], ['vip', 'Client VIP'], ['a_surveiller', 'À surveiller']], c.statut_client || '')}</label>
             <label class="field"><span>Note pour l'équipe et pour Claire</span><textarea name="notes" class="inp" rows="4" placeholder="ex. Client historique, parc de 3 compresseurs Worthington. Préfère être rappelé le matin.">${h(c.notes || '')}</textarea></label>
@@ -1141,29 +1307,9 @@
       toast('Fiche client enregistrée'); show('client', c.id, false);
     };
     const recharger = () => show('client', c.id, false);
-    // Corriger les coordonnées
-    const corr = $('#clCorr', main);
-    if (corr) corr.onclick = () => {
-      openDrawer('Corriger la fiche client', [
-        ligne('Civilité', sel('civilite', [['', 'Non renseignée'], ['M', 'Monsieur'], ['Mme', 'Madame']], c.civilite || ''), 'Claire dira « Bonjour Monsieur Mortier ». Sans civilité : « Bonjour Cyril Mortier ».'),
-        ligne('Contact (prénom et nom)', `<input name="contact" value="${h(c.contact)}">`),
-        ligne('Société', `<input name="societe" value="${h(c.societe)}">`),
-        ligne('Type', sel('type_client', [['direct', 'Client direct'], ['distributeur', 'Distributeur']], distri ? 'distributeur' : 'direct')),
-        ligne('Téléphone', `<input name="tel" value="${h(telFr(c.tel))}">`, 'C\'est à ce numéro que Claire le reconnaît.'),
-        ligne('E-mail', `<input name="email" type="email" value="${h(c.email)}">`),
-        ligne('Code postal du site principal', `<input name="code_postal" value="${h(c.code_postal)}" inputmode="numeric">`),
-        ligne('Compte distributeur', `<input name="compte_distributeur" value="${h(c.compte_distributeur)}">`),
-        '<p class="hint" style="margin:0">Vos corrections ne seront plus écrasées par les demandes suivantes.</p>',
-      ].join(''), saveBtn());
-      $('#drawerSave').onclick = async () => {
-        const body = {};
-        ['contact', 'societe', 'tel', 'email', 'code_postal', 'compte_distributeur'].forEach((k) => { body[k] = $(`#drawerBody [name="${k}"]`).value.trim(); });
-        body.type_client = $('#drawerBody [name="type_client"]').value;
-        body.civilite = $('#drawerBody [name="civilite"]').value;
-        body.type_interlocuteur = body.type_client === 'distributeur' ? 'distributeur' : (c.type_interlocuteur === 'distributeur' ? '' : c.type_interlocuteur);
-        try { await patch('clients/' + c.id, body); toast('Fiche corrigée'); closeDrawer(); recharger(); } catch (e) { toast(e.message, true); }
-      };
-    };
+    // Modifier les coordonnées (même tiroir que depuis la liste)
+    const mod = $('#clMod', main);
+    if (mod) mod.onclick = () => ficheClient(c, recharger);
     // Parc machines
     const machine = (e) => {
       openDrawer(e.id ? 'Machine — ' + h([e.marque, e.modele].filter(Boolean).join(' ') || 'sans nom') : 'Ajouter une machine', [

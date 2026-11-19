@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-18e';
+const MA_VERSION = '2026-11-19a';
 
 function ma_config(): array
 {
@@ -413,7 +413,8 @@ function ma_migrate(PDO $pdo, bool $fresh): void
             'relance_programmee_at' => 'TEXT'],
         // L'annuaire est aussi l'équipe de la plateforme : fonction, service, accès et mot de passe.
         // Champs corrigés à la main sur la fiche client : les demandes suivantes ne les écrasent plus.
-        'rep_clients' => ['champs_corriges' => 'TEXT', 'civilite' => 'TEXT'],
+        // Autres numéros (portable, fixe, standard) auxquels Claire le reconnaît aussi ; source : manuel | import.
+        'rep_clients' => ['champs_corriges' => 'TEXT', 'civilite' => 'TEXT', 'autres_tels' => 'TEXT', 'source' => 'TEXT'],
         'rep_contacts' => ['membres' => 'TEXT', 'fonction' => 'TEXT', 'service' => 'TEXT', 'acces' => 'TEXT',
             'mdp_hash' => 'TEXT', 'mdp_jeton' => 'TEXT', 'mdp_jeton_exp' => 'TEXT', 'derniere_connexion' => 'TEXT',
             'lien_jeton' => 'TEXT', 'lien_jeton_exp' => 'TEXT', 'lien_envoye_at' => 'TEXT'],
@@ -4323,12 +4324,7 @@ function ma_client_rattacher(PDO $db, int $demandeId): ?int
     if (!$tel && !$email) {
         return null;
     }
-    $c = null;
-    if ($tel) {
-        $q = $db->prepare('SELECT * FROM rep_clients WHERE tel = ? ORDER BY id LIMIT 1');
-        $q->execute([$tel]);
-        $c = $q->fetch() ?: null;
-    }
+    $c = $tel ? ma_client_par_tel($db, $tel) : null;
     if (!$c && $email) {
         $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY id LIMIT 1');
         $q->execute([$email]);
@@ -4523,6 +4519,470 @@ function ma_clients_reprise(PDO $db): int
     return $n;
 }
 
+// ------------------------------------------------------------------ Base clients : saisie à la main et import d'une liste
+
+/**
+ * Fiche client d'un numéro : son numéro principal, sinon l'un de ses autres numéros (portable, fixe, standard).
+ * $ordre : 'id' (la plus ancienne fiche, pour rattacher une demande) ou 'recent' (la dernière en contact).
+ */
+function ma_client_par_tel(PDO $db, ?string $tel, string $ordre = 'id'): ?array
+{
+    $tel = ma_tel_cle($tel);
+    if (!$tel) {
+        return null;
+    }
+    $tri = $ordre === 'recent' ? 'COALESCE(derniere_demande, created_at) DESC, id' : 'id';
+    $q = $db->prepare("SELECT * FROM rep_clients WHERE tel = ? OR ',' || COALESCE(autres_tels, '') || ',' LIKE ?
+        ORDER BY (tel = ?) DESC, $tri LIMIT 1");
+    $q->execute([$tel, '%,' . $tel . ',%', $tel]);
+    return $q->fetch() ?: null;
+}
+
+/** Les numéros d'un texte libre (« 01 23 45 67 89 / 06 12 34 56 78 ») : clés normalisées, sans doublon. */
+function ma_tels_liste($texte): array
+{
+    $out = [];
+    $t = str_replace(['(0)', '( 0 )'], '', (string) $texte);
+    foreach (preg_split('#\s*(?:[/;,|\n]|\bou\b|\bet\b)\s*#iu', $t) ?: [] as $morceau) {
+        $morceau = preg_replace('/\.0+$/', '', trim($morceau));
+        // « 06 12 34 56 78 (Jean) », « Tél : 01 23… » : on garde le numéro.
+        if (preg_match('/[^\d\s.\-+()]/u', $morceau) && preg_match('/(?:\+|00)?\d[\d\s.\-]{7,}\d/', $morceau, $m)) {
+            $morceau = $m[0];
+        }
+        $chiffres = preg_replace('/\D/', '', $morceau);
+        // Deux numéros français collés (« 0123456789 0612345678 ») : on les sépare.
+        $candidats = strlen($chiffres) === 20 && $chiffres[0] === '0' && $chiffres[10] === '0'
+            ? [substr($chiffres, 0, 10), substr($chiffres, 10)] : [$morceau];
+        foreach ($candidats as $x) {
+            if (($k = ma_tel_cle($x)) && !in_array($k, $out, true)) {
+                $out[] = $k;
+            }
+        }
+    }
+    return $out;
+}
+
+/**
+ * Ce qu'une saisie (formulaire ou ligne d'import) dit d'un client, remis au propre : civilité, nom, société,
+ * numéros (le premier est le principal), e-mail, site, type, compte, machine et note.
+ */
+function ma_client_valeurs(array $b): array
+{
+    $txt = fn($k) => trim(preg_replace('/\s+/u', ' ', (string) ($b[$k] ?? '')));
+    $v = ['civilite' => null, 'contact' => null, 'societe' => $txt('societe') ?: null, 'tels' => [], 'email' => null,
+        'code_postal' => null, 'departement' => null, 'type_client' => null, 'type_interlocuteur' => null,
+        'compte_distributeur' => $txt('compte_distributeur') ?: null, 'machine' => null, 'notes' => trim((string) ($b['notes'] ?? '')) ?: null,
+        'tels_illisibles' => []];
+    $contact = $txt('contact') ?: trim($txt('prenom') . ' ' . $txt('nom'));
+    [$civDite, $contact] = ma_civilite_de($contact);
+    $v['contact'] = $contact !== '' ? $contact : null;
+    $civ = ma_plat($txt('civilite'));
+    $v['civilite'] = in_array(rtrim($civ, '.'), ['m', 'mr', 'monsieur', 'mons'], true) ? 'M'
+        : (in_array(rtrim($civ, '.'), ['mme', 'madame', 'mlle', 'mademoiselle', 'mde'], true) ? 'Mme' : $civDite);
+    // Portable d'abord : c'est la ligne directe de la personne ; le fixe ou le standard viennent ensuite.
+    foreach (['portable', 'tel', 'autres_tels'] as $k) {
+        $brut = trim((string) ($b[$k] ?? ''));
+        if ($brut === '') {
+            continue;
+        }
+        $liste = ma_tels_liste($brut);
+        if (!$liste) {
+            $v['tels_illisibles'][] = $brut;
+        }
+        foreach ($liste as $t) {
+            if (!in_array($t, $v['tels'], true)) {
+                $v['tels'][] = $t;
+            }
+        }
+    }
+    if (preg_match('/[A-Z0-9._%+\'-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i', (string) ($b['email'] ?? ''), $m)) {
+        $v['email'] = mb_strtolower($m[0]);
+    }
+    if (preg_match('/\b(\d{4,5})\b/', preg_replace('/(\d)\s+(\d{3})\b/', '$1$2', $txt('code_postal')), $m)) {
+        $v['code_postal'] = str_pad($m[1], 5, '0', STR_PAD_LEFT);
+        $v['departement'] = ma_departement($v['code_postal']);
+    }
+    $type = ma_plat($txt('type_client'));
+    if (str_contains($type, 'distri') || str_contains($type, 'revendeur')) {
+        $v['type_client'] = 'distributeur';
+        $v['type_interlocuteur'] = 'distributeur';
+    } elseif ($type !== '') {
+        $v['type_client'] = 'direct';
+    }
+    $machine = array_filter(['marque' => $txt('marque'), 'modele' => $txt('modele'), 'numero_serie' => $txt('numero_serie')], fn($x) => $x !== '');
+    $v['machine'] = $machine ?: null;
+    return $v;
+}
+
+/** Même personne ? Faute de nom d'un côté ou de l'autre, oui ; sinon il faut un nom en commun. */
+function ma_client_meme_personne(?string $a, ?string $b): bool
+{
+    $mots = fn($s) => array_filter(preg_split('/[^a-z0-9]+/', ma_plat(ma_civilite_de($s)[1])) ?: [], fn($x) => strlen($x) >= 3);
+    $x = $mots($a);
+    $y = $mots($b);
+    return !$x || !$y || array_intersect($x, $y);
+}
+
+/** La fiche existante de cette personne : par l'un de ses numéros, sinon par son e-mail. */
+function ma_client_trouver(PDO $db, array $v): ?array
+{
+    foreach ($v['tels'] as $t) {
+        $f = ma_client_par_tel($db, $t);
+        if ($f && ma_client_meme_personne($f['contact'], $v['contact'])) {
+            return $f;
+        }
+    }
+    if ($v['email']) {
+        $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY id');
+        $q->execute([$v['email']]);
+        foreach ($q->fetchAll() as $f) {
+            // Même e-mail (boîte commune d'une société) mais un autre numéro et un autre nom : un collègue.
+            $autreNumero = $v['tels'] && $f['tel'] && !array_intersect($v['tels'], [$f['tel'], ...ma_csv($f['autres_tels'] ?? '')]);
+            if (ma_client_meme_personne($f['contact'], $v['contact']) && !($autreNumero && (!$f['contact'] || !$v['contact']))) {
+                return $f;
+            }
+        }
+    }
+    return null;
+}
+
+/** Ajoute une machine au parc si elle n'y est pas déjà (même n° de série, sinon même marque et même modèle). */
+function ma_client_machine(PDO $db, int $cid, ?array $m, string $source, ?string $codePostal = null): bool
+{
+    if (!$m) {
+        return false;
+    }
+    $plat = fn($s) => preg_replace('/[^a-z0-9]/', '', ma_plat((string) $s));
+    $q = $db->prepare('SELECT * FROM rep_equipements WHERE client_id = ?');
+    $q->execute([$cid]);
+    foreach ($q->fetchAll() as $e) {
+        if (!empty($m['numero_serie']) ? $plat($e['numero_serie']) === $plat($m['numero_serie'])
+            : ($plat($e['modele']) === $plat($m['modele'] ?? '') && $plat($e['marque']) === $plat($m['marque'] ?? ''))) {
+            return false;
+        }
+    }
+    $now = ma_now();
+    ma_inserer($db, 'rep_equipements', ['client_id' => $cid, 'marque' => $m['marque'] ?? null, 'modele' => $m['modele'] ?? null,
+        'numero_serie' => $m['numero_serie'] ?? null, 'code_postal' => $codePostal, 'departement' => $codePostal ? ma_departement($codePostal) : null,
+        'source' => $source, 'created_at' => $now, 'updated_at' => $now]);
+    return true;
+}
+
+/** Nouvelle fiche client (saisie ou import) : ce qui est saisi n'est plus écrasé par les demandes suivantes. */
+function ma_client_creer(PDO $db, array $v, string $source): int
+{
+    $now = ma_now();
+    $d = ['tel' => $v['tels'][0] ?? null, 'autres_tels' => implode(',', array_slice($v['tels'], 1)) ?: null, 'email' => $v['email'],
+        'civilite' => $v['civilite'], 'contact' => $v['contact'], 'societe' => $v['societe'], 'type_client' => $v['type_client'],
+        'type_interlocuteur' => $v['type_interlocuteur'], 'code_postal' => $v['code_postal'], 'departement' => $v['departement'],
+        'compte_distributeur' => $v['compte_distributeur'], 'notes' => $v['notes'], 'source' => $source,
+        'nb_demandes' => 0, 'created_at' => $now, 'updated_at' => $now];
+    $d['champs_corriges'] = implode(',', array_keys(array_filter(array_intersect_key($d, array_flip(['tel', 'email', 'civilite', 'contact',
+        'societe', 'type_client', 'code_postal', 'compte_distributeur'])), fn($x) => $x !== null && $x !== ''))) ?: null;
+    $cid = ma_inserer($db, 'rep_clients', $d);
+    ma_client_machine($db, $cid, $v['machine'], $source, $v['code_postal']);
+    return $cid;
+}
+
+/**
+ * Complète une fiche existante avec ce que dit l'import : les champs vides se remplissent, les nouveaux
+ * numéros s'ajoutent aux autres numéros. Avec $remplacer, ce qui diffère est remplacé. Rend ce qui a changé.
+ */
+function ma_client_completer(PDO $db, array $f, array $v, bool $remplacer, string $source): array
+{
+    $maj = [];
+    $noms = ['civilite' => 'civilité', 'contact' => 'nom', 'societe' => 'société', 'email' => 'e-mail', 'code_postal' => 'code postal',
+        'type_client' => 'type', 'compte_distributeur' => 'compte'];
+    foreach (array_keys($noms) as $k) {
+        $n = $v[$k] ?? null;
+        if ($n !== null && $n !== '' && (trim((string) $f[$k]) === '' || ($remplacer && (string) $f[$k] !== (string) $n))) {
+            $maj[$k] = $n;
+        }
+    }
+    if (isset($maj['code_postal'])) {
+        $maj['departement'] = $v['departement'];
+    }
+    if (isset($maj['type_client'])) {
+        $maj['type_interlocuteur'] = $v['type_interlocuteur'] ?? ($f['type_interlocuteur'] === 'distributeur' ? null : $f['type_interlocuteur']);
+    }
+    $connus = array_values(array_filter([$f['tel'], ...ma_csv($f['autres_tels'] ?? '')]));
+    $nouveaux = array_values(array_diff($v['tels'], $connus));
+    if ($nouveaux) {
+        if (!$f['tel']) {
+            $maj['tel'] = array_shift($nouveaux);
+        }
+        if ($nouveaux) {
+            $maj['autres_tels'] = implode(',', array_merge(ma_csv($f['autres_tels'] ?? ''), $nouveaux));
+        }
+    }
+    if ($v['notes'] && !str_contains(ma_plat((string) $f['notes']), ma_plat($v['notes']))) {
+        $maj['notes'] = trim(trim((string) $f['notes']) . "\n" . $v['notes']);
+    }
+    $machine = ma_client_machine($db, (int) $f['id'], $v['machine'], $source, $v['code_postal'] ?? $f['code_postal']);
+    $change = array_values(array_unique(array_map(fn($k) => $noms[$k] ?? ['tel' => 'téléphone', 'autres_tels' => 'autres numéros', 'notes' => 'note'][$k] ?? null,
+        array_keys($maj))));
+    $change = array_values(array_filter($change));
+    if ($machine) {
+        $change[] = 'machine';
+    }
+    if ($maj) {
+        $corr = ma_csv($f['champs_corriges'] ?? '');
+        foreach (array_keys($maj) as $k) {
+            if (isset($noms[$k]) || $k === 'tel') {
+                $corr[] = $k;
+            }
+        }
+        $maj['champs_corriges'] = implode(',', array_unique($corr));
+        $maj['updated_at'] = ma_now();
+        $sets = implode(', ', array_map(fn($k) => "$k = ?", array_keys($maj)));
+        $db->prepare("UPDATE rep_clients SET $sets WHERE id = ?")->execute([...array_values($maj), (int) $f['id']]);
+    }
+    return $change;
+}
+
+/** Colonne d'un fichier importé → champ de la fiche (« Tél. portable » → portable, « N° de série » → numero_serie…). */
+function ma_client_import_champ(string $entete): ?string
+{
+    $k = preg_replace('/[^a-z0-9]/', '', ma_plat($entete));
+    $exact = [
+        'civilite' => ['civilite', 'civ', 'titre', 'genre', 'monsieurmadame', 'mmemr'],
+        'prenom' => ['prenom', 'firstname', 'prenomducontact'],
+        'nom' => ['nom', 'lastname', 'nomdefamille', 'patronyme'],
+        'contact' => ['contact', 'nomprenom', 'prenomnom', 'nomcomplet', 'interlocuteur', 'personne', 'nomducontact', 'name', 'fullname', 'contactnom'],
+        'societe' => ['societe', 'entreprise', 'raisonsociale', 'client', 'nomclient', 'company', 'etablissement', 'organisation', 'nomdelasociete',
+            'nomsociete', 'clientsociete', 'denomination', 'nomentreprise'],
+        'tel' => ['telephone', 'tel', 'telfixe', 'fixe', 'telephonefixe', 'standard', 'phone', 'numero', 'numerodetelephone', 'ntel', 'notel',
+            'ntelephone', 'teltravail', 'telbureau', 'telephone1', 'tel1', 'telephonebureau', 'telephonestandard'],
+        'portable' => ['portable', 'mobile', 'telportable', 'telmobile', 'gsm', 'telephoneportable', 'telephonemobile', 'cellulaire', 'port', 'mobilephone'],
+        'autres_tels' => ['autrestelephones', 'autrestel', 'autresnumeros', 'autrenumero', 'tel2', 'telephone2', 'autretel', 'autretelephone', 'tel3', 'telephone3'],
+        'email' => ['email', 'mail', 'courriel', 'adressemail', 'adresseemail', 'emailcontact', 'adressemel', 'mel', 'adresseelectronique', 'mailcontact'],
+        'code_postal' => ['codepostal', 'cp', 'zip', 'postal', 'zipcode', 'codepostaldusite'],
+        'type_client' => ['type', 'typeclient', 'typedeclient', 'categorie', 'profil', 'typedecontact', 'typecontact'],
+        'compte_distributeur' => ['compte', 'comptedistributeur', 'ncompte', 'numerocompte', 'numerodecompte', 'codeclient', 'numeroclient', 'nclient', 'refclient'],
+        'marque' => ['marque', 'marquemachine', 'fabricant', 'constructeur', 'marquecompresseur'],
+        'modele' => ['modele', 'modelemachine', 'machine', 'materiel', 'equipement', 'modelecompresseur'],
+        'numero_serie' => ['numerodeserie', 'nserie', 'ndeserie', 'serie', 'sn', 'numeroserie', 'noserie', 'serialnumber', 'nodeserie'],
+        'notes' => ['notes', 'note', 'commentaire', 'commentaires', 'remarque', 'remarques', 'observation', 'observations', 'info', 'infos', 'informations'],
+    ];
+    foreach ($exact as $champ => $mots) {
+        if (in_array($k, $mots, true)) {
+            return $champ;
+        }
+    }
+    $contient = ['portable' => ['portable', 'mobile', 'gsm'], 'email' => ['mail', 'courriel'], 'code_postal' => ['codepostal'],
+        'societe' => ['societe', 'entreprise', 'raisonsociale'], 'numero_serie' => ['serie'], 'modele' => ['modele'], 'marque' => ['marque'],
+        'civilite' => ['civilit'], 'compte_distributeur' => ['compte'], 'notes' => ['comment', 'remarq'], 'tel' => ['telephone', 'tel'],
+        'contact' => ['contact', 'interlocuteur'], 'prenom' => ['prenom']];
+    foreach ($contient as $champ => $mots) {
+        foreach ($mots as $m) {
+            if (str_contains($k, $m) && !($champ === 'tel' && $m === 'tel' && !str_starts_with($k, 'tel'))) {
+                return $champ;
+            }
+        }
+    }
+    return null;
+}
+
+/** Les lignes d'un fichier CSV (séparateur ; , ou tabulation, UTF-8 ou Windows) ou Excel (.xlsx, première feuille). */
+function ma_client_import_lire(string $contenu): array
+{
+    $lignes = [];
+    if (str_starts_with($contenu, "PK\x03\x04")) {
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('Le serveur ne sait pas ouvrir les fichiers Excel : enregistrez la liste en CSV (Fichier › Enregistrer sous › CSV) et recommencez.');
+        }
+        $tmp = tempnam(sys_get_temp_dir(), 'imp');
+        file_put_contents($tmp, $contenu);
+        $zip = new ZipArchive();
+        if ($zip->open($tmp) !== true) {
+            @unlink($tmp);
+            throw new RuntimeException('Fichier Excel illisible : enregistrez-le en CSV et recommencez.');
+        }
+        $lire = function (string $nom) use ($zip): ?SimpleXMLElement {
+            $st = $zip->statName($nom);
+            if (!$st || $st['size'] > 60 * 1024 * 1024) {
+                return null;
+            }
+            $x = $zip->getFromName($nom);
+            return $x === false ? null : (simplexml_load_string($x, SimpleXMLElement::class, LIBXML_NONET | LIBXML_COMPACT) ?: null);
+        };
+        $partages = [];
+        if ($sx = $lire('xl/sharedStrings.xml')) {
+            foreach ($sx->si as $si) {
+                $t = isset($si->t) ? (string) $si->t : '';
+                foreach ($si->r as $r) {
+                    $t .= (string) $r->t;
+                }
+                $partages[] = $t;
+            }
+        }
+        // Première feuille du classeur (pas forcément « sheet1.xml »).
+        $feuille = 'xl/worksheets/sheet1.xml';
+        if (($wb = $lire('xl/workbook.xml')) && ($rels = $lire('xl/_rels/workbook.xml.rels'))) {
+            $rid = null;
+            foreach ($wb->sheets->sheet ?? [] as $s) {
+                $rid = (string) ($s->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'] ?? '');
+                break;
+            }
+            foreach ($rels->Relationship as $r) {
+                if ($rid && (string) $r['Id'] === $rid) {
+                    $cible = (string) $r['Target'];
+                    $feuille = str_starts_with($cible, '/') ? ltrim($cible, '/') : 'xl/' . $cible;
+                }
+            }
+        }
+        $sx = $lire($feuille);
+        $zip->close();
+        @unlink($tmp);
+        if (!$sx) {
+            throw new RuntimeException('Feuille Excel introuvable : enregistrez la liste en CSV et recommencez.');
+        }
+        foreach ($sx->sheetData->row ?? [] as $row) {
+            $l = [];
+            $i = 0;
+            foreach ($row->c as $c) {
+                if (preg_match('/^([A-Z]+)/', (string) $c['r'], $m)) {
+                    $i = 0;
+                    foreach (str_split($m[1]) as $ch) {
+                        $i = $i * 26 + ord($ch) - 64;
+                    }
+                    $i--;
+                }
+                $t = (string) $c['t'];
+                if ($t === 's') {
+                    $val = $partages[(int) $c->v] ?? '';
+                } elseif ($t === 'inlineStr') {
+                    $val = (string) ($c->is->t ?? '');
+                    foreach ($c->is->r ?? [] as $r) {
+                        $val .= (string) $r->t;
+                    }
+                } else {
+                    $val = (string) $c->v;
+                }
+                $l[$i++] = $val;
+            }
+            if ($l) {
+                $lignes[] = array_map(fn($k) => $l[$k] ?? '', range(0, max(array_keys($l))));
+            }
+        }
+        return $lignes;
+    }
+    $t = $contenu;
+    if (str_starts_with($t, "\xEF\xBB\xBF")) {
+        $t = substr($t, 3);
+    } elseif (str_starts_with($t, "\xFF\xFE") || str_starts_with($t, "\xFE\xFF")) {
+        $t = mb_convert_encoding(substr($t, 2), 'UTF-8', str_starts_with($t, "\xFF\xFE") ? 'UTF-16LE' : 'UTF-16BE');
+    }
+    if (!mb_check_encoding($t, 'UTF-8')) {
+        $t = mb_convert_encoding($t, 'UTF-8', 'Windows-1252');
+    }
+    $premiere = strtok($t, "\r\n") ?: '';
+    $comptes = ["\t" => substr_count($premiere, "\t"), ';' => substr_count($premiere, ';'), ',' => substr_count($premiere, ',')];
+    arsort($comptes);
+    $sep = reset($comptes) > 0 ? array_key_first($comptes) : ';';
+    $f = fopen('php://temp', 'r+');
+    fwrite($f, $t);
+    rewind($f);
+    while (($l = fgetcsv($f, 0, $sep, '"', '')) !== false) {
+        $lignes[] = array_map(fn($x) => (string) $x, $l);
+    }
+    fclose($f);
+    return $lignes;
+}
+
+/**
+ * Import d'une liste de clients. Sans $confirmer, rien n'est enregistré : on rend ce qui se passerait, ligne
+ * par ligne (nouvelle fiche, fiche complétée, déjà à jour, ligne ignorée). Tout se joue dans une transaction,
+ * annulée pour l'aperçu : l'aperçu est exactement ce que fera l'import.
+ */
+function ma_client_import(PDO $db, string $contenu, bool $confirmer, bool $remplacer = false): array
+{
+    $lignes = ma_client_import_lire($contenu);
+    // La ligne des titres : la première qui n'est pas vide.
+    $n = 0;
+    while ($n < count($lignes) && !array_filter($lignes[$n], fn($x) => trim($x) !== '')) {
+        $n++;
+    }
+    $entetes = $lignes[$n] ?? [];
+    $colonnes = [];
+    $reconnues = [];
+    $ignorees = [];
+    foreach ($entetes as $i => $e) {
+        if (trim($e) === '') {
+            continue;
+        }
+        $champ = ma_client_import_champ($e);
+        // Deux colonnes « Téléphone » : la seconde va dans les autres numéros.
+        if ($champ === 'tel' && in_array('tel', $colonnes, true)) {
+            $champ = 'autres_tels';
+        }
+        if ($champ) {
+            $colonnes[$i] = $champ;
+            $reconnues[] = ['colonne' => trim($e), 'champ' => $champ];
+        } else {
+            $ignorees[] = trim($e);
+        }
+    }
+    if (!array_intersect($colonnes, ['tel', 'portable', 'autres_tels', 'email'])) {
+        throw new RuntimeException($colonnes
+            ? 'Il faut au moins une colonne « Téléphone », « Portable » ou « E-mail » : c\'est à cela que Claire reconnaît le client.'
+            : 'La première ligne doit donner les titres des colonnes (Société, Contact, Téléphone, E-mail…). Partez du modèle à télécharger.');
+    }
+    $donnees = array_slice($lignes, $n + 1, null, true);
+    if (count($donnees) > 5000) {
+        throw new RuntimeException('Plus de 5 000 lignes : découpez le fichier en plusieurs parties.');
+    }
+    $res = [];
+    $creees = [];
+    $db->beginTransaction();
+    try {
+        foreach ($donnees as $idx => $l) {
+            if (!array_filter($l, fn($x) => trim((string) $x) !== '')) {
+                continue;
+            }
+            $b = [];
+            foreach ($colonnes as $i => $champ) {
+                $val = trim((string) ($l[$i] ?? ''));
+                if ($val === '') {
+                    continue;
+                }
+                $b[$champ] = isset($b[$champ]) ? $b[$champ] . (in_array($champ, ['notes'], true) ? "\n" : ' / ') . $val : $val;
+            }
+            $v = ma_client_valeurs($b);
+            $nom = trim(implode(' — ', array_filter([$v['contact'], $v['societe']])));
+            $ligne = ['ligne' => $idx + 1, 'nom' => $nom ?: null, 'tel' => $v['tels'][0] ?? null, 'autres_tels' => array_slice($v['tels'], 1),
+                'email' => $v['email']];
+            if (!$v['tels'] && !$v['email']) {
+                $res[] = $ligne + ['action' => 'ignoree', 'detail' => $v['tels_illisibles']
+                    ? 'Numéro illisible : « ' . implode(' / ', $v['tels_illisibles']) . ' »'
+                    : 'Ni téléphone ni e-mail : Claire ne pourrait pas le reconnaître'];
+                continue;
+            }
+            $f = ma_client_trouver($db, $v);
+            if (!$f) {
+                $cid = ma_client_creer($db, $v, 'import');
+                $creees[$cid] = $idx + 1;
+                $res[] = $ligne + ['action' => 'creee', 'client_id' => $cid, 'detail' => $v['machine'] ? 'avec sa machine' : null];
+                continue;
+            }
+            $change = ma_client_completer($db, $f, $v, $remplacer, 'import');
+            $deja = isset($creees[(int) $f['id']]) ? 'même personne que la ligne ' . $creees[(int) $f['id']]
+                : 'fiche « ' . (trim(implode(' — ', array_filter([$f['contact'], $f['societe']]))) ?: ma_tel_lisible($f['tel']) ?: $f['email']) . ' »';
+            $res[] = $ligne + ['action' => $change ? 'completee' : 'identique', 'client_id' => (int) $f['id'],
+                'detail' => $deja . ($change ? ' : ' . implode(', ', $change) . ' ajouté' . (count($change) > 1 ? 's' : '') : ', rien de nouveau')];
+        }
+        $confirmer ? $db->commit() : $db->rollBack();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        throw $e;
+    }
+    $compte = fn($a) => count(array_filter($res, fn($r) => $r['action'] === $a));
+    return ['confirme' => $confirmer, 'colonnes' => $reconnues, 'ignorees' => $ignorees, 'lignes' => $res,
+        'creees' => $compte('creee'), 'completees' => $compte('completee'), 'identiques' => $compte('identique'), 'ignorees_lignes' => $compte('ignoree')];
+}
+
 /**
  * Comment saluer la personne : « Monsieur Mortier », « Madame Leroy » quand la civilité est connue
  * (fiche client), sinon prénom et nom tels qu'enregistrés. Null quand on ne connaît pas son nom.
@@ -4613,12 +5073,7 @@ function ma_client_reconnaitre(PDO $db, ?string $tel, ?string $email = null): ar
     $tel = ma_tel_cle($tel);
     $email = str_contains((string) $email, '@') ? mb_strtolower(trim((string) $email)) : null;
     $out = ['connu' => false, 'tel' => $tel];
-    $c = null;
-    if ($tel) {
-        $q = $db->prepare('SELECT * FROM rep_clients WHERE tel = ? ORDER BY derniere_demande DESC LIMIT 1');
-        $q->execute([$tel]);
-        $c = $q->fetch() ?: null;
-    }
+    $c = $tel ? ma_client_par_tel($db, $tel, 'recent') : null;
     if (!$c && $email) {
         $q = $db->prepare('SELECT * FROM rep_clients WHERE lower(email) = ? ORDER BY derniere_demande DESC LIMIT 1');
         $q->execute([$email]);
@@ -4793,9 +5248,10 @@ function ma_rep_demande_du_client(PDO $db, int $id, array $d): ?array
         return $x;
     }
     if ($tel && $x['client_id']) {
-        $c = $db->prepare('SELECT tel FROM rep_clients WHERE id = ?');
+        $c = $db->prepare('SELECT tel, autres_tels FROM rep_clients WHERE id = ?');
         $c->execute([$x['client_id']]);
-        if ($tel === (string) $c->fetchColumn()) {
+        $f = $c->fetch();
+        if ($f && ($tel === (string) $f['tel'] || in_array($tel, ma_csv($f['autres_tels'] ?? ''), true))) {
             return $x;
         }
     }

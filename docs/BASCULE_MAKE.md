@@ -739,6 +739,29 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   bouton redevient cliquable ;
 - testé sur la copie locale : clic sur « Je la prends » (n° 13) → page de la demande, statut « En cours ».
 
+## Clients : ajouter, modifier, importer une liste (correctif 69, 19/11)
+
+- demande de Cyril : voir la liste des clients, ajouter ou corriger e-mail et téléphone pour que Claire les
+  reconnaisse au rappel, et importer une liste de futurs clients ;
+- page « Clients » (administrateurs) : boutons « Ajouter un client » et « Importer une liste » ; crayon sur chaque
+  ligne pour modifier la fiche sans l'ouvrir ; « Corriger » devient « Modifier » sur la fiche ; la liste montre aussi
+  les fiches ajoutées ou importées sans demande (filtre « Ajoutés, pas encore de demande ») ;
+- « Autres numéros » sur la fiche (colonne `rep_clients.autres_tels`, ajoutée toute seule au premier chargement,
+  avec `source` = manuel | import) : Claire reconnaît le client sur chacun, et ses appels se rattachent à sa fiche ;
+  à numéro égal, la fiche dont c'est le numéro principal l'emporte ;
+- import : Excel (.xlsx, première feuille) ou CSV (; , ou tabulation, UTF-8 ou Windows), ou lignes collées depuis
+  Excel ; titres approchants reconnus (Tél., Mobile, Raison sociale, CP, N° de série…) ; modèle à télécharger ;
+  aperçu ligne par ligne avant d'enregistrer (nouvelle fiche, complétée, déjà à jour, ignorée et pourquoi) ;
+  une fiche existante (même numéro ou même e-mail, même nom) est seulement complétée, sauf case « Remplacer » ;
+  standard partagé avec un autre nom : fiche séparée ; machine (marque, modèle, n° de série) ajoutée au parc ;
+- ce qui est saisi ou importé n'est plus écrasé par les demandes suivantes (`champs_corriges`) ;
+- ajout à la main : si le numéro ou l'e-mail est déjà sur une fiche, proposition d'ouvrir celle-ci ou de créer
+  quand même une fiche séparée ; une fiche sans demande peut être supprimée (sinon : Fusionner) ;
+- testé sur la copie locale : import Excel (portable sans le 0, CP 1000 → 01000, deux numéros dans une case,
+  doublon dans le fichier, ligne sans téléphone, numéro illisible), CSV Windows, lignes collées ; rejouer l'import →
+  « déjà à jour » ; reconnaissance par le portable, le standard et un autre numéro ; demande entrante rattachée à la
+  fiche importée sans écraser le nom ni la société ; ajout, doublon, modification, suppression ; affichage téléphone.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).
