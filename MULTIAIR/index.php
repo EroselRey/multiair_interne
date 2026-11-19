@@ -12,6 +12,18 @@ if ($user) {
     }
 }
 $e = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+// « Voir comme » : un administrateur voit la plateforme comme une personne de l'équipe (lecture seule).
+$apercu = null;
+if ($user && ($user['acces'] ?? '') === 'admin') {
+    try {
+        $apercu = ma_voir_comme(ma_db(), $user);
+    } catch (Throwable $err) {
+        $apercu = null;
+    }
+}
+if ($apercu) {
+    $user = $apercu;
+}
 $admin = ($user['acces'] ?? '') === 'admin';
 $initiales = '';
 if ($user) {
@@ -21,6 +33,7 @@ if ($user) {
     $initiales = mb_substr($initiales, 0, 2) ?: 'A';
 }
 $ic = [
+    'oeil' => '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>',
     'inbox' => '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
     'list' => '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
     'chart' => '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
@@ -113,6 +126,7 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
     <button class="nav sub" data-page="equipe"><?= $icone('users') ?><span>Équipe et accès</span></button>
     <button class="nav sub" data-page="routage"><?= $icone('route') ?><span>Qui reçoit quoi</span></button>
     <button class="nav sub" data-page="messages"><?= $icone('send') ?><span>Messages aux clients</span></button>
+    <button class="nav sub" id="voirCommeNav" type="button"><?= $icone('oeil') ?><span>Voir comme…</span></button>
     <div class="grp">AUTRES AUTOMATISATIONS</div>
     <button class="nav sub" data-page="overview"><?= $icone('cpu') ?><span>État des scénarios</span></button>
     <button class="nav sub" data-page="repondeur"><span style="width:18px"></span><span>Répondeur (appels)</span></button>
@@ -129,6 +143,11 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
     </div>
   </nav>
   <div class="col">
+<?php if ($apercu): ?>
+    <div class="apercu-bar" role="status"><span><?= $icone('oeil') ?>Aperçu : vous voyez la plateforme comme <b><?= $e($apercu['nom']) ?></b>
+      (<?= $e(MA_ACCES[$apercu['acces']] ?? '') ?><?= $apercu['email'] ? ', ' . $e($apercu['email']) : '' ?>). Lecture seule : rien n'est fait en son nom.</span>
+      <button type="button" class="btn small" id="apercuFin">Revenir à mon compte</button></div>
+<?php endif; ?>
     <button type="button" class="urgent-bar" id="urgentBar" hidden></button>
     <main id="main"><div class="loading">Chargement…</div></main>
   </div>
@@ -140,7 +159,7 @@ $icone = fn($n) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="curr
   <div class="df" id="drawerFoot"></div>
 </aside>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script>window.MA = <?= json_encode(['user' => $user, 'admin' => $admin, 'version' => MA_VERSION, 'acces' => MA_ACCES],
+<script>window.MA = <?= json_encode(['user' => $user, 'admin' => $admin, 'version' => MA_VERSION, 'acces' => MA_ACCES, 'apercu' => (bool) $apercu],
     JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;</script>
 <script src="assets/chart.umd.js?v=4.4.1"></script>
 <script src="assets/app.js?v=<?= MA_VERSION ?>"></script>

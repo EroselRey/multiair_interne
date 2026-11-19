@@ -762,6 +762,27 @@ rien, un e-mail pour me prévenir afin que je puisse agir ».
   « déjà à jour » ; reconnaissance par le portable, le standard et un autre numéro ; demande entrante rattachée à la
   fiche importée sans écraser le nom ni la société ; ajout, doublon, modification, suppression ; affichage téléphone.
 
+## Transférer depuis le lien d'équipe, « Voir comme » (correctif 70, 19/11)
+
+- constat (Cyril : « les équipes qui reçoivent une information qui n'est pas pour eux ne peuvent pas la transférer ») :
+  la page ouverte depuis l'e-mail ou le SMS (demande.php) n'avait pas de « Transférer » ; et sur la plateforme, un
+  compte de service (SAV…) ne pouvait pas ouvrir une demande d'un autre service qui lui avait été envoyée à lui
+  (« relève d'un autre service ») ;
+- demande.php : « Pas pour moi : transférer à quelqu'un d'autre » (secteur du client, responsables de service,
+  Finance, SAV, Commerce, RH, Direction, boîtes partagées, ou une autre adresse ; message facultatif) ; même lien pour
+  la personne qui la reçoit ; client non prévenu ; transfert noté dans l'historique avec le nom de qui l'a fait ;
+- plateforme : un compte de service voit aussi les demandes envoyées à son adresse (À, copie, destinataire, prise
+  en charge), quel que soit leur service, et peut les prendre ou les transférer ; une fois transférée, elle quitte
+  sa liste ;
+- « Voir comme… » (administrateurs ; menu Réglages, page Équipe et accès, fiche d'une personne) : la plateforme
+  exactement comme la voit une personne ou une boîte avec son adresse (menus, demandes, compteurs) ; lecture
+  seule (toute action est refusée par le serveur) ; bandeau jaune « Revenir à mon compte » ; noté dans le journal ;
+- une action qui échoue sans être rattrapée affiche désormais son message (au lieu de ne rien faire) ;
+- testé sur la copie locale : transfert depuis demande.php (n° 10 → Finance, historique « Julien Jardin —
+  Transférée à … »), sans destinataire → message ; voir comme Julien (SAV) : 8 demandes dont la n° 12 Commerce qui
+  lui est envoyée, n° 8 refusée, actions refusées ; voir comme une boîte ; refus pour un admin ; retour ; compte SAV
+  réel : ouvre et transfère la n° 12, qui disparaît de sa liste ; voir comme refusé à un non-admin ; affichage téléphone.
+
 ## Reste à faire
 
 1. Supprimer le scénario 9771233 (clone inactif de Claire ADV avec un message de test en dur).

@@ -78,6 +78,34 @@ if ($dem && $_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'note':
             $message = 'Note ajoutée.';
             break;
+        case 'transferer':
+            // Pas pour moi : la demande part chez la bonne personne (même lien), le client n'est pas prévenu.
+            $libre = trim((string) ($_POST['email_libre'] ?? ''));
+            $mot = mb_substr(trim((string) ($_POST['message_transfert'] ?? '')), 0, 1000);
+            $cible = null;
+            if ($libre !== '') {
+                $mails = ma_liste_emails($libre);
+                if ($mails) {
+                    $cible = ['id' => 0, 'nom' => implode(', ', $mails), 'email' => implode(';', $mails), 'mobile' => null, 'service' => '', 'role' => '', 'cloturer' => false];
+                } else {
+                    $message = 'Adresse e-mail invalide : ' . $libre . '. Rien n\'a été transféré.';
+                }
+            } elseif ((int) ($_POST['cible'] ?? 0) > 0) {
+                $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
+                $st->execute([(int) $_POST['cible']]);
+                $cible = $st->fetch() ?: null;
+                if ($cible && !ma_liste_emails($cible['email'] ?? null)) {
+                    $message = $cible['nom'] . ' n\'a pas d\'adresse e-mail. Rien n\'a été transféré.';
+                    $cible = null;
+                }
+            } else {
+                $message = 'Choisissez à qui transférer la demande. Rien n\'a été transféré.';
+            }
+            if ($cible) {
+                ma_rep_transferer($db, $dem, $cible, $qui, $mot);
+                $message = 'Demande transférée à ' . $cible['nom'] . ' : la personne la reçoit par e-mail avec ce même lien. Le client n\'est pas prévenu.';
+            }
+            break;
         case 'piece':
             $recues = ma_pieces_recues();
             if (!$recues && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0 && empty($_FILES)) {
@@ -126,6 +154,7 @@ $svc = $dem ? (['SAV' => 'SAV', 'COMMERCIAL' => 'Commerce', 'FINANCE' => 'Financ
 $trouve = in_array($quiDefaut, $personnes, true);
 $pieces = $dem ? ma_pieces_liste($db, (int) $dem['id']) : [];
 $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) => !in_array($x['type'], ['message_client', 'reponse_claire'], true))) : [];
+$cibles = $dem && $dem['statut'] !== 'traite' ? ma_rep_cibles_transfert($db, $dem) : [];
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -250,6 +279,20 @@ $histo = $dem ? array_values(array_filter(ma_rep_historique($db, $dem), fn($x) =
           <div class="m-form"><input type="datetime-local" name="rappel_prevu" value="<?= $e($rappelVal) ?>" aria-label="Date et heure du rappel">
             <button class="btn" name="action" value="rappel">Enregistrer le rappel et prévenir le client</button></div></details>
         <button class="btn go" name="action" value="traiter" onclick="return confirm('Marquer la demande comme traitée ? Le client sera prévenu.')">Marquer traitée</button>
+        <details id="transfert"><summary>Pas pour moi : transférer à quelqu'un d'autre</summary>
+          <div class="m-form">
+            <label>À QUI ?
+              <select name="cible">
+                <option value="">— Choisir —</option>
+                <?php foreach ($cibles as $groupe => $liste): ?><optgroup label="<?= $e($groupe) ?>">
+                  <?php foreach ($liste as $c): ?><option value="<?= (int) $c['id'] ?>"><?= $e($c['libelle'] ?? ($c['nom'] . ($c['fonction'] ? ' — ' . $c['fonction'] : ''))) ?></option><?php endforeach; ?>
+                </optgroup><?php endforeach; ?>
+              </select></label>
+            <label>… OU UNE AUTRE ADRESSE E-MAIL<input type="email" name="email_libre" placeholder="ex. rh@multiairfrance.fr" autocomplete="off"></label>
+            <label>MESSAGE (FACULTATIF)<textarea name="message_transfert" rows="2" placeholder="ex. C'est pour le commerce : demande de devis"></textarea></label>
+            <button class="btn" name="action" value="transferer">Transférer la demande</button>
+            <span class="gris" style="font-size:13px">La personne reçoit la demande par e-mail (et par SMS pour le SAV), avec ce même lien. La demande repasse « à traiter » chez elle. Le client n'est pas prévenu.</span>
+          </div></details>
       <?php endif; ?>
       <details><summary>Ajouter une note interne</summary>
         <div class="m-form"><textarea name="note" rows="3" placeholder="Visible uniquement par l'équipe Multiair"></textarea>

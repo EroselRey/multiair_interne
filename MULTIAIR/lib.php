@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Version du code déployé — visible dans api.php?r=ping, dans check.php et dans la page.
-const MA_VERSION = '2026-11-19a';
+const MA_VERSION = '2026-11-19b';
 
 function ma_config(): array
 {
@@ -2602,6 +2602,66 @@ function ma_user_actualiser(PDO $db): ?array
         $_SESSION['ma_user'] = $frais;
     }
     return $frais;
+}
+
+/**
+ * « Voir comme » : un administrateur voit la plateforme exactement comme une personne de l'équipe (ses
+ * demandes, ses pages, ses compteurs), en lecture seule. Rend le compte de cette personne, sinon null.
+ */
+function ma_voir_comme(PDO $db, ?array $admin): ?array
+{
+    $id = (int) ($_SESSION['ma_voir_comme'] ?? 0);
+    if (!$id) {
+        return null;
+    }
+    $st = $db->prepare('SELECT id, nom, email, acces, actif FROM rep_contacts WHERE id = ?');
+    $st->execute([$id]);
+    $c = $st->fetch();
+    if (($admin['acces'] ?? '') !== 'admin' || !$c || !(int) $c['actif'] || !isset(MA_ACCES[(string) $c['acces']]) || $c['acces'] === 'admin') {
+        unset($_SESSION['ma_voir_comme']);
+        return null;
+    }
+    return ['id' => (int) $c['id'], 'nom' => (string) $c['nom'], 'email' => (string) $c['email'], 'acces' => (string) $c['acces'],
+        'apercu_par' => (string) ($admin['nom'] ?? 'Administrateur')];
+}
+
+/** Équipe à qui transférer une demande, par groupe : [groupe => [contact…]] (personnes et boîtes joignables par e-mail). */
+function ma_rep_cibles_transfert(PDO $db, array $dem): array
+{
+    $actifs = array_values(array_filter($db->query('SELECT * FROM rep_contacts WHERE actif = 1 ORDER BY nom')->fetchAll(),
+        fn($c) => (bool) ma_liste_emails($c['email'] ?? null)));
+    $boite = fn($c) => ($c['role'] ?? '') === 'boite' || preg_match('/bo[iî]te partag/iu', (string) ($c['commentaire'] ?? ''));
+    $groupes = [];
+    // Secteur du client : ceux qui couvrent son département passent en tête.
+    $dep = strtoupper((string) (ma_departement((string) ($dem['code_postal'] ?? ''), (string) ($dem['departement'] ?? '')) ?? ''));
+    if ($dep !== '') {
+        $secteur = array_values(array_filter($actifs, fn($c) => !$boite($c) && in_array($dep, array_map(fn($x) => strlen($x) === 1 ? '0' . $x : $x,
+            array_filter(array_map('trim', preg_split('/[,;\s]+/', strtoupper((string) ($c['departements'] ?? ''))) ?: []))), true)));
+        if ($secteur) {
+            $groupes['Secteur du client (département ' . $dep . ')'] = $secteur;
+        }
+    }
+    $resp = [];
+    $noms = ['sav' => 'Responsable SAV', 'finance' => 'Responsable compta / finance', 'commercial' => 'Responsable commerce', 'autre' => 'Sujets indéterminés', 'rh' => 'Ressources humaines'];
+    foreach (ma_responsables($db) as $k => $r) {
+        if ($r && ($c = current(array_filter($actifs, fn($x) => (int) $x['id'] === (int) $r['id'])))) {
+            $resp[] = $c + ['libelle' => ($noms[$k] ?? $k) . ' (' . $c['nom'] . ')'];
+        }
+    }
+    if ($resp) {
+        $groupes['Responsables de service'] = $resp;
+    }
+    foreach (['finance' => 'Finance', 'sav' => 'SAV', 'commerce' => 'Commerce', 'rh' => 'RH', 'direction' => 'Direction'] as $s => $t) {
+        $l = array_values(array_filter($actifs, fn($c) => !$boite($c) && ma_contact_service($c) === $s));
+        if ($l) {
+            $groupes[$t] = $l;
+        }
+    }
+    $b = array_values(array_filter($actifs, $boite));
+    if ($b) {
+        $groupes['Boîtes partagées'] = $b;
+    }
+    return $groupes;
 }
 
 /** Vérifie un identifiant (e-mail, ou l'identifiant de secours de config.php) et un mot de passe. */

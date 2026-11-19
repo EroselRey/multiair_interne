@@ -161,10 +161,40 @@ $user = $viaApiKey ? null : ma_user_actualiser($db);
 if (!$viaApiKey && !$user) {
     fail('Session expirée : votre accès a changé, reconnectez-vous', 401);
 }
+// « Voir comme » (administrateurs) : voir la plateforme comme une personne de l'équipe, en lecture seule.
+if ($parts === ['auth', 'voir-comme'] && $method === 'POST') {
+    if (($user['acces'] ?? '') !== 'admin') {
+        fail('Réservé aux administrateurs', 403);
+    }
+    $cid = (int) ($body['id'] ?? 0);
+    if ($cid) {
+        $st = $db->prepare('SELECT * FROM rep_contacts WHERE id = ? AND actif = 1');
+        $st->execute([$cid]);
+        $c = $st->fetch();
+        if (!$c || !isset(MA_ACCES[(string) $c['acces']]) || $c['acces'] === 'admin') {
+            fail('Cette personne n\'a pas d\'accès à la plateforme, ou elle est administrateur (elle voit déjà tout)');
+        }
+        $_SESSION['ma_voir_comme'] = $cid;
+        logEvent($db, 'plateforme', 'info', 'voir_comme', $user['nom'] . ' voit la plateforme comme ' . $c['nom'] . ' (' . MA_ACCES[$c['acces']] . ')');
+    } else {
+        unset($_SESSION['ma_voir_comme']);
+    }
+    out(['ok' => true]);
+}
+$apercu = $viaApiKey ? null : ma_voir_comme($db, $user);
+if ($apercu) {
+    if ($method !== 'GET') {
+        fail('Aperçu « voir comme » : lecture seule. Revenez à votre compte pour agir.', 403);
+    }
+    $user = $apercu;
+}
 $estAdmin = $viaApiKey || (($user['acces'] ?? '') === 'admin');
 $portee = $estAdmin ? null : ma_acces_service_demande((string) ($user['acces'] ?? ''));
 // « Ses demandes seulement » (boîtes partagées) : les demandes envoyées ou transférées à son adresse.
 $perso = $estAdmin ? null : ma_portee_perso($user);
+// Un service voit aussi les demandes envoyées à la personne elle-même (règle de routage, transfert),
+// même rangées dans un autre service : elle peut les prendre ou les transférer au bon service.
+$moi = $portee !== null ? ['email' => strtolower(trim((string) ($user['email'] ?? ''))), 'nom' => trim((string) ($user['nom'] ?? ''))] : null;
 if (!$estAdmin) {
     $r0 = $parts[0] ?? '';
     $r1 = $parts[1] ?? null;
@@ -585,7 +615,7 @@ try {
                 if ($sub2 !== null) {
                     $id = idFrom($parts, 2);
                     $dem = getOne($db, 'rep_demandes', $id) ?? fail('Demande introuvable', 404);
-                    if ($portee !== null && $dem['service'] !== $portee) {
+                    if ($portee !== null && $dem['service'] !== $portee && !ma_demande_pour($dem, $moi)) {
                         fail('Cette demande relève d\'un autre service', 403);
                     }
                     if ($perso !== null && !ma_demande_pour($dem, $perso)) {
@@ -645,7 +675,7 @@ try {
                         $apres = ma_rep_transferer($db, $dem, $cible, (string) ($user['nom'] ?? ''), trim((string) ($body['message'] ?? '')));
                         logEvent($db, 'repondeur', 'ok', 'demande_transferee', 'Demande ' . $id . ' transférée à ' . $cible['nom'] . ($user ? ' par ' . $user['nom'] : ''));
                         out(['ok' => true, 'demande' => $apres, 'visible' => $estAdmin
-                            || ($perso !== null ? ma_demande_pour($apres, $perso) : $apres['service'] === $portee)]);
+                            || ($perso !== null ? ma_demande_pour($apres, $perso) : ($apres['service'] === $portee || ma_demande_pour($apres, $moi)))]);
                     }
                     if (($parts[3] ?? null) === 'pieces') {
                         // Pièces jointes : envoi (Make depuis l'e-mail du client, ou l'équipe depuis la page),
@@ -752,11 +782,14 @@ try {
                     out(['ok' => true, 'demande' => $dem, 'historique' => ma_rep_historique($db, $dem), 'pieces' => ma_pieces_liste($db, $id)]);
                 }
                 $q = $_GET;
+                $condition = $perso !== null ? ma_sql_demandes_pour($perso) : null;
                 if ($portee !== null) {
-                    $q['service'] = $portee;
+                    // Son service, et ce qui lui est envoyé à elle.
+                    [$pourMoi, $args] = ma_sql_demandes_pour($moi);
+                    $condition = ['(service = ? OR ' . $pourMoi . ')', [$portee, ...$args]];
+                    unset($q['service']);
                 }
-                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $q, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'],
-                    $perso !== null ? ma_sql_demandes_pour($perso) : null)]);
+                out(['ok' => true, 'rows' => listRows($db, 'rep_demandes', 'created_at', $q, ['societe', 'contact', 'tel', 'resume', 'marque', 'modele'], $condition)]);
             }
             if ($sub === 'routage') {
                 routageRoutes($db, 'repondeur', $sub2, $method, $body);

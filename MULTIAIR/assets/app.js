@@ -43,6 +43,10 @@
   async function api(route, opts = {}) {
     const url = 'api.php?r=' + route + (opts.query ? '&' + new URLSearchParams(opts.query).toString() : '');
     const init = {method: opts.method || 'GET', headers: {}};
+    // « Voir comme » : lecture seule, rien n'est envoyé au nom de la personne.
+    if (MA.apercu && init.method !== 'GET' && route !== 'auth/voir-comme') {
+      throw Object.assign(new Error('Aperçu en lecture seule : revenez à votre compte pour agir'), {data: {}});
+    }
     if (opts.body !== undefined) {
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(opts.body);
@@ -265,6 +269,17 @@
   $('#menuBtn').addEventListener('click', (e) => { e.stopPropagation(); app.classList.toggle('menu'); });
   document.addEventListener('click', (e) => { if (app.classList.contains('menu') && !e.target.closest('#side')) app.classList.remove('menu'); });
   $('#logoutBtn').addEventListener('click', async () => { await fetch('api.php?r=auth/logout'); location.href = 'index.php'; });
+  // Action qui échoue sans être rattrapée (droits, aperçu en lecture seule, réseau) : le message s'affiche au lieu de rien.
+  window.addEventListener('unhandledrejection', (ev) => { if (ev.reason && ev.reason.message) { toast(ev.reason.message, true); ev.preventDefault(); } });
+  // « Voir comme » : choisir la personne (administrateurs), ou revenir à son compte (bandeau d'aperçu).
+  const vcNav = $('#voirCommeNav');
+  if (vcNav) vcNav.addEventListener('click', () => { app.classList.remove('menu'); choisirVoirComme(); });
+  const vcFin = $('#apercuFin');
+  if (vcFin) vcFin.addEventListener('click', async () => {
+    vcFin.disabled = true;
+    try { await api('auth/voir-comme', {method: 'POST', body: {id: 0}}); history.replaceState(null, '', 'index.php#equipe'); location.reload(); }
+    catch (e) { toast(e.message, true); vcFin.disabled = false; }
+  });
 
   // Pastille « À traiter » et bandeau rouge des urgences non prises en charge (72 h), rafraîchis chaque minute.
   async function refreshBadges() {
@@ -1390,6 +1405,30 @@
   const ROLES_ROUTAGE = [['membre', 'Membre (reçoit via les responsables)'], ['direction', 'Direction'], ['backoffice', 'Back-office SAV'],
     ['rso', 'RSO (secteur)'], ['cta', 'CTA ABAC (agent externe)'], ['finance', 'Finance (reçoit toute la finance)'], ['direct_projet', 'Direct / Projet'], ['boite', 'Boîte partagée']];
   const vueEquipe = {q: '', service: ''};
+  // ------------------------------------------------------------------ « Voir comme » (administrateurs)
+  // La plateforme exactement comme une personne la voit avec son adresse : ses demandes, ses pages. Lecture seule.
+  async function voirComme(c) {
+    try {
+      await api('auth/voir-comme', {method: 'POST', body: {id: c.id}});
+      history.replaceState(null, '', 'index.php#a-traiter');
+      location.reload();
+    } catch (e) { toast(e.message, true); }
+  }
+  async function choisirVoirComme() {
+    const r = await api('equipe');
+    const avec = r.rows.filter((c) => Number(c.actif ?? 1) && c.acces && c.acces !== 'admin');
+    const groupes = Object.entries(MA.acces).filter(([k]) => k !== 'admin')
+      .map(([k, t]) => [t, avec.filter((c) => c.acces === k).sort((a, b) => a.nom.localeCompare(b.nom, 'fr'))]).filter(([, l]) => l.length);
+    openDrawer('Voir la plateforme comme…', `
+      <p style="margin:0">Choisissez une personne ou une boîte : vous voyez exactement ce qu'elle voit en se connectant avec son adresse
+        (ses demandes, ses pages, ses compteurs).</p>
+      <p class="hint" style="margin:0">Lecture seule : rien ne peut être pris en charge, transféré ou modifié en son nom. Un bandeau en haut de page permet de revenir à votre compte.</p>
+      ${groupes.map(([t, l]) => `<section class="box2" style="gap:6px"><h2 style="margin:0;font-size:15px">${h(t)} (${l.length})</h2>
+        ${l.map((c) => `<button class="btn block" style="justify-content:space-between;gap:10px" data-vc="${c.id}"><span>${h(c.nom)}</span><span class="hint">${h(c.email || '')}</span></button>`).join('')}</section>`).join('')
+        || '<p class="hint">Personne n\'a d\'accès autre qu\'administrateur : ouvrez un accès dans « Équipe et accès ».</p>'}`);
+    $$('#drawerBody [data-vc]').forEach((b) => b.onclick = () => { b.disabled = true; voirComme(avec.find((c) => String(c.id) === b.dataset.vc)); });
+  }
+
   tabs.equipe = async () => {
     const r = await api('equipe');
     const estBoite = (c) => c.role === 'boite' || /bo[iî]te partag/i.test(c.commentaire || '');
@@ -1414,7 +1453,8 @@
         && (!vueEquipe.q || [c.nom, c.email, c.fonction, c.departements].join(' ').toLowerCase().includes(vueEquipe.q.toLowerCase())));
       main.innerHTML = `
         <div class="page-head"><div class="t"><h1>Équipe et accès</h1><p>Qui fait partie de l'équipe, comment le joindre, et ce qu'il voit sur la plateforme.</p></div>
-          <div class="frow" style="gap:10px;flex-wrap:wrap"><button class="btn" id="invTous">${ic('envoi', 's')}Envoyer le lien à toute l'équipe</button>
+          <div class="frow" style="gap:10px;flex-wrap:wrap"><button class="btn" id="voirCommeEq">${ic('oeil', 's')}Voir comme…</button>
+          <button class="btn" id="invTous">${ic('envoi', 's')}Envoyer le lien à toute l'équipe</button>
           <button class="btn primary" id="ajout">${ic('plus', 's')}Ajouter une personne</button></div></div>
         <section class="section" style="margin-top:0"><h2>Responsables de service</h2>
           <p class="hint">Ils reçoivent les demandes que la plateforme ne sait attribuer à personne d'autre.</p>
@@ -1448,6 +1488,7 @@
             <span class="m1"><b>${h(c.nom)}</b><span>${h(c.email || '')}</span></span><span class="m2">${acces(c)}${connexion(c)}</span></div>`).join('')}</div></section>`;
       $('#ajout', main).onclick = () => fiche({actif: 1, role: 'membre', service: 'sav'});
       // Lien de connexion (valable 7 jours) à toutes les personnes et boîtes qui ont un accès.
+      $('#voirCommeEq', main).onclick = choisirVoirComme;
       $('#invTous', main).onclick = () => {
         const avecAcces = r.rows.filter((c) => Number(c.actif ?? 1) && c.acces && String(c.email || '').includes('@'));
         const jamais = avecAcces.filter((c) => !c.derniere_connexion && !(c.connexions || []).length);
@@ -1510,7 +1551,11 @@
           + (cnx.length > 1 ? '<button class="btn small" data-deco="tous" style="align-self:flex-start;margin-top:8px">Déconnecter tous les appareils</button>' : '')
           : '<p class="hint" style="margin:0">Aucun appareil connecté en ce moment.</p>'}
         <p class="hint" style="margin:6px 0 0">Un appareil déconnecté devra redemander un lien. Utile quand quelqu'un quitte l'équipe d'une boîte.</p></section>` : '';
-      openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', champs + blocAppareils + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
+      const blocVoir = c.id && c.acces && c.acces !== 'admin' && Number(c.actif ?? 1)
+        ? `<button class="btn small" id="voirCetteFiche" style="align-self:flex-start">${ic('oeil', 's')}Voir la plateforme comme ${h(c.nom)}</button>` : '';
+      openDrawer(c.id ? h(c.nom) : 'Ajouter une personne', blocVoir + champs + blocAppareils + '<div id="invRes"></div>', (c.id ? delBtn() : '') + '<span style="flex:1"></span>' + inviter + saveBtn());
+      const vf = $('#voirCetteFiche');
+      if (vf) vf.onclick = () => { vf.disabled = true; voirComme(c); };
       document.querySelectorAll('#drawerBody [data-deco]').forEach((b) => b.onclick = async () => {
         const tous = b.dataset.deco === 'tous';
         if (!confirm(tous ? 'Déconnecter tous les appareils de ' + c.nom + ' ?' : 'Déconnecter cet appareil ?')) return;
